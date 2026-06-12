@@ -8,9 +8,6 @@ feature.
 
 from __future__ import annotations
 
-import os
-from pathlib import Path
-
 import pandas as pd
 import pytest
 
@@ -54,12 +51,6 @@ _EXPECTED_COLUMNS = [
     "id_like",
     "rank",
 ]
-
-
-@pytest.fixture()
-def output_dir() -> Path:
-    """Resolved OUTPUT_DIR (conftest normalizes it to an absolute path)."""
-    return Path(os.environ["OUTPUT_DIR"]).resolve()
 
 
 def _load(storage, path, target, features):

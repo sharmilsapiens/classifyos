@@ -86,6 +86,9 @@ If setting up a new machine: install these (or newer within the same major versi
 clone the repo, recreate backend/.venv from requirements.txt, run npm install in frontend/.
 Exact Python package versions are pinned in backend/requirements.txt after first install
 (`pip freeze`). Git identity: re-run `git config --global user.name / user.email`.
+Copy `backend/.env.example` → `backend/.env` and set `DATA_DIR`/`OUTPUT_DIR` to local
+data folders outside the repo (`.env` is gitignored and does not travel — see the
+data-dir convention below); seed `DATA_DIR` from the committed `backend/data/samples/`.
 
 ## Environment & commands
 
@@ -107,6 +110,21 @@ python -m classifyos.cli --file data/samples/lapse.csv --target will_lapse --ins
 ```
 
 Env vars (backend/.env): `DATA_DIR`, `OUTPUT_DIR`, `CORS_ORIGINS`.
+
+**Data-dir convention.** `DATA_DIR`/`OUTPUT_DIR` point at folders *outside* the repo
+(e.g. `C:/Projects/classifyos_data/input` and `.../output`) so datasets and artifacts
+never get committed. `backend/.env` is gitignored, so these absolute paths are
+**machine-local and do not travel with the repo** — set them per machine. The portable
+pieces are `backend/.env.example` (template) and the committed `backend/data/samples/`
+CSVs (used to seed a fresh `DATA_DIR`). Forward slashes work in `.env` on Windows
+(`pathlib` normalises them). The test suite reads the real `DATA_DIR` but redirects
+`OUTPUT_DIR` to a pytest temp dir, so running tests never writes to the real output folder.
+
+**`.env` loading.** Only the test suite (`conftest.py`) auto-loads `.env`. The engine,
+CLI, and API do **not** load it implicitly — a standalone process must call
+`load_dotenv()` (or have the env vars exported) or `LocalFolderStorage` falls back to its
+relative `data`/`classification_output` defaults. The CLI (Section 16) and FastAPI layer
+(Phase 8) must load `.env` at startup.
 
 ## Insurance use cases (validation targets)
 

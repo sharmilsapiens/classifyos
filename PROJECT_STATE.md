@@ -5,8 +5,8 @@
 > planning/overseer chat stays in sync with the local repo.
 
 **Last updated:** 2026-06-12
-**Updated by:** Claude Code (Phase 2 session)
-**Repo tag / commit:** fc93002 (Phase 1 + test runner) + Phase 2 commit pending
+**Updated by:** Claude Code (Phase 2 + follow-up session)
+**Repo tag / commit:** 672eada (Phase 2) + follow-up commit pending
 
 ---
 
@@ -34,8 +34,8 @@ ratio, and a composite score; writes summary CSV + 2-panel plot. 27 tests passin
 | 4 | Feature engineering (Sections 7, 7B) | ⬜ Not started | |
 | 5 | Class balancing (Section 8) | ⬜ Not started | |
 | 6 | Models + evaluation (Sections 10–13) | ⬜ Not started | |
-| 7 | Plots + ModelRunner + CLI (Sections 14–16) | ⬜ Not started | |
-| 8 | FastAPI layer | ⬜ Not started | |
+| 7 | Plots + ModelRunner + CLI (Sections 14–16) | ⬜ Not started | ⚠️ CLI (Sec 16) must `load_dotenv()` at startup — engine code does NOT auto-load `.env`; without it `LocalFolderStorage` falls back to relative `data`/`classification_output` |
+| 8 | FastAPI layer | ⬜ Not started | ⚠️ API startup must `load_dotenv()` (or rely on exported env) so DATA_DIR/OUTPUT_DIR/CORS_ORIGINS resolve — same fallback caveat as the CLI |
 | 9 | React dashboard (13 pages) | ⬜ Not started | Deviation from scope: React replaces single-file HTML |
 | 10 | Unit tests (full pytest suite) | ⬜ Not started | |
 | 11 | Integration: 7 use cases E2E + governance sign-off | ⬜ Not started | |
@@ -56,6 +56,8 @@ Status legend: ⬜ Not started · 🔄 In progress · ✅ Done · ⚠️ Blocked
 | 2026-06-12 | Loader coerces target to string dtype | Guarantees the target is never treated as a continuous float by sklearn; stratify/value_counts work uniformly across binary/multiclass |
 | 2026-06-12 | DATA_DIR set to `./data/samples`; added openpyxl+pyarrow | Sample CSVs live there; loader supports .xlsx/.parquet so the optional readers are now required deps |
 | 2026-06-12 | Datetime detection guarded by separator check | Prevents ID columns (POL100000) from being misread as dates while still catching policy_start_date |
+| 2026-06-12 | DATA_DIR/OUTPUT_DIR moved outside the repo (`C:/Projects/classifyos_data/{input,output}`) | Keep datasets + artifacts out of git; `.env` is gitignored so paths are machine-local. Committed `backend/data/samples/` stays as the portable seed |
+| 2026-06-12 | Test suite redirects OUTPUT_DIR to a pytest temp dir (`tmp_path_factory`); reads still use the real DATA_DIR | Tests must never pollute the real output folder with artifacts. `conftest.storage` depends on the temp-`output_dir` fixture so the override lands before `LocalFolderStorage` reads the env var |
 
 ---
 
@@ -187,4 +189,5 @@ Contract doc: docs/api_contract.md — stub only.
 | 2026-06-12 | Repo scaffold (dirs, StorageAdapter, requirements, env, gitignore, Vite frontend) | Structure ready; no pipeline sections yet |
 | 2026-06-12 | Phase 1 — Sections 1–4, 9 (config, inspect, loader, split) + tests | 22 tests passing on real samples; sample data generated; prompt archived |
 | 2026-06-12 | Phase 2 — Section 5 (analyze_feature_impact) + tests | 27 tests passing; CSV + 2-panel PNG outputs; prompt archived |
+| 2026-06-12 | Phase 2 follow-up — env docs, dotenv notes, test output isolation | DATA_DIR/OUTPUT_DIR moved outside repo; conftest writes to temp OUTPUT_DIR; CLAUDE.md + .env.example updated; 27 tests still green |
 | | | |
