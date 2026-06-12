@@ -21,6 +21,7 @@ CLASS_BALANCE = ("smote", "undersample", "class_weight", "none")
 MISSING_STRATEGIES = ("median", "mean", "mode", "ffill", "drop")
 ENCODING_METHODS = ("onehot", "label", "ordinal", "target")
 SCALING_METHODS = ("standard", "minmax", "robust", "none")
+OUTLIER_METHODS = ("iqr", "zscore", "none")
 
 
 DEFAULT_CONFIG: dict[str, Any] = {
@@ -39,6 +40,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "missing_strategy": "median",
     "encoding_method": "onehot",
     "scaling_method": "standard",
+    "outlier_method": "iqr",
+    "high_cardinality_threshold": 20,
     "threshold": 0.5,
     "calibrate_probs": True,
     # --- feature engineering (Section 7B; consumed in a later phase) ---
@@ -143,3 +146,10 @@ def _validate_config(config: dict[str, Any]) -> None:
     _require_choice(config["missing_strategy"], MISSING_STRATEGIES, "missing_strategy")
     _require_choice(config["encoding_method"], ENCODING_METHODS, "encoding_method")
     _require_choice(config["scaling_method"], SCALING_METHODS, "scaling_method")
+    _require_choice(config["outlier_method"], OUTLIER_METHODS, "outlier_method")
+
+    threshold = config["high_cardinality_threshold"]
+    if not isinstance(threshold, int) or isinstance(threshold, bool) or threshold < 1:
+        raise ValueError(
+            f"'high_cardinality_threshold' must be a positive integer, got {threshold!r}"
+        )
