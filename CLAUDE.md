@@ -122,3 +122,6 @@ Product Recommendation (multilabel).
   known issues, next steps. This file is synced to the planning Claude Project.
 - If a library API call is uncertain, verify against the installed version (hallucination
   check is a governance requirement) — run a quick import/dir check rather than guessing.
+- MANDATORY before committing any generated section: save the exact generation prompt
+  used to prompts/section_NN_name.md and include it in the same commit as the code.
+  Never commit generated section code without its prompt file.
