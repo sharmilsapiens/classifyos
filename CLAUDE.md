@@ -138,6 +138,8 @@ Product Recommendation (multilabel).
 - One section/phase per session where possible. Generate → unit test on real CSV → integrate.
 - After completing work, UPDATE PROJECT_STATE.md: what was completed, decisions made,
   known issues, next steps. This file is synced to the planning Claude Project.
+- At the end of every phase, update short_desc.md (one-line summaries) and plan_tweak.md
+  (any new deviation/assumption).
 - If a library API call is uncertain, verify against the installed version (hallucination
   check is a governance requirement) — run a quick import/dir check rather than guessing.
 - MANDATORY before committing any generated section: save the exact generation prompt
