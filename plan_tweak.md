@@ -4,7 +4,7 @@
 > plan, or made an assumption the plan didn't cover. A register, not an essay — one line
 > per cell. "Impact" = what a reviewer (Naveen / stakeholders) needs to know at sign-off.
 >
-> Covers Phases 0–3. From Phase 4 onward, this file is updated at the end of every phase.
+> Covers Phases 0–4. Updated at the end of every phase.
 
 | # | Phase | What the plan said | What we did instead / assumed | Why | Impact |
 |---|---|---|---|---|---|
@@ -19,6 +19,12 @@
 | 9 | 2 | (Not specified) | Test outputs isolated to pytest temp dirs, not real `OUTPUT_DIR` | Tests must never pollute real output artifacts | Test-hygiene assumption; no production impact |
 | 10 | 1/2 | Output schema contract locks at Phase 8 | `inspect_file()` return keys + feature_impact output columns locked early | Frontend/contract stability needed before later code depends on them | Early lock; reviewers should treat these keys as fixed ahead of the Phase 8 lock |
 | 11 | 2 | (Not in scope) | `id_like` flag for ≥99%-unique columns in feature impact | Leakage guard — identifier columns flagged, not silently dropped | Extra safety signal; columns flagged not removed (human decides) |
+| 12 | 4 | Plain `build_features()` / `build_interaction_features()` functions | `FeatureBuilder` + `InteractionFeatureBuilder` picklable fit/transform classes | Train-only fitting (poly ranking, ratio denominator, bin edges, MI auto-discovery) requires a fit/transform split, like the Preprocessor | API shape differs from scope; behaviour matches intent. The scope's plain functions leaked via in-place frequency encoding / per-call binning / re-discovery |
+| 13 | 4 | Frequency encoding listed in BOTH Section 6 and Section 7 | Frequency / high-cardinality encoding lives ONLY in Phase 3's Preprocessor (Section 6); Section 7 does not re-encode | Double-encoding is wrong and ambiguous about which fit wins | Section 7 builds poly/ratio/bin features only; no categorical encoding |
+| 14 | 4 | Polynomial features (degree 2) as a standard capability | Polynomial defaults **OFF** and is capped at `max_poly_features` (ranked by |train corr| with target) when on | Squared terms are usually redundant with tree models and explode width/collinearity | Reviewers should opt in explicitly; the cap bounds the column count |
+| 15 | 4 | Auto-discover interaction pairs by MI gain | Candidate pool capped at the 15 most target-correlated numeric columns before pairing; scoring uses the multiplicative term; kept pairs materialized with `default_interactions` ops | O(n²) pair explosion otherwise; "interaction_term" is singular in the scope | Discovery considers ≤105 pairs, not all C(n,2); a strong pair outside the top-15 pool can be missed |
+| 16 | 4 | Ratio denominator unspecified vs scaling | FeatureBuilder's heuristic ratio denominator (largest |train median|) is weakly determined post-standard-scaling (medians ≈ 0) and often small → guard fires → 0.0 | Pipeline runs features AFTER preprocessing (incl. scaling) | Heuristic ratios are noisy by default; explicit interaction_pairs (Section 7B) are the reliable path. Per-row guard prevents inf |
+| 17 | 4 | Binning fires on skewed numerics (|skew|>1.5) | With default IQR outlier capping the lognormal tail is clipped (skew drops below 1.5), so binning rarely fires unless `outlier_method="none"` | Capping precedes feature engineering in the pipeline | Binning is conditional on the capping setting; reviewers should know the two interact |
 
 ---
 

@@ -44,7 +44,17 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "high_cardinality_threshold": 20,
     "threshold": 0.5,
     "calibrate_probs": True,
-    # --- feature engineering (Section 7B; consumed in a later phase) ---
+    # --- feature engineering (Section 7; FeatureBuilder) ---
+    # Each capability is individually toggleable. Polynomial defaults OFF: squared
+    # terms are usually redundant with tree models and risk column explosion.
+    "feature_engineering": {
+        "enabled": True,
+        "polynomial": False,
+        "ratios": True,
+        "binning": True,
+        "max_poly_features": 8,
+    },
+    # --- interaction features (Section 7B; InteractionFeatureBuilder) ---
     "interaction_features": {
         "enabled": True,
         "interaction_pairs": {},
@@ -152,4 +162,23 @@ def _validate_config(config: dict[str, Any]) -> None:
     if not isinstance(threshold, int) or isinstance(threshold, bool) or threshold < 1:
         raise ValueError(
             f"'high_cardinality_threshold' must be a positive integer, got {threshold!r}"
+        )
+
+    _validate_feature_engineering(config["feature_engineering"])
+
+
+def _validate_feature_engineering(fe: Any) -> None:
+    """Validate the ``feature_engineering`` sub-dict (Section 7 — FeatureBuilder)."""
+    if not isinstance(fe, dict):
+        raise ValueError("'feature_engineering' must be a dict")
+    for flag in ("enabled", "polynomial", "ratios", "binning"):
+        if flag in fe and not isinstance(fe[flag], bool):
+            raise ValueError(
+                f"'feature_engineering.{flag}' must be a bool, got {fe[flag]!r}"
+            )
+    max_poly = fe.get("max_poly_features", 8)
+    if not isinstance(max_poly, int) or isinstance(max_poly, bool) or max_poly < 1:
+        raise ValueError(
+            "'feature_engineering.max_poly_features' must be a positive integer, "
+            f"got {max_poly!r}"
         )

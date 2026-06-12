@@ -40,6 +40,15 @@ anyone returning after a break who wants the gist without reading code.
 - Smart encoding: switches encoding strategy automatically for high-cardinality columns, and handles multiclass problems where target-based encoding doesn't apply.
 - Tests: 14 new automated checks (41 total), including dedicated tests that would fail if any leakage crept in.
 
+## Phase 4 — Feature engineering & interactions (✅ Done, 2026-06-12)
+**In one line:** Added a stage that builds new helper columns from the existing ones — squared terms, ratios, bins for skewed numbers, and combinations of two columns — learning what to build from the training data only.
+- preprocessing/features.py: a `FeatureBuilder` that can add squared versions of the strongest columns (off by default), ratio columns, and "bucket" columns for very lopsided numbers (e.g. claim amounts). What to build is decided from training data and merely applied to test data.
+- preprocessing/interactions.py: an `InteractionFeatureBuilder` that combines pairs of columns (multiply / divide / subtract), either pairs you name explicitly or pairs it discovers automatically by checking (on training data) whether the combination adds predictive signal.
+- Naming is fixed and predictable: `a_x_b` (multiply), `a_div_b` (divide), `a_minus_b` (subtract). Division by (near-)zero is guarded so it never produces infinities.
+- PNG output: `plot6_interaction_summary.png` — a bar chart of how strongly each new interaction column relates to the target.
+- Leakage guard: same rule as preprocessing — the auto-discovered pairs and all learned values are frozen on training data; the test set never changes what gets built.
+- Tests: 19 new automated checks (60 total), including dedicated leakage tests for binning and auto-discovery.
+
 ---
 
 ## How to read this project
