@@ -5,19 +5,19 @@
 > planning/overseer chat stays in sync with the local repo.
 
 **Last updated:** 2026-06-12
-**Updated by:** Claude Code (scaffold session)
-**Repo tag / commit:** — (initial commit pending)
+**Updated by:** Claude Code (Phase 1 session)
+**Repo tag / commit:** 39b0e82 (Phase 0) + Phase 1 commit pending
 
 ---
 
 ## Current status
 
-**Active phase:** Phase 0 — Project setup (pre-sprint)
-**Sprint day:** not started (planned: 4 weeks / 20 days)
-**Overall:** 🟡 Setup in progress
+**Active phase:** Phase 1 complete — Framework skeleton (Sections 1–4, 9)
+**Sprint day:** Phase 1 done
+**Overall:** 🟢 Pipeline skeleton in place, all tests green
 
-One-line summary: Repo structure, environment, and templates being set up. No pipeline
-sections generated yet.
+One-line summary: Config, file inspection, data loader, and train/test split implemented
+and tested against the real sample CSVs (22 tests passing). Ready for Phase 2 (feature analysis).
 
 ---
 
@@ -25,8 +25,8 @@ sections generated yet.
 
 | Ph. | Milestone | Status | Notes |
 |---|---|---|---|
-| 0 | Repo + env setup, CLAUDE.md, sample CSVs in DATA_DIR | 🔄 In progress | Scaffold + StorageAdapter done; venv/install + sample CSVs pending |
-| 1 | Framework skeleton (Sections 1–4, 9) | ⬜ Not started | |
+| 0 | Repo + env setup, CLAUDE.md, sample CSVs in DATA_DIR | ✅ Done | Scaffold, StorageAdapter, venv+install, sample CSVs all in place |
+| 1 | Framework skeleton (Sections 1–4, 9) | ✅ Done | config, inspect, loader, split + 22 tests passing on real samples |
 | 2 | Feature analysis (Section 5) | ⬜ Not started | |
 | 3 | Preprocessing (Section 6) | ⬜ Not started | |
 | 4 | Feature engineering (Sections 7, 7B) | ⬜ Not started | |
@@ -50,11 +50,38 @@ Status legend: ⬜ Not started · 🔄 In progress · ✅ Done · ⚠️ Blocked
 | 2026-06-12 | React (Vite + TS) frontend instead of single-file classify_ui.html | 13 pages too large for one file; future integration into Sapiens website |
 | 2026-06-12 | StorageAdapter abstraction for all file I/O | Local DATA_DIR/OUTPUT_DIR folders now → Databricks (Unity Catalog volumes) later, drop-in swap |
 | 2026-06-12 | CORS allowlist via env var, /api/v1/ route prefix, auth middleware stub | Gateway/SSO readiness for Sapiens website integration |
-| | | |
+| 2026-06-12 | `binary_cols` overlaps `numeric_cols`/`categorical_cols` in inspect_file | A 0/1 col (e.g. has_agent) is both numeric and binary; UI uses the binary flag for special handling without losing the dtype categorization |
+| 2026-06-12 | Loader coerces target to string dtype | Guarantees the target is never treated as a continuous float by sklearn; stratify/value_counts work uniformly across binary/multiclass |
+| 2026-06-12 | DATA_DIR set to `./data/samples`; added openpyxl+pyarrow | Sample CSVs live there; loader supports .xlsx/.parquet so the optional readers are now required deps |
+| 2026-06-12 | Datetime detection guarded by separator check | Prevents ID columns (POL100000) from being misread as dates while still catching policy_start_date |
 
 ---
 
-## Completed this session
+## Completed this session (Phase 1 — 2026-06-12)
+
+- **Section 1–2** `backend/classifyos/config.py`: `DEFAULT_CONFIG` + `build_config()`
+  with full validation (required fields, feature_cols ≥1, target∉features, test_size in
+  (0,0.5], enum checks, unknown-key rejection). Deep-copies defaults; `[RISK]` comment on
+  config mutation (root of the `_run_config` isolation pattern).
+- **Section 3** `backend/classifyos/io/inspect.py`: `inspect_file()` returning the locked
+  contract keys (columns, dtypes, numeric/categorical/binary/datetime cols, n_rows,
+  n_missing, NaN→None sample, optional class_distribution + suggested_problem_type).
+  Datetime detection by dtype/name-pattern/separator heuristic.
+- **Section 4** `backend/classifyos/io/loader.py`: `data_loader()` — CSV/xlsx/parquet via
+  StorageAdapter, validates file/target/features/≥2 classes, parses time_split_col,
+  coerces target to str. `[RISK]` comment + warning on dropping target-NaN rows.
+- **Section 9** `backend/classifyos/split.py`: `train_test_split_cls()` — stratified random
+  split (default) or temporal last-fraction split when time_split_col set; non-stratified
+  fallback for singleton classes. `[RISK]` comment on temporal leakage.
+- **Tests**: `tests/conftest.py` (loads .env, normalizes DATA_DIR, storage fixtures) +
+  test_config/test_inspect/test_loader/test_split. **22 passed** on the real sample CSVs.
+- Generated sample CSVs into `DATA_DIR` via `scripts/generate_sample_data.py`
+  (policy_lapse 3000, fraud_claims 8000 @ ~1%, risk_tier 3000 multiclass).
+- Created `backend/.env`, `backend/pytest.ini`; added openpyxl+pyarrow to requirements.
+- Archived this session's prompt to `prompts/phase_01_skeleton.md`.
+- Hallucination check ✅ — verified against pandas 2.3.3 / scikit-learn 1.9.0 in the venv.
+
+## Completed earlier (scaffold session)
 
 - Scaffolded full repo structure from the CLAUDE.md module map:
   - `backend/classifyos/` with subpackages `io/`, `analysis/`, `preprocessing/`,
@@ -78,32 +105,27 @@ Status legend: ⬜ Not started · 🔄 In progress · ✅ Done · ⚠️ Blocked
 
 ## In progress / partially done
 
-- Phase 0: scaffold complete. Still pending: `git init` + initial commit; create
-  `backend/.venv` and `pip install -r requirements.txt`; `npm install` in `frontend/`;
-  copy `.env.example` → `.env`; place sample CSVs in `DATA_DIR`.
+- Nothing in flight. Phase 1 closed; Phase 2 (Section 5 — feature analysis) not yet started.
 
 ## Known issues / bugs
 
 | # | Issue | Severity | Found | Status |
 |---|---|---|---|---|
-| | | | | |
+| | none | | | |
 
 ## Blockers
 
-- Sample insurance CSVs (lapse, fraud, risk_tier) needed in DATA_DIR before Phase 1
-  validation can run on real data.
+- None. Sample CSVs are in `DATA_DIR`; venv installed; tests green.
 
 ---
 
 ## Next steps (priority order)
 
-1. `git init` (if needed); first commit of the scaffold.
-2. Copy `backend/.env.example` → `backend/.env` and point `DATA_DIR`/`OUTPUT_DIR` at
-   local folders.
-3. Create `backend/.venv`, `pip install -r requirements.txt`; `npm install` in `frontend/`.
-4. Place sample CSVs (lapse, fraud, risk_tier) into `DATA_DIR`.
-5. Upload updated PROJECT_STATE.md to the Claude Project knowledge.
-6. Then: Phase 1 generation session (Sections 1–4, 9).
+1. Commit Phase 1 ("Phase 1: framework skeleton — sections 1-4, 9 + tests").
+2. Pin exact versions via `pip freeze > requirements.lock` (governance: reproducible env).
+3. Upload updated PROJECT_STATE.md to the Claude Project knowledge.
+4. Phase 2 generation session: Section 5 — `analyze_feature_impact`
+   (`backend/classifyos/analysis/feature_impact.py`) + tests, building on loader/split.
 
 ---
 
@@ -114,12 +136,12 @@ Contract doc: docs/api_contract.md — stub only.
 
 ## Governance checklist (from scope §12)
 
-- [ ] Prompt version control — prompts/ populated per section
-- [ ] Section-level unit tests passing on real data
-- [ ] [RISK] comments reviewed by team lead
-- [ ] Leakage audit (encoder/scaler/SMOTE train-only) confirmed
+- [x] Prompt version control — prompts/ populated per section (phase_01_skeleton.md archived)
+- [x] Section-level unit tests passing on real data (22 passing, Phase 1)
+- [ ] [RISK] comments reviewed by team lead (3 added in Phase 1, pending review)
+- [ ] Leakage audit (encoder/scaler/SMOTE train-only) confirmed (N/A until Phase 3+; split boundary established)
 - [ ] Output schema contract locked (post Phase 8)
-- [ ] Hallucination check — library calls verified against installed versions
+- [x] Hallucination check — library calls verified against installed versions (Phase 1: pandas 2.3.3 / sklearn 1.9.0)
 - [ ] Team lead sign-off per phase (Naveen)
 
 ---
@@ -130,4 +152,5 @@ Contract doc: docs/api_contract.md — stub only.
 |---|---|---|
 | 2026-06-12 | Project setup, structure decisions, templates created | CLAUDE.md + PROJECT_STATE.md created |
 | 2026-06-12 | Repo scaffold (dirs, StorageAdapter, requirements, env, gitignore, Vite frontend) | Structure ready; no pipeline sections yet |
+| 2026-06-12 | Phase 1 — Sections 1–4, 9 (config, inspect, loader, split) + tests | 22 tests passing on real samples; sample data generated; prompt archived |
 | | | |
