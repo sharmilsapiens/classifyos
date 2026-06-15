@@ -4,9 +4,9 @@
 > A copy is uploaded to the ClassifyOS Claude Project knowledge after each update so the
 > planning/overseer chat stays in sync with the local repo.
 
-**Last updated:** 2026-06-12
-**Updated by:** Claude Code (Phase 4 session)
-**Repo tag / commit:** 3384d51 (Phase 3) + Phase 4 commit pending
+**Last updated:** 2026-06-15
+**Updated by:** Claude Code (doc-enforcement tooling session)
+**Repo tag / commit:** 15f4676 (Phase 4 docs backfill) + doc-hook commit pending
 
 ---
 
@@ -211,6 +211,29 @@ Status legend: ⬜ Not started · 🔄 In progress · ✅ Done · ⚠️ Blocked
   signatures verified against sklearn 1.9.0 / scipy 1.17.1 / pandas 2.3.3 in the venv.
 - Archived this session's prompt to `prompts/phase_04_feature_engineering.md`.
 
+## Completed this session (Doc-update enforcement hook — 2026-06-15)
+
+- **`scripts/check_docs_updated.py`** (stdlib only, cross-platform): computes the
+  session's changed files as the union of `git diff --name-only HEAD`,
+  `git diff --name-only --cached HEAD`, and `git ls-files --others --exclude-standard`.
+  - ENGINE changed = any path under `backend/classifyos/` → if so, requires BOTH
+    `PROJECT_STATE.md` and `short_desc.md` in the changed set, else exit code 2 with a
+    STDERR message naming the missing doc(s).
+  - plan_tweak.md is a **non-blocking reminder** only (printed to STDERR, still exit 0)
+    when the engine changed but the tweak register wasn't touched — it can't be judged
+    mechanically, so forcing it would produce fake entries.
+  - Fails open: not-a-git-repo / git errors / no HEAD → exit 0 (never block on tooling).
+- **`.claude/settings.json`** (project scope, committed): registers a `Stop` hook
+  running `python scripts/check_docs_updated.py`. Verified against Claude Code **2.1.177**
+  hooks reference — `Stop` fires on turn end, takes no matcher, exit 2 prevents stopping
+  and feeds STDERR back to Claude, exit 0 allows. Windows-safe (invoked via `python` + a
+  repo-relative path; no bash-isms). CLAUDE.md is deliberately NOT in the check (it is the
+  stable contract, not a per-session doc).
+- **Verified behavior**: (A) engine edit + no doc update → BLOCKS (exit 2, names both
+  docs); (B) engine edit + both docs updated → PASSES (exit 0, plan_tweak reminder shown);
+  (C) doc-only change → PASSES (exit 0, no block). Throwaway engine edit reverted after.
+- Prompt archived to `prompts/tool_doc_hook.md`.
+
 ## Completed earlier (scaffold session)
 
 - Scaffolded full repo structure from the CLAUDE.md module map:
@@ -294,4 +317,5 @@ Contract doc: docs/api_contract.md — stub only.
 | 2026-06-12 | Phase 3 — Section 6 (Preprocessor) + leakage test suite | 41 tests passing; pipeline-order correction recorded; config gains outlier_method + high_cardinality_threshold; prompt archived |
 | 2026-06-12 | Docs backfill — created short_desc.md + plan_tweak.md (Phases 0–3) | Plain-language phase summaries + deviation register added; CLAUDE.md working-style updated to maintain both per phase going forward |
 | 2026-06-12 | Phase 4 — Sections 7 + 7B (FeatureBuilder, InteractionFeatureBuilder) + tests | 60 tests passing; feature_engineering config sub-dict added; binning/auto-discovery leakage tests + plot6 artifact; prompt archived; plan_tweak rows 12–17 added |
+| 2026-06-15 | Tooling — Stop hook enforcing PROJECT_STATE + short_desc updates on engine changes | `scripts/check_docs_updated.py` + `.claude/settings.json` Stop hook; verified block/pass/doc-only cases against v2.1.177; prompt archived |
 | | | |

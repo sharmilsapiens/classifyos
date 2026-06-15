@@ -47,6 +47,12 @@ anyone returning after a break who wants the gist without reading code.
 - PNG output `plot6_interaction_summary.png`: a bar chart of how strongly each new interaction column relates to the target.
 - Dev tool `backend/scripts/dev_run.py`: runs the whole pipeline so far (Phases 1–4) end-to-end on a real CSV and writes the real artifacts (feature_impact_summary.csv, plot4, plot6) to OUTPUT_DIR, failing readably stage-by-stage.
 
+## Tooling — Doc-update enforcement hook (✅ Done, 2026-06-15)
+**In one line:** Added a safety net that won't let a coding session finish if it changed the ML engine but forgot to update the project's living docs.
+- `scripts/check_docs_updated.py`: checks (via git) whether any pipeline code under `backend/classifyos/` changed; if so, it requires both PROJECT_STATE.md and short_desc.md to have been updated too.
+- Registered as a Claude Code "Stop" hook in `.claude/settings.json` — it runs automatically when a turn ends and blocks finishing until the docs are updated.
+- Doc-only, test-only, or config-only sessions are never blocked; plan_tweak.md is a gentle reminder only (it can't be judged mechanically).
+
 ---
 
 ## How to read this project
