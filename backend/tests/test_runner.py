@@ -1,0 +1,203 @@
+"""Tests for Section 15 (``ModelRunner`` — the pipeline orchestrator).
+
+These run the *whole* engine end to end on the real sample CSVs, writing artifacts to the
+session temp ``OUTPUT_DIR`` (the ``storage`` fixture). They assert the canonical order
+produces populated state, that every output file lands, that the ``_run_config`` isolation
+guarantee holds, and that one failing algorithm never aborts a run.
+"""
+
+from __future__ import annotations
+
+import copy
+import json
+
+import pandas as pd
+
+from classifyos.config import build_config
+from classifyos.runner import (
+    CLASS_REPORT_CSV_KEY,
+    METRICS_CSV_KEY,
+    RESULTS_CSV_KEY,
+    RUN_PROFILE_KEY,
+    ModelRunner,
+)
+
+# Small, fast feature/algorithm sets — enough to exercise every stage without the
+# slow models (SVM calibration). RandomForest gives a real feature-importance plot.
+LAPSE_FEATURES = [
+    "age",
+    "occupation",
+    "region",
+    "policy_type",
+    "channel",
+    "payment_frequency",
+    "policy_tenure_years",
+    "annual_premium",
+    "sum_assured",
+    "num_late_payments",
+    "claims_count",
+    "has_agent",
+]
+
+RISK_FEATURES = [
+    "age",
+    "bmi",
+    "is_smoker",
+    "annual_income",
+    "credit_score",
+    "prior_violations",
+    "occupation_class",
+    "vehicle_age",
+    "region",
+]
+
+
+def _lapse_config(**overrides):
+    base = dict(
+        problem_type="binary",
+        algorithms=["LogisticRegression", "RandomForest"],
+        class_balance="class_weight",
+    )
+    base.update(overrides)
+    return build_config("policy_lapse.csv", "will_lapse", LAPSE_FEATURES, **base)
+
+
+def test_runner_end_to_end_binary(storage) -> None:
+    """ModelRunner on policy_lapse completes with populated state and all outputs."""
+    cfg = _lapse_config()
+    runner = ModelRunner(cfg, storage).run()
+
+    # state populated
+    assert runner.raw_df_ is not None and len(runner.raw_df_) == 3000
+    assert runner.train_df_ is not None and runner.test_df_ is not None
+    assert runner.feature_impact_ is not None and not runner.feature_impact_.empty
+    assert not runner.predictions_df_.empty
+    assert runner.metrics_df_ is not None and len(runner.metrics_df_) == 2
+    assert set(runner.models_) == {"LogisticRegression", "RandomForest"}
+
+    # every model succeeded; metrics are real numbers
+    assert (runner.metrics_df_["status"] == "ok").all()
+    assert runner.metrics_df_["f1_weighted"].notna().all()
+
+    # predictions: one block per model, tagged, sized to the test set
+    assert set(runner.predictions_df_["model"].unique()) == {
+        "LogisticRegression",
+        "RandomForest",
+    }
+    n_test = len(runner.test_df_)
+    per_model = runner.predictions_df_.groupby("model").size()
+    assert (per_model == n_test).all()
+
+    # active features include the engineered interaction columns
+    assert any("_x_" in c or "_div_" in c for c in runner.active_features_)
+
+
+def test_runner_multiclass(storage) -> None:
+    """risk_tier 3-class end-to-end: metrics computed per model; 3 classes learned."""
+    cfg = build_config(
+        "risk_tier.csv",
+        "risk_tier",
+        RISK_FEATURES,
+        problem_type="multiclass",
+        algorithms=["LogisticRegression", "RandomForest"],
+    )
+    runner = ModelRunner(cfg, storage).run()
+
+    assert len(runner.classes_) == 3
+    assert (runner.metrics_df_["status"] == "ok").all()
+    assert runner.metrics_df_["accuracy"].notna().all()
+    # multiclass confusion matrices are 3x3
+    for name in runner.models_:
+        cm = runner.metrics_[name]["confusion_matrix"]
+        assert len(cm) == 3 and all(len(r) == 3 for r in cm)
+
+
+def test_config_not_mutated(storage) -> None:
+    """The _run_config isolation guarantee: run() never mutates the caller's config."""
+    cfg = _lapse_config()
+    before = copy.deepcopy(cfg)
+    runner = ModelRunner(cfg, storage)
+    runner.run()
+    assert cfg == before  # unchanged after a full run
+    # ...and runner.config is the same object the caller passed (not mutated either)
+    assert runner.config is cfg
+    assert runner.config == before
+
+
+def test_runner_handles_bad_algo(storage) -> None:
+    """A failing algorithm is recorded as 'failed'; the others still complete."""
+    cfg = _lapse_config(
+        algorithms=["LogisticRegression", "DefinitelyNotAModel", "RandomForest"]
+    )
+    runner = ModelRunner(cfg, storage).run()
+
+    statuses = dict(zip(runner.metrics_df_["model"], runner.metrics_df_["status"]))
+    assert statuses["LogisticRegression"] == "ok"
+    assert statuses["RandomForest"] == "ok"
+    assert statuses["DefinitelyNotAModel"] == "failed"
+
+    # the failed row carries an error message and no metrics
+    bad = runner.metrics_df_[runner.metrics_df_["model"] == "DefinitelyNotAModel"].iloc[0]
+    assert isinstance(bad["error"], str) and "DefinitelyNotAModel" in bad["error"]
+    assert pd.isna(bad["accuracy"])
+
+    # the good models are still fitted and produced predictions
+    assert set(runner.models_) == {"LogisticRegression", "RandomForest"}
+    assert "DefinitelyNotAModel" not in runner.predictions_df_["model"].unique()
+
+
+def test_all_output_files(storage, output_dir) -> None:
+    """Every expected artifact exists in OUTPUT_DIR after a binary run."""
+    cfg = _lapse_config()
+    ModelRunner(cfg, storage).run()
+
+    from classifyos.analysis.feature_impact import (
+        PLOT_PNG_KEY as PLOT4_KEY,
+        SUMMARY_CSV_KEY,
+    )
+    from classifyos.evaluation.plots import PLOT1_KEY, PLOT2_KEY, PLOT3_KEY, PLOT5_KEY
+    from classifyos.preprocessing.interactions import PLOT_PNG_KEY as PLOT6_KEY
+
+    expected = [
+        RESULTS_CSV_KEY,
+        METRICS_CSV_KEY,
+        CLASS_REPORT_CSV_KEY,
+        RUN_PROFILE_KEY,
+        SUMMARY_CSV_KEY,
+        PLOT1_KEY,
+        PLOT2_KEY,
+        PLOT3_KEY,
+        PLOT4_KEY,
+        PLOT5_KEY,
+        PLOT6_KEY,
+    ]
+    for key in expected:
+        assert storage.exists(key), f"missing output: {key}"
+
+    # run_profile.json is valid JSON with the documented keys (read from OUTPUT_DIR)
+    with open(output_dir / RUN_PROFILE_KEY, encoding="utf-8") as fh:
+        profile = json.load(fh)
+    for key in (
+        "input_file",
+        "target",
+        "features",
+        "active_features",
+        "problem_type",
+        "class_distribution",
+        "algorithms",
+        "timestamp",
+    ):
+        assert key in profile, f"run_profile missing key: {key}"
+    assert profile["target"] == "will_lapse"
+    assert profile["class_distribution"] == {"0": 1995, "1": 1005}
+
+
+def test_class_report_csv_per_model(storage, output_dir) -> None:
+    """class_report.csv has per-class rows for every successful model."""
+    cfg = _lapse_config()
+    ModelRunner(cfg, storage).run()
+    report = pd.read_csv(output_dir / CLASS_REPORT_CSV_KEY)
+    assert set(report["model"].unique()) == {"LogisticRegression", "RandomForest"}
+    assert {"model", "class", "precision", "recall", "f1_score", "support"}.issubset(
+        report.columns
+    )

@@ -1,0 +1,422 @@
+"""Section 15 — :class:`ModelRunner`, the pipeline orchestrator.
+
+``ModelRunner`` is the single entry point that runs the whole ClassifyOS engine end to
+end: it takes a validated run config plus a :class:`StorageAdapter`, executes every
+section in the *corrected canonical order*, trains and evaluates each requested
+algorithm, and writes all artifacts (CSVs, the run profile, and the Section 14 plots) to
+``OUTPUT_DIR`` through the storage adapter. The API layer (Phase 8) and the CLI
+(Section 16) both drive the engine exclusively through this class — it supersedes the
+``dev_run.py`` smoke-test script.
+
+Canonical order executed by :meth:`run` (NOT the scope's outdated step diagram — see the
+Phase 3 pipeline-order decision in PROJECT_STATE.md / plan_tweak.md row 4):
+
+#. ``data_loader`` → :attr:`raw_df_`
+#. ``analyze_feature_impact`` on the RAW frame (before preprocessing) →
+   :attr:`feature_impact_` (also writes ``feature_impact_summary.csv`` + ``plot4``)
+#. ``train_test_split_cls`` → :attr:`train_df_`, :attr:`test_df_`
+#. ``Preprocessor.fit(train)`` → transform train AND test
+#. ``FeatureBuilder.fit(train)`` → transform both
+#. ``InteractionFeatureBuilder.fit(train)`` → transform both (+ writes ``plot6``)
+#. ``handle_class_imbalance`` on the TRAIN matrices ONLY → balanced train + class weight
+#. for each algorithm: ``build_model`` → ``fit`` → ``classify`` → ``evaluate_model``
+#. save everything (Section 14 plots + CSVs + ``run_profile.json``)
+
+[RISK] _run_config isolation: :meth:`run` deep-copies the config once at the start and
+uses the copy for every downstream stage. ``self.config`` is NEVER mutated during a run,
+so the same ``ModelRunner`` (or the same config dict) can be re-run, and the interaction
+columns added to the working frames never leak back into the stored config. This is the
+scope's central correctness rule for the runner.
+
+Robustness: a single failing algorithm (a library edge case, a degenerate split for one
+model) is logged, recorded as a failed row in :attr:`metrics_df_`, and skipped — it never
+aborts the whole run. The other algorithms still train and the artifacts are still written.
+"""
+
+from __future__ import annotations
+
+import copy
+import json
+import logging
+from datetime import datetime, timezone
+from typing import Any
+
+import numpy as np
+import pandas as pd
+
+from .analysis.feature_impact import analyze_feature_impact
+from .config import build_config
+from .evaluation.metrics import evaluate_model
+from .io.storage import StorageAdapter
+from .models.registry import build_model
+from .predict import classify
+from .preprocessing.balance import handle_class_imbalance
+from .preprocessing.features import FeatureBuilder
+from .preprocessing.interactions import (
+    InteractionFeatureBuilder,
+    plot_interaction_summary,
+)
+from .preprocessing.preprocess import Preprocessor
+from .split import train_test_split_cls
+
+logger = logging.getLogger(__name__)
+
+# Logical output keys (part of the future output contract — see docs/api_contract.md).
+RESULTS_CSV_KEY = "classification_results.csv"
+METRICS_CSV_KEY = "metrics_comparison.csv"
+CLASS_REPORT_CSV_KEY = "class_report.csv"
+RUN_PROFILE_KEY = "run_profile.json"
+
+
+class ModelRunner:
+    """Run the full ClassifyOS pipeline for one config and collect all results.
+
+    Args:
+        config: A validated run config (see :func:`classifyos.config.build_config`).
+            Stored as-is and NEVER mutated; :meth:`run` works on a deep copy.
+        storage: Storage adapter for every read (input data) and write (artifacts).
+
+    Attributes (populated by :meth:`run`):
+        raw_df_: The loaded, validated dataframe (``data_loader`` output).
+        feature_impact_: The ``analyze_feature_impact`` ranking frame.
+        train_df_, test_df_: The raw (post-split, pre-preprocessing) partitions.
+        active_features_: Final engineered feature column names (incl. interaction cols).
+        predictions_df_: Per-sample predictions for every successful model, tagged with
+            a ``model`` column.
+        metrics_df_: One summary row per requested algorithm (failed models flagged).
+        feature_impact_: see above.
+        models_: ``{name: fitted ModelWrapper}`` for every algorithm that succeeded.
+        metrics_: ``{name: full metrics dict}`` (the rich ``evaluate_model`` output,
+            used by the Section 14 plots).
+        X_test_, y_test_, classes_, problem_type_: handles the plots / serializers reuse.
+    """
+
+    def __init__(self, config: dict[str, Any], storage: StorageAdapter) -> None:
+        self.config = config
+        self.storage = storage
+
+        # Result state — set during run().
+        self.raw_df_: pd.DataFrame | None = None
+        self.feature_impact_: pd.DataFrame | None = None
+        self.train_df_: pd.DataFrame | None = None
+        self.test_df_: pd.DataFrame | None = None
+        self.active_features_: list[str] = []
+        self.predictions_df_: pd.DataFrame | None = None
+        self.metrics_df_: pd.DataFrame | None = None
+        self.models_: dict[str, Any] = {}
+        self.metrics_: dict[str, dict[str, Any]] = {}
+        self.X_test_: pd.DataFrame | None = None
+        self.y_test_: pd.Series | None = None
+        self.classes_: list[Any] = []
+        self.problem_type_: str = "binary"
+        self.run_profile_: dict[str, Any] | None = None
+
+    # --------------------------------------------------------------------- run --
+
+    def run(self) -> "ModelRunner":
+        """Execute the whole pipeline and write all artifacts. Returns ``self``."""
+        # [RISK] _run_config isolation — deep-copy the caller's config ONCE and use the
+        # copy for every stage below. self.config is never mutated, so re-running is safe
+        # and the interaction columns added to the working frames never leak into config.
+        cfg = copy.deepcopy(self.config)
+
+        target = cfg["target"]
+        problem_type = cfg.get("problem_type", "binary")
+        self.problem_type_ = problem_type
+        algorithms = list(cfg.get("algorithms", []))
+
+        # -- 1. load -----------------------------------------------------------
+        logger.info("ModelRunner: loading %s", cfg["input_file"])
+        self.raw_df_ = data = self._load(cfg)
+
+        # -- 2. feature impact on RAW data (writes feature_impact_summary.csv + plot4) --
+        logger.info("ModelRunner: analyzing feature impact (raw)")
+        self.feature_impact_ = analyze_feature_impact(data, cfg, self.storage)
+
+        # -- 3. split ----------------------------------------------------------
+        logger.info("ModelRunner: train/test split")
+        self.train_df_, self.test_df_ = train_test_split_cls(data, cfg)
+
+        # -- 4-6. preprocess → features → interactions (fit on TRAIN, apply to both) --
+        train_X, train_y, test_X, test_y = self._engineer(cfg, target)
+        self.X_test_, self.y_test_ = test_X, test_y
+        self.active_features_ = list(train_X.columns)
+
+        # -- 7. class imbalance (TRAIN ONLY) -----------------------------------
+        logger.info("ModelRunner: handling class imbalance (%s)", cfg.get("class_balance"))
+        X_bal, y_bal, class_weight = handle_class_imbalance(train_X, train_y, cfg)
+
+        # -- 8. per-algorithm train → classify → evaluate ----------------------
+        self.classes_ = sorted(pd.Series(y_bal).astype(str).unique())
+        metrics_rows: list[dict[str, Any]] = []
+        prediction_frames: list[pd.DataFrame] = []
+        for name in algorithms:
+            row, preds = self._run_one_algorithm(
+                name, X_bal, y_bal, test_X, test_y, problem_type, class_weight, cfg
+            )
+            metrics_rows.append(row)
+            if preds is not None:
+                prediction_frames.append(preds)
+
+        self.metrics_df_ = pd.DataFrame(metrics_rows)
+        self.predictions_df_ = (
+            pd.concat(prediction_frames, ignore_index=True)
+            if prediction_frames
+            else pd.DataFrame()
+        )
+
+        n_ok = len(self.models_)
+        logger.info(
+            "ModelRunner: %d/%d algorithm(s) succeeded", n_ok, len(algorithms)
+        )
+
+        # -- 9. save everything ------------------------------------------------
+        self._save_all(cfg, class_weight)
+        return self
+
+    # ------------------------------------------------------------- pipeline steps --
+
+    def _load(self, cfg: dict[str, Any]) -> pd.DataFrame:
+        """Stage 1 — load the dataset (imported lazily to keep the import graph flat)."""
+        from .io.loader import data_loader
+
+        return data_loader(cfg, self.storage)
+
+    def _engineer(
+        self, cfg: dict[str, Any], target: str
+    ) -> tuple[pd.DataFrame, pd.Series, pd.DataFrame, pd.Series]:
+        """Stages 4-6 — preprocess, build features, build interactions (TRAIN-fitted).
+
+        Every stage is fitted on the TRAIN partition only and merely applied to the
+        TEST partition, preserving the no-leakage guarantee. Writes ``plot6``.
+
+        Returns ``(X_train, y_train, X_test, y_test)`` — all-numeric feature matrices
+        with the target split off into the label series.
+        """
+        # 4. preprocess
+        pre = Preprocessor(cfg)
+        train_pp = pre.fit_transform(self.train_df_)
+        test_pp = pre.transform(self.test_df_)
+
+        # 5. derived features (polynomial / ratio / binning)
+        fb = FeatureBuilder(cfg)
+        train_fb = fb.fit_transform(train_pp, target)
+        test_fb = fb.transform(test_pp)
+
+        # 6. pairwise interactions (+ plot6 on the engineered TRAIN frame)
+        ib = InteractionFeatureBuilder(cfg)
+        train_fin = ib.fit_transform(train_fb, target)
+        test_fin = ib.transform(test_fb)
+        try:
+            plot_interaction_summary(
+                train_fin, target, ib.interaction_cols_, self.storage
+            )
+        except Exception:  # noqa: BLE001 — a plot must never abort a run
+            logger.exception("ModelRunner: plot6 (interaction summary) failed")
+
+        X_train = train_fin.drop(columns=[target])
+        y_train = train_fin[target]
+        X_test = test_fin.drop(columns=[target])
+        y_test = test_fin[target]
+        return X_train, y_train, X_test, y_test
+
+    def _run_one_algorithm(
+        self,
+        name: str,
+        X_train: pd.DataFrame,
+        y_train: pd.Series,
+        X_test: pd.DataFrame,
+        y_test: pd.Series,
+        problem_type: str,
+        class_weight: dict[Any, float] | None,
+        cfg: dict[str, Any],
+    ) -> tuple[dict[str, Any], pd.DataFrame | None]:
+        """Build → fit → classify → evaluate ONE algorithm; never raises.
+
+        On any failure the model is logged, recorded as a ``status="failed"`` row with
+        the error message, and ``None`` predictions are returned so the run continues
+        with the remaining algorithms.
+        """
+        random_state = cfg.get("random_state", 42)
+        try:
+            model = build_model(
+                name,
+                problem_type=problem_type,
+                class_weight=class_weight,
+                random_state=random_state,
+            )
+            model.fit(X_train, y_train)
+            classes = np.asarray(model.classes_)
+
+            y_proba = model.predict_proba(X_test)
+            y_pred = model.predict(X_test)
+            metrics = evaluate_model(y_test, y_pred, y_proba, problem_type, classes)
+
+            preds = classify(model, X_test, y_test, classes)
+            preds.insert(0, "model", model.name)
+            preds = preds.reset_index().rename(columns={"index": "sample_index"})
+
+            self.models_[model.name] = model
+            self.metrics_[model.name] = metrics
+
+            row = {
+                "model": model.name,
+                "status": "ok",
+                "n_test": int(len(X_test)),
+                "accuracy": metrics.get("accuracy"),
+                "f1_weighted": metrics.get("f1_weighted"),
+                "f1_macro": metrics.get("f1_macro"),
+                "precision_weighted": metrics.get("precision_weighted"),
+                "recall_weighted": metrics.get("recall_weighted"),
+                "roc_auc": metrics.get("roc_auc"),
+                "pr_auc": metrics.get("pr_auc"),
+                "mcc": metrics.get("mcc"),
+                "log_loss": metrics.get("log_loss"),
+                "error": None,
+            }
+            logger.info(
+                "ModelRunner: %s ok (f1_weighted=%s, accuracy=%s)",
+                model.name,
+                _fmt(row["f1_weighted"]),
+                _fmt(row["accuracy"]),
+            )
+            return row, preds
+        except Exception as exc:  # noqa: BLE001 — one bad model must not kill the run
+            logger.exception("ModelRunner: algorithm %r failed", name)
+            row = {
+                "model": name,
+                "status": "failed",
+                "n_test": int(len(X_test)),
+                "accuracy": None,
+                "f1_weighted": None,
+                "f1_macro": None,
+                "precision_weighted": None,
+                "recall_weighted": None,
+                "roc_auc": None,
+                "pr_auc": None,
+                "mcc": None,
+                "log_loss": None,
+                "error": f"{type(exc).__name__}: {exc}",
+            }
+            return row, None
+
+    # ----------------------------------------------------------------- artifacts --
+
+    def _save_all(
+        self, cfg: dict[str, Any], class_weight: dict[Any, float] | None
+    ) -> None:
+        """Stage 9 — write CSVs, the run profile, and the Section 14 plots."""
+        # predictions
+        if self.predictions_df_ is not None and not self.predictions_df_.empty:
+            with self.storage.open_write(RESULTS_CSV_KEY) as fh:
+                self.predictions_df_.to_csv(fh, index=False)
+
+        # metrics comparison
+        if self.metrics_df_ is not None:
+            with self.storage.open_write(METRICS_CSV_KEY) as fh:
+                self.metrics_df_.to_csv(fh, index=False)
+
+        # per-class per-model report
+        report_df = self._build_class_report()
+        with self.storage.open_write(CLASS_REPORT_CSV_KEY) as fh:
+            report_df.to_csv(fh, index=False)
+
+        # run profile
+        self.run_profile_ = self._build_run_profile(cfg, class_weight)
+        with self.storage.open_write(RUN_PROFILE_KEY) as fh:
+            json.dump(self.run_profile_, fh, indent=2)
+
+        # Section 14 plots (plot1/2/3/5). Imported lazily to avoid a hard matplotlib
+        # import when a caller only wants the engine outputs. A plot failure is logged
+        # but never aborts the run.
+        try:
+            from .evaluation.plots import plot_results
+
+            plot_results(self, self.storage)
+        except Exception:  # noqa: BLE001
+            logger.exception("ModelRunner: plot_results (plot1/2/3/5) failed")
+
+        logger.info("ModelRunner: artifacts written to OUTPUT_DIR")
+
+    def _build_class_report(self) -> pd.DataFrame:
+        """Flatten every successful model's per-class classification report to rows.
+
+        One row per (model, class) plus the macro/weighted average rows that sklearn's
+        ``classification_report`` produces, so the dashboard can render a per-class
+        table per model.
+        """
+        rows: list[dict[str, Any]] = []
+        for name, metrics in self.metrics_.items():
+            report = metrics.get("classification_report") or {}
+            for label, vals in report.items():
+                if not isinstance(vals, dict):  # the scalar "accuracy" entry
+                    continue
+                rows.append(
+                    {
+                        "model": name,
+                        "class": label,
+                        "precision": vals.get("precision"),
+                        "recall": vals.get("recall"),
+                        "f1_score": vals.get("f1-score"),
+                        "support": vals.get("support"),
+                    }
+                )
+        columns = ["model", "class", "precision", "recall", "f1_score", "support"]
+        return pd.DataFrame(rows, columns=columns)
+
+    def _build_run_profile(
+        self, cfg: dict[str, Any], class_weight: dict[Any, float] | None
+    ) -> dict[str, Any]:
+        """Assemble the JSON-serializable ``run_profile.json`` payload."""
+        target = cfg["target"]
+        class_distribution: dict[str, int] = {}
+        if self.raw_df_ is not None:
+            counts = self.raw_df_[target].astype(str).value_counts()
+            class_distribution = {str(k): int(v) for k, v in counts.items()}
+
+        return {
+            "input_file": cfg["input_file"],
+            "target": target,
+            "problem_type": cfg.get("problem_type", "binary"),
+            "features": list(cfg.get("feature_cols", [])),
+            "active_features": list(self.active_features_),
+            "algorithms": list(cfg.get("algorithms", [])),
+            "class_balance": cfg.get("class_balance"),
+            "class_weight": (
+                {str(k): float(v) for k, v in class_weight.items()}
+                if class_weight
+                else None
+            ),
+            "class_distribution": class_distribution,
+            "n_rows": int(len(self.raw_df_)) if self.raw_df_ is not None else 0,
+            "n_train": int(len(self.train_df_)) if self.train_df_ is not None else 0,
+            "n_test": int(len(self.test_df_)) if self.test_df_ is not None else 0,
+            "models_succeeded": sorted(self.models_),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+
+
+def _fmt(value: Any) -> str:
+    """Format a possibly-``None`` metric for a log line."""
+    return f"{value:.4f}" if isinstance(value, (int, float)) else "n/a"
+
+
+def run_from_args(
+    input_file: str,
+    target: str,
+    feature_cols: list[str],
+    storage: StorageAdapter,
+    **overrides: Any,
+) -> ModelRunner:
+    """Convenience: build a config and run it in one call.
+
+    Used by the CLI (Section 16) and handy for tests/notebooks. ``overrides`` are passed
+    straight to :func:`classifyos.config.build_config` (e.g. ``problem_type``,
+    ``algorithms``, ``class_balance``).
+    """
+    config = build_config(input_file, target, feature_cols, **overrides)
+    return ModelRunner(config, storage).run()
+
+
+# data_loader is imported lazily inside _load to keep the module-level import graph small;
+# re-export nothing else here.

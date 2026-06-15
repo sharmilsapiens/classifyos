@@ -4,7 +4,7 @@
 > plan, or made an assumption the plan didn't cover. A register, not an essay — one line
 > per cell. "Impact" = what a reviewer (Naveen / stakeholders) needs to know at sign-off.
 >
-> Covers Phases 0–6. Updated at the end of every phase.
+> Covers Phases 0–7. Updated at the end of every phase.
 
 | # | Phase | What the plan said | What we did instead / assumed | Why | Impact |
 |---|---|---|---|---|---|
@@ -30,6 +30,8 @@
 | 20 | 6 | "Some models take the `class_weight` dict directly, some need sample_weight translation" | ALL six wrappers consume `class_weight` uniformly by translating the `{class: weight}` dict to a per-sample `sample_weight` vector at fit time | The loader coerces targets to string dtype, so numeric labels arrive as `"0"/"1"`; sklearn's native `class_weight`-dict path int-coerces them and then can't find the string keys (`ValueError: classes [0,1] are not in class_weight`). Per-sample weights are mathematically equivalent and library-agnostic | Behaviour matches intent (equivalent training); the difference is purely how the weight is plumbed. No native `class_weight` arg is passed to any estimator |
 | 21 | 6 | `SVMModel` via `SVC(probability=True)` OR `CalibratedClassifierCV` | Used `CalibratedClassifierCV(SVC(), ensemble=False)` | `SVC(probability=True)` is deprecated in scikit-learn 1.9 and removed in 1.11; the calibrated wrapper is the sanctioned replacement | SVM `feature_importance` is always `None` (the calibrated wrapper exposes no `coef_`); correct for the default RBF kernel regardless. SVM is the slow model (internal CV calibration) |
 | 22 | 6 | xgboost/lightgbm assumed available; XGBoost handles labels | xgboost (3.2.0) + lightgbm (4.6.0) were not installed/listed — installed + added to `requirements.txt`; `requirements.lock` pinned via `pip freeze`. XGBoost wrapper label-encodes `y` to `0..n-1` internally | The two boosting wrappers require these libs; `XGBClassifier` 3.2.0 rejects string/non-consecutive labels, and the engine's targets are strings | Two new runtime deps reviewers should note; the lock file is the reproducible-env record. XGBoost predictions are mapped back to the original string labels, so the wrapper contract is unchanged |
+| 23 | 7 | `plot_results` produces all 6 plots; "ROC + PR per class/algorithm" | plots.py writes plot1/2/3/5 ONLY (plot4 feature-impact and plot6 interactions are written upstream in Sections 5/7B and not duplicated). For **multiclass**, plot2 is one-vs-rest ROC per class (PR omitted as ill-defined) and plot5 calibration is binary-only; both, plus plot3 when no model exposes importances, fall back to a **labelled placeholder PNG** rather than a missing file | The scope assigned all 6 plots to Section 14, but Sections 5/7B already own plot4/plot6; duplicating them would risk drift. Multiclass PR/calibration are genuinely ill-defined in the binary form | The OUTPUT_DIR artifact set is always complete (frontend can rely on every plot key existing); reviewers should know plot5/plot3 may be a placeholder for some problem types / model mixes, and multiclass plot2 shows ROC only |
+| — | 7 | (corrected pipeline order — already recorded) | ModelRunner implements the corrected canonical order (split BEFORE preprocessing); **no new deviation** — it realises the Phase 3 decision (row 4 above). The `_run_config` deep-copy isolation and robust per-algorithm failure handling are scope requirements, faithfully implemented (not deviations) | — | Cross-reference only: the runner is the first place the full corrected order runs as one call |
 
 ---
 

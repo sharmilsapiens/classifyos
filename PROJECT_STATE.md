@@ -5,35 +5,44 @@
 > planning/overseer chat stays in sync with the local repo.
 
 **Last updated:** 2026-06-15
-**Updated by:** Claude Code (Phase 6 — model wrappers + registry + evaluation + classify)
-**Repo tag / commit:** 33dc292 (Phase 5) + Phase 6 commit pending
+**Updated by:** Claude Code (Phase 7 — plots + ModelRunner + CLI)
+**Repo tag / commit:** 3c12b37 (Phase 6) + Phase 7 commit pending
 
 ---
 
 ## Current status
 
-**Active phase:** Phase 6 complete — Models + evaluation (Sections 10–13)
-**Sprint day:** Phase 6 done
-**Overall:** 🟢 The engine can now train, score, and explain models end-to-end on the
-balanced TRAIN matrices and evaluate on the untouched TEST set; full suite green
+**Active phase:** Phase 7 complete — Plots + ModelRunner + CLI (Sections 14–16). **The ML
+engine is now feature-complete and runs end-to-end from a single call.**
+**Sprint day:** Phase 7 done
+**Overall:** 🟢 A single `ModelRunner(config, storage).run()` (or the CLI) executes the
+whole pipeline — load → feature impact → split → preprocess → features → interactions →
+balance (train only) → train/evaluate every algorithm → write every artifact. Full suite
+green; first real-data end-to-end run completed.
 
-One-line summary: Sections 10–13 implemented. Section 11 — six model wrappers
-(LogisticRegression, RandomForest, XGBoost, LightGBM, SVM, NaiveBayes) behind a single
-`ModelWrapper` ABC, all sharing one `_SklearnEstimatorWrapper` template so the public
-contract is identical regardless of library: `predict_proba` always returns
-`(n, n_classes)` aligned to `classes_` (2 columns for binary), `predict` returns
-original-space labels, `feature_importance` returns a dict or `None`. Section 12 —
-`MODEL_REGISTRY` + `build_model` (canonical keys + short aliases LR/RF/XGB/LGBM/SVM/NB;
-additive rule: new models added here only). Section 10 — `evaluate_model` returns one
-JSON-serializable metrics dict (accuracy, weighted+macro precision/recall/F1 with
-F1-weighted primary, ROC-AUC, PR-AUC, log-loss, MCC, confusion matrix, per-class report,
-binary calibration curve), guarding undefined cases as `None`. Section 13 — `classify`
-builds the per-sample predictions table (actual/predicted/probability_*/confidence/
-correct_flag). class_weight is consumed uniformly via sample_weight translation (numeric-
-string labels break sklearn's native class_weight-dict path); SVM uses
-`CalibratedClassifierCV` (SVC probability= deprecated in 1.9); XGBoost label-encodes
-internally. 117 tests passing (70 prior + 47 new). Ready for Phase 7 (plots + ModelRunner
-+ CLI).
+One-line summary: Sections 14–16 implemented. **Section 15 `ModelRunner`** (`runner.py`)
+is the orchestrator: it deep-copies the config once at the start of `run()` and never
+mutates `self.config` (the `_run_config` isolation rule — asserted by a test), executes
+the corrected canonical order (split BEFORE preprocessing — plan_tweak row 4, not the
+scope's step diagram), trains each `config["algorithms"]` entry on the balanced TRAIN
+matrices, classifies + evaluates on the untouched TEST set, and is robust to a single
+failing algorithm (logged, recorded as a `status="failed"` metrics row, run continues).
+State attrs: `raw_df_, train_df_, test_df_, feature_impact_, predictions_df_, metrics_df_,
+models_, metrics_, X_test_, y_test_, classes_, active_features_, run_profile_`. **Section
+14 `plot_results`** (`evaluation/plots.py`) writes plot1 (confusion: raw + row-normalized
+per model), plot2 (binary ROC+PR / multiclass one-vs-rest ROC, AUC/AP in legend), plot3
+(feature importances per model that exposes them), plot5 (binary calibration) — all via
+StorageAdapter, Agg backend, dpi=150, white facecolor, figures always closed; degenerate
+cases (no importances, multiclass calibration/PR) fall back to labelled placeholder PNGs
+so the artifact set is always complete. plot4/plot6 are written upstream (Sections 5/7B)
+and not duplicated. **Section 16 CLI** (`cli.py`): `load_dotenv()` at startup (mandatory —
+engine doesn't auto-load `.env`), `--inspect` (profile only) and run modes, default
+feature detection (drops id_like/datetime), prints a per-model metrics table + the files
+written; `--output-dir` override. Outputs to OUTPUT_DIR: `classification_results.csv`,
+`metrics_comparison.csv`, `class_report.csv`, `run_profile.json` (+ plot1/2/3/5, plot4,
+plot6). **130 tests passing (117 prior + 13 new).** Real-data milestone: CLI on
+`real/iris.csv` (multiclass) with LR/RF/XGB/LGBM → accuracy 0.93–0.97, all 11 artifacts
+written. Engine complete; ready for Phase 8 (FastAPI layer).
 
 ---
 
@@ -48,7 +57,7 @@ internally. 117 tests passing (70 prior + 47 new). Ready for Phase 7 (plots + Mo
 | 4 | Feature engineering (Sections 7, 7B) | ✅ Done | FeatureBuilder + InteractionFeatureBuilder (fit/transform, train-only stats) + 19 tests incl. binning/auto-discovery leakage suite |
 | 5 | Class balancing (Section 8) | ✅ Done | handle_class_imbalance (smote/undersample/class_weight/none, train-only) + 10 tests; SMOTE k_neighbors auto-guard + tiny-minority fallback; multilabel→class_weight |
 | 6 | Models + evaluation (Sections 10–13) | ✅ Done | 6 wrappers via 1 ABC + MODEL_REGISTRY + evaluate_model + classify; 47 tests; xgboost/lightgbm added to deps |
-| 7 | Plots + ModelRunner + CLI (Sections 14–16) | ⬜ Not started | ⚠️ CLI (Sec 16) must `load_dotenv()` at startup — engine code does NOT auto-load `.env`; without it `LocalFolderStorage` falls back to relative `data`/`classification_output` |
+| 7 | Plots + ModelRunner + CLI (Sections 14–16) | ✅ Done | ModelRunner (deep-copy config isolation, corrected order, robust per-algo failures) + plot_results (plot1/2/3/5) + CLI (load_dotenv, inspect/run modes); 13 tests; real-data run on iris done; engine feature-complete |
 | 8 | FastAPI layer | ⬜ Not started | ⚠️ API startup must `load_dotenv()` (or rely on exported env) so DATA_DIR/OUTPUT_DIR/CORS_ORIGINS resolve — same fallback caveat as the CLI |
 | 9 | React dashboard (13 pages) | ⬜ Not started | Deviation from scope: React replaces single-file HTML |
 | 10 | Unit tests (full pytest suite) | ⬜ Not started | |
@@ -90,6 +99,10 @@ Status legend: ⬜ Not started · 🔄 In progress · ✅ Done · ⚠️ Blocked
 | 2026-06-15 | SVM wrapper uses `CalibratedClassifierCV(SVC(), ensemble=False)` for probabilities; `feature_importance` → `None` | `SVC(probability=True)` is deprecated in scikit-learn 1.9 and removed in 1.11; the calibrated wrapper is the sanctioned replacement and exposes no coefficients (None is correct for the default RBF kernel anyway) |
 | 2026-06-15 | XGBoost wrapper label-encodes `y` to `0..n-1` internally and maps predictions back | `XGBClassifier` 3.2.0 rejects non-consecutive/string labels (`Invalid classes inferred from unique values of y`); the engine's targets are strings, so encoding is mandatory |
 | 2026-06-15 | Added `xgboost` (3.2.0) + `lightgbm` (4.6.0) to deps; pinned all versions in `backend/requirements.lock` (`pip freeze`) | The two boosting wrappers require these libraries (not previously installed/listed); the lock file is the governance reproducible-env record |
+| 2026-06-15 | ModelRunner deep-copies config once at the top of `run()` and uses the copy for every stage; `self.config` is the untouched caller object (never mutated) | The `_run_config` isolation rule — re-running the same runner/config must be safe and interaction columns added to the working frames must not leak back into config. Each sub-builder also deep-copies config internally, so isolation holds at every layer |
+| 2026-06-15 | A failing algorithm is caught, logged, and recorded as a `status="failed"` row in `metrics_df_` (with the error string); the run continues for the others. Unknown algorithm names (build_model `ValueError`) are caught the same way | Scope robustness requirement: "one bad model must not kill the whole run." Real data + a 6-model registry makes per-model failures a realistic edge case |
+| 2026-06-15 | `plot_results` writes plot1/2/3/5 only (plot4/plot6 are written upstream in Sections 5/7B). Degenerate cases emit a labelled placeholder PNG instead of skipping the file: no model exposes importances → plot3 placeholder; multiclass → plot5 placeholder (calibration is binary-only) and plot2 uses one-vs-rest ROC per class (PR omitted) | Keeps the OUTPUT_DIR artifact set stable/complete for the frontend regardless of problem type or model mix; avoids duplicating the two plots earlier sections already own |
+| 2026-06-15 | `run_profile.json` records both `features` (configured) and `active_features` (final engineered columns incl. interaction cols), plus class_distribution, class_weight, n_rows/n_train/n_test, models_succeeded, and a UTC `timestamp` | The profile is the run's audit record; the active-vs-configured feature distinction makes the engineering effect visible at sign-off |
 
 ---
 
@@ -323,6 +336,69 @@ Status legend: ⬜ Not started · 🔄 In progress · ✅ Done · ⚠️ Blocked
   and pinned the full env in `backend/requirements.lock` (`pip freeze`).
 - Archived this session's prompt to `prompts/phase_06_models_eval.md`.
 
+## Completed this session (Phase 7 — 2026-06-15)
+
+- **Section 15** `backend/classifyos/runner.py`: `ModelRunner(config, storage)` +
+  `run() -> self`, the single orchestrator the API and CLI drive (supersedes `dev_run.py`,
+  which stays as a dev tool). `run()`:
+  - **[RISK] `_run_config` isolation** — `copy.deepcopy(self.config)` once at the top;
+    `self.config` is never mutated (asserted by `test_config_not_mutated`). Sub-builders
+    also deep-copy config internally, so interaction columns never leak back.
+  - Executes the **corrected canonical order** (plan_tweak row 4, NOT the scope diagram):
+    `data_loader → analyze_feature_impact (raw, writes plot4 + summary CSV) →
+    train_test_split_cls → Preprocessor.fit(train)/transform(both) →
+    FeatureBuilder.fit(train)/transform(both) → InteractionFeatureBuilder.fit(train)/
+    transform(both) (writes plot6) → handle_class_imbalance (TRAIN ONLY) → per-algorithm
+    build_model → fit → classify → evaluate_model → save all`.
+  - **Robust per-algorithm loop** (`_run_one_algorithm`): each algorithm runs in a
+    try/except; a failure (incl. an unknown name → `build_model` `ValueError`) is logged
+    and recorded as a `status="failed"` metrics row with the error string — the run
+    continues for the rest. Successful models are kept in `models_` / `metrics_`.
+  - State attrs: `raw_df_, feature_impact_, train_df_, test_df_, active_features_,
+    predictions_df_, metrics_df_, models_, metrics_, X_test_, y_test_, classes_,
+    problem_type_, run_profile_`. Plus a `run_from_args(...)` convenience wrapper.
+  - **Outputs** (all via StorageAdapter): `classification_results.csv` (predictions,
+    tagged by `model` + `sample_index`), `metrics_comparison.csv` (per-model summary
+    rows), `class_report.csv` (per-class per-model, flattened from the classification
+    report), `run_profile.json` (input_file, target, problem_type, features,
+    active_features, algorithms, class_balance, class_weight, class_distribution,
+    n_rows/n_train/n_test, models_succeeded, UTC timestamp).
+- **Section 14** `backend/classifyos/evaluation/plots.py`: `plot_results(runner, storage)
+  -> list[str]` writes **plot1** (confusion matrix per model — raw counts + row-normalized,
+  annotated heatmaps), **plot2** (binary: ROC + PR, one line per model with AUC/AP in the
+  legend; multiclass: one subplot per model with one-vs-rest ROC per class, PR omitted),
+  **plot3** (top-15 feature importances per model that exposes them; models without →
+  skipped), **plot5** (binary calibration vs the perfect diagonal). plot4/plot6 are NOT
+  duplicated (written in Sections 5/7B). Agg backend, dpi=150, white facecolor, every
+  figure closed after save; each plot guards its own failure (never raises into the run)
+  and degenerate cases (no importances / multiclass calibration & PR) emit a labelled
+  placeholder PNG so the artifact set is always complete.
+- **Section 16** `backend/classifyos/cli.py`: `python -m classifyos.cli`. **`load_dotenv()`
+  at startup (mandatory)** — the engine does not auto-load `.env`. argparse: `--file
+  --target --features --problem-type --test-size --algos --balance --encoding --scaling
+  --inspect --output-dir`. `--inspect` prints the `inspect_file` profile and exits; run
+  mode builds the config (default features = all columns except target / datetime /
+  ID-like, resolving aliases like LR/RF/XGB), runs `ModelRunner`, and prints a per-model
+  metrics table (accuracy / F1-weighted / ROC-AUC / MCC) + the files written. Readable
+  per-stage failures with non-zero exit codes (no raw tracebacks).
+- **Tests** (13 new): `test_runner.py` (end-to-end binary + multiclass, `_run_config`
+  isolation, bad-algo robustness, all-output-files incl. run_profile keys, class_report
+  per-model), `test_plots.py` (binary plot1/2/3/5 written as non-trivial PNGs,
+  `plot_results` returns the 4 keys, no-importance plot3 placeholder, multiclass plot2 +
+  plot5 placeholder), `test_cli.py` (inspect-only, full run via `main()`, missing-file
+  readable failure). **130 passed** (117 prior + 13 new) — no regressions.
+- **Real-data milestone** (first true end-to-end run): `python -m classifyos.cli --file
+  real/iris.csv --target target --algos LR,RF,XGB,LGBM` → multiclass, SMOTE-balanced;
+  accuracy LR 0.933 / RF 0.933 / XGB 0.967 / LGBM 0.967; all 11 artifacts written to the
+  real OUTPUT_DIR (outside the repo, gitignored — NOT committed).
+- **[RISK] comments**: the deep-copy `_run_config` isolation point (runner); per-plot
+  failure isolation + placeholder fallbacks (plots).
+- Hallucination check ✅ — `sklearn.metrics` `roc_curve` / `precision_recall_curve` /
+  `auc` / `average_precision_score` and `sklearn.preprocessing.label_binarize` verified
+  against scikit-learn 1.9.0; matplotlib 3.11.0 Agg/savefig; `python-dotenv` `load_dotenv`
+  default `override=False` (so the test env's OUTPUT_DIR is preserved).
+- Archived this session's prompt to `prompts/phase_07_runner.md`.
+
 ## Completed this session (Doc-update enforcement hook — 2026-06-15)
 
 - **`scripts/check_docs_updated.py`** (stdlib only, cross-platform): computes the
@@ -370,7 +446,8 @@ Status legend: ⬜ Not started · 🔄 In progress · ✅ Done · ⚠️ Blocked
 
 ## In progress / partially done
 
-- Nothing in flight. Phase 6 closed; Phase 7 (Sections 14–16 — plots + ModelRunner + CLI) not yet started.
+- Nothing in flight. Phase 7 closed — the ML engine (Sections 1–16) is feature-complete
+  and runs end-to-end via `ModelRunner` / the CLI. Phase 8 (FastAPI layer) not yet started.
 
 ## Known issues / bugs
 
@@ -386,17 +463,15 @@ Status legend: ⬜ Not started · 🔄 In progress · ✅ Done · ⚠️ Blocked
 
 ## Next steps (priority order)
 
-1. Commit Phase 6 ("Phase 6: model wrappers + registry + evaluation + classify — sections 10-13 + tests").
+1. Commit Phase 7 ("Phase 7: plots + ModelRunner + CLI — sections 14-16 + tests").
 2. Upload updated PROJECT_STATE.md to the Claude Project knowledge.
-3. Phase 7 generation session: Sections 14–16 — `plot_results` (`evaluation/plots.py`:
-   confusion-matrix / ROC / PR / calibration / feature-importance PNGs via the Agg
-   backend + StorageAdapter), `ModelRunner` (`runner.py`: orchestrates the canonical
-   order load → impact → split → preprocess → features → interactions → balance → train
-   each algorithm → evaluate → classify → plots; deep-copies config per run, never
-   mutates `self.config`), and the CLI (`cli.py`: `--inspect`/run modes; **must
-   `load_dotenv()` at startup** — engine code does not auto-load `.env`).
-4. Wire the model layer into the runner: `build_model` for each `config["algorithms"]`
-   entry, pass the Phase 5 `class_weight` through, evaluate on the untouched test set.
+3. Phase 8 — FastAPI layer (`backend/api/`): `RunConfig` Pydantic model mirroring the
+   config contract, routes under `/api/v1/` (`/inspect`, `/run`, etc.) driving
+   `ModelRunner`, JSON serializers for `metrics_df_` / `predictions_df_` / `run_profile_`
+   / the plot artifacts. **API startup must `load_dotenv()`** (same caveat as the CLI).
+   This is the point the `/api/v1/run` response schema gets LOCKED (docs/api_contract.md).
+4. After Phase 8, lock docs/api_contract.md and generate the React frontend against it
+   (Phase 9).
 
 ---
 
@@ -407,8 +482,8 @@ Contract doc: docs/api_contract.md — stub only.
 
 ## Governance checklist (from scope §12)
 
-- [x] Prompt version control — prompts/ populated per section (phase_01_skeleton.md, phase_02_feature_impact.md, phase_03_preprocess.md, phase_04_feature_engineering.md, phase_05_class_balance.md, phase_06_models_eval.md archived)
-- [x] Section-level unit tests passing on real data (117 passing: 22 Phase 1 + 5 Phase 2 + 14 Phase 3 + 19 Phase 4 + 10 Phase 5 + 47 Phase 6)
+- [x] Prompt version control — prompts/ populated per section (phase_01_skeleton.md, phase_02_feature_impact.md, phase_03_preprocess.md, phase_04_feature_engineering.md, phase_05_class_balance.md, phase_06_models_eval.md, phase_07_runner.md archived)
+- [x] Section-level unit tests passing on real data (130 passing: 22 Phase 1 + 5 Phase 2 + 14 Phase 3 + 19 Phase 4 + 10 Phase 5 + 47 Phase 6 + 13 Phase 7)
 - [ ] [RISK] comments reviewed by team lead (3 Phase 1 + 2 Phase 2 + 4 Phase 3 + Phase 4 poly-cap/ratio-denominator/auto-discovery-pool/re-discovery-leakage + 4 Phase 5 train-only/tiny-minority/undersample-discards/multilabel + Phase 6 proba-shape-order/accuracy-misleads/SVM-no-importance, pending review)
 - [ ] Leakage audit (encoder/scaler/SMOTE train-only) confirmed — encoder/scaler/imputer (Phase 3), feature-engineering/interaction stats (Phase 4) and balancing (Phase 5) all train-only, enforced by design + dedicated leakage tests (binning edges, MI auto-discovery, test-set-untouched). SMOTE/undersample are train-only by construction (the balancer takes no test argument). Phase 6 models fit on the balanced TRAIN matrices only; evaluate_model/classify only ever read the untouched test set
 - [ ] Output schema contract locked (post Phase 8)
@@ -432,4 +507,5 @@ Contract doc: docs/api_contract.md — stub only.
 | 2026-06-15 | Tooling — Stop hook enforcing PROJECT_STATE + short_desc updates on engine changes | `scripts/check_docs_updated.py` + `.claude/settings.json` Stop hook; verified block/pass/doc-only cases against v2.1.177; prompt archived |
 | 2026-06-15 | Phase 5 — Section 8 (`handle_class_imbalance`) + tests | 70 tests passing; smote/undersample/class_weight/none train-only; SMOTE k_neighbors auto-guard + tiny-minority fallback; multilabel→class_weight; prompt archived; plan_tweak rows 18–19 added |
 | 2026-06-15 | Phase 6 — Sections 10–13 (6 wrappers + registry + evaluate_model + classify) + tests | 117 tests passing (47 new); ModelWrapper ABC + shared template base; class_weight→sample_weight uniform; SVM via CalibratedClassifierCV; XGBoost internal label-encode; xgboost/lightgbm added + requirements.lock pinned; prompt archived; plan_tweak rows 20–22 added |
+| 2026-06-15 | Phase 7 — Sections 14–16 (plot_results + ModelRunner + CLI) + tests | 130 tests passing (13 new); ModelRunner deep-copy config isolation + corrected order + robust per-algo failures; plot1/2/3/5 with placeholder fallbacks; CLI inspect/run with load_dotenv; engine feature-complete; real-data run on iris (LR/RF/XGB/LGBM, acc 0.93–0.97); prompt archived; plan_tweak row 23 added |
 | | | |
