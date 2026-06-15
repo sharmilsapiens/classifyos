@@ -5,8 +5,8 @@
 > planning/overseer chat stays in sync with the local repo.
 
 **Last updated:** 2026-06-15
-**Updated by:** Claude Code (Phase 7 — plots + ModelRunner + CLI)
-**Repo tag / commit:** 3c12b37 (Phase 6) + Phase 7 commit pending
+**Updated by:** Claude Code (docs — RUNBOOK.md)
+**Repo tag / commit:** e1631e4 (Phase 7) + RUNBOOK.md commit pending
 
 ---
 
@@ -422,6 +422,29 @@ Status legend: ⬜ Not started · 🔄 In progress · ✅ Done · ⚠️ Blocked
   (C) doc-only change → PASSES (exit 0, no block). Throwaway engine edit reverted after.
 - Prompt archived to `prompts/tool_doc_hook.md`.
 
+## Completed this session (RUNBOOK.md — 2026-06-15)
+
+- **`RUNBOOK.md`** (repo root): a plain, command-first operator's manual for running the ML
+  engine via the CLI / `ModelRunner` on a local machine — NOT a code-internals doc. Six
+  sections: (1) prerequisites & setup (venv activate in PowerShell, `.env` presence + the
+  relative-default fallback caveat, run from `backend/`); (2) `--inspect` with real
+  `policy_lapse.csv` output + how to read class balance / id_like / missing before choosing
+  a target; (3) full-pipeline run with every flag + its default in a table, the algorithm
+  alias table (LR/RF/XGB/LGBM/SVM/NB), and worked binary + multiclass + defaults-only
+  examples; (4) all 11 output files explained + a "how to read the metrics" note (F1-weighted
+  /MCC/PR-AUC over accuracy; perfect score ⇒ check leakage via plot4 / active_features);
+  (5) re-run overwrite behavior (fixed filename constants → each run overwrites; `--output-dir`
+  is the workaround; `run_profile.json` has a timestamp but no run-id, only the latest survives
+  a shared OUTPUT_DIR); (6) a troubleshooting table.
+- **Every factual claim derived from the actual code** (cli.py flags/exit codes,
+  runner.py output keys + run_profile fields, plots.py placeholders, storage.py fallback
+  defaults, config.py enum/default values, registry.py aliases) **and verified with live
+  runs**: `--inspect` on `policy_lapse.csv`, a binary run (LR/RF/XGB) and a multiclass run
+  (LR/RF/LGBM on `risk_tier.csv`), both to throwaway `--output-dir` temp folders. Example
+  outputs in the doc are real (redaction not needed — synthetic sample data only). No data
+  or real outputs committed; temp dirs removed after capture.
+- Prompt archived to `prompts/doc_runbook.md`.
+
 ## Completed earlier (scaffold session)
 
 - Scaffolded full repo structure from the CLAUDE.md module map:
@@ -508,4 +531,5 @@ Contract doc: docs/api_contract.md — stub only.
 | 2026-06-15 | Phase 5 — Section 8 (`handle_class_imbalance`) + tests | 70 tests passing; smote/undersample/class_weight/none train-only; SMOTE k_neighbors auto-guard + tiny-minority fallback; multilabel→class_weight; prompt archived; plan_tweak rows 18–19 added |
 | 2026-06-15 | Phase 6 — Sections 10–13 (6 wrappers + registry + evaluate_model + classify) + tests | 117 tests passing (47 new); ModelWrapper ABC + shared template base; class_weight→sample_weight uniform; SVM via CalibratedClassifierCV; XGBoost internal label-encode; xgboost/lightgbm added + requirements.lock pinned; prompt archived; plan_tweak rows 20–22 added |
 | 2026-06-15 | Phase 7 — Sections 14–16 (plot_results + ModelRunner + CLI) + tests | 130 tests passing (13 new); ModelRunner deep-copy config isolation + corrected order + robust per-algo failures; plot1/2/3/5 with placeholder fallbacks; CLI inspect/run with load_dotenv; engine feature-complete; real-data run on iris (LR/RF/XGB/LGBM, acc 0.93–0.97); prompt archived; plan_tweak row 23 added |
+| 2026-06-15 | Docs — RUNBOOK.md (how to run the engine + interpret outputs) | Command-first operator's manual added (setup/inspect/run/outputs/re-run-overwrite/troubleshooting); all claims derived from code + verified with live --inspect + binary + multiclass runs; prompt archived to prompts/doc_runbook.md |
 | | | |

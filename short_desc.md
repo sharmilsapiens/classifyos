@@ -80,6 +80,10 @@ anyone returning after a break who wants the gist without reading code.
 - Registered as a Claude Code "Stop" hook in `.claude/settings.json` — it runs automatically when a turn ends and blocks finishing until the docs are updated.
 - Doc-only, test-only, or config-only sessions are never blocked; plan_tweak.md is a gentle reminder only (it can't be judged mechanically).
 
+## RUNBOOK.md — operator's manual (✅ Done, 2026-06-15)
+**In one line:** RUNBOOK.md added — a plain, command-first guide to running the ML engine from the terminal and reading the results, written against the real CLI and verified with live runs.
+- Covers setup (venv + `.env`, the relative-default fallback caveat), `--inspect`, every CLI flag with its default, worked binary/multiclass examples, what each of the 11 output files means, the re-run overwrite limitation (fixed filenames → use `--output-dir` to keep runs), and a troubleshooting table.
+
 ---
 
 ## How to read this project
