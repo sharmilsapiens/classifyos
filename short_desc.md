@@ -41,22 +41,11 @@ anyone returning after a break who wants the gist without reading code.
 - Tests: 14 new automated checks (41 total), including dedicated tests that would fail if any leakage crept in.
 
 ## Phase 4 — Feature engineering & interactions (✅ Done, 2026-06-12)
-**In one line:** Added a stage that builds new helper columns from the existing ones — squared terms, ratios, bins for skewed numbers, and combinations of two columns — learning what to build from the training data only.
-- preprocessing/features.py: a `FeatureBuilder` that can add squared versions of the strongest columns (off by default), ratio columns, and "bucket" columns for very lopsided numbers (e.g. claim amounts). What to build is decided from training data and merely applied to test data.
-- preprocessing/interactions.py: an `InteractionFeatureBuilder` that combines pairs of columns (multiply / divide / subtract), either pairs you name explicitly or pairs it discovers automatically by checking (on training data) whether the combination adds predictive signal.
-- Naming is fixed and predictable: `a_x_b` (multiply), `a_div_b` (divide), `a_minus_b` (subtract). Division by (near-)zero is guarded so it never produces infinities.
-- PNG output: `plot6_interaction_summary.png` — a bar chart of how strongly each new interaction column relates to the target.
-- Leakage guard: same rule as preprocessing — the auto-discovered pairs and all learned values are frozen on training data; the test set never changes what gets built.
-- Tests: 19 new automated checks (60 total), including dedicated leakage tests for binning and auto-discovery.
-
----
-
-## Dev tools (not pipeline sections)
-
-- **`backend/scripts/dev_run.py`** — manual smoke test that runs the pipeline built so
-  far (Phases 1–4) end-to-end on a real CSV and writes real outputs to OUTPUT_DIR
-  (feature_impact_summary.csv, plot4, plot6). Loads `backend/.env` itself, fails
-  readably per stage. Usage: `python scripts/dev_run.py --file <rel> --target <col>`.
+**In one line:** Added a stage that builds new helper columns from the existing ones — squared terms, ratios, bins for skewed numbers, and combinations of two columns — deciding what to build from the training data only (60 tests passing).
+- `FeatureBuilder` (preprocessing/features.py): adds squared terms (off by default), ratio columns, and quantile "bucket" columns for very skewed numbers — each decided on the training data and applied unchanged to the test data.
+- `InteractionFeatureBuilder` (preprocessing/interactions.py): combines pairs of columns — multiply (`a_x_b`), divide (`a_div_b`), subtract (`a_minus_b`) — either pairs you name or pairs it auto-discovers on training data, with a guard so dividing by (near-)zero never produces infinities.
+- PNG output `plot6_interaction_summary.png`: a bar chart of how strongly each new interaction column relates to the target.
+- Dev tool `backend/scripts/dev_run.py`: runs the whole pipeline so far (Phases 1–4) end-to-end on a real CSV and writes the real artifacts (feature_impact_summary.csv, plot4, plot6) to OUTPUT_DIR, failing readably stage-by-stage.
 
 ---
 
