@@ -51,6 +51,15 @@ anyone returning after a break who wants the gist without reading code.
 
 ---
 
+## Dev tools (not pipeline sections)
+
+- **`backend/scripts/dev_run.py`** — manual smoke test that runs the pipeline built so
+  far (Phases 1–4) end-to-end on a real CSV and writes real outputs to OUTPUT_DIR
+  (feature_impact_summary.csv, plot4, plot6). Loads `backend/.env` itself, fails
+  readably per stage. Usage: `python scripts/dev_run.py --file <rel> --target <col>`.
+
+---
+
 ## How to read this project
 
 - **CLAUDE.md** — the conventions and hard rules (what must never be violated).
