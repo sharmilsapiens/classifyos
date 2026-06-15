@@ -4,7 +4,7 @@
 > plan, or made an assumption the plan didn't cover. A register, not an essay — one line
 > per cell. "Impact" = what a reviewer (Naveen / stakeholders) needs to know at sign-off.
 >
-> Covers Phases 0–5. Updated at the end of every phase.
+> Covers Phases 0–6. Updated at the end of every phase.
 
 | # | Phase | What the plan said | What we did instead / assumed | Why | Impact |
 |---|---|---|---|---|---|
@@ -27,6 +27,9 @@
 | 17 | 4 | Binning fires on skewed numerics (|skew|>1.5) | With default IQR outlier capping the lognormal tail is clipped (skew drops below 1.5), so binning rarely fires unless `outlier_method="none"` | Capping precedes feature engineering in the pipeline | Binning is conditional on the capping setting; reviewers should know the two interact |
 | 18 | 5 | SMOTE with a fixed default `k_neighbors` (5) | `k_neighbors` is auto-reduced to `min(5, minority_count-1)` when the minority is small, and a minority of ≤1 sample falls back to `RandomOverSampler` (duplication) with a logged warning | SMOTE errors when `k_neighbors >= minority_count` and cannot interpolate from a single point; fraud (~99:1) routinely produces tiny minorities | Auto-guard keeps the pipeline robust on extreme ratios; reviewers should note the ≤1-sample fallback adds no synthetic variety (pure duplication) |
 | 19 | 5 | Class balancing applies to all problem types | Multilabel targets cannot be SMOTE'd/undersampled; the balancer falls back to `class_weight` with a logged warning | A multilabel row carries several labels at once, so there is no single class for imbalanced-learn's 1-D samplers to balance on | **Multilabel resampling is unsupported in v1.0** — multilabel imbalance is handled only via class weights |
+| 20 | 6 | "Some models take the `class_weight` dict directly, some need sample_weight translation" | ALL six wrappers consume `class_weight` uniformly by translating the `{class: weight}` dict to a per-sample `sample_weight` vector at fit time | The loader coerces targets to string dtype, so numeric labels arrive as `"0"/"1"`; sklearn's native `class_weight`-dict path int-coerces them and then can't find the string keys (`ValueError: classes [0,1] are not in class_weight`). Per-sample weights are mathematically equivalent and library-agnostic | Behaviour matches intent (equivalent training); the difference is purely how the weight is plumbed. No native `class_weight` arg is passed to any estimator |
+| 21 | 6 | `SVMModel` via `SVC(probability=True)` OR `CalibratedClassifierCV` | Used `CalibratedClassifierCV(SVC(), ensemble=False)` | `SVC(probability=True)` is deprecated in scikit-learn 1.9 and removed in 1.11; the calibrated wrapper is the sanctioned replacement | SVM `feature_importance` is always `None` (the calibrated wrapper exposes no `coef_`); correct for the default RBF kernel regardless. SVM is the slow model (internal CV calibration) |
+| 22 | 6 | xgboost/lightgbm assumed available; XGBoost handles labels | xgboost (3.2.0) + lightgbm (4.6.0) were not installed/listed — installed + added to `requirements.txt`; `requirements.lock` pinned via `pip freeze`. XGBoost wrapper label-encodes `y` to `0..n-1` internally | The two boosting wrappers require these libs; `XGBClassifier` 3.2.0 rejects string/non-consecutive labels, and the engine's targets are strings | Two new runtime deps reviewers should note; the lock file is the reproducible-env record. XGBoost predictions are mapped back to the original string labels, so the wrapper contract is unchanged |
 
 ---
 

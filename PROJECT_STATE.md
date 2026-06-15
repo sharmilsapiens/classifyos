@@ -5,26 +5,35 @@
 > planning/overseer chat stays in sync with the local repo.
 
 **Last updated:** 2026-06-15
-**Updated by:** Claude Code (Phase 5 — class imbalance handling)
-**Repo tag / commit:** 76684ac (doc-enforcement Stop hook) + Phase 5 commit pending
+**Updated by:** Claude Code (Phase 6 — model wrappers + registry + evaluation + classify)
+**Repo tag / commit:** 33dc292 (Phase 5) + Phase 6 commit pending
 
 ---
 
 ## Current status
 
-**Active phase:** Phase 5 complete — Class imbalance handling (Section 8)
-**Sprint day:** Phase 5 done
-**Overall:** 🟢 Leakage boundary now extends through balancing — `handle_class_imbalance`
-operates on the TRAIN arrays only and never sees the test set; all tests green
+**Active phase:** Phase 6 complete — Models + evaluation (Sections 10–13)
+**Sprint day:** Phase 6 done
+**Overall:** 🟢 The engine can now train, score, and explain models end-to-end on the
+balanced TRAIN matrices and evaluate on the untouched TEST set; full suite green
 
-One-line summary: Section 8 (`handle_class_imbalance`) implemented as a pure function
-returning the locked 3-tuple `(X_res, y_res, class_weight)` — SMOTE (with auto-reduced
-`k_neighbors` and a random-oversampling fallback for ≤1-sample minorities),
-RandomUnderSampler (logs rows dropped), `class_weight` ("balanced" dict, the only
-non-`None` weight path, no resampling), and `none` passthrough. Multilabel falls back to
-`class_weight` with a warning. Train-only by construction (no test arg); column order
-preserved; inputs/config never mutated. 70 tests passing (60 prior + 10 new). Ready for
-Phase 6 (models + evaluation — the big one).
+One-line summary: Sections 10–13 implemented. Section 11 — six model wrappers
+(LogisticRegression, RandomForest, XGBoost, LightGBM, SVM, NaiveBayes) behind a single
+`ModelWrapper` ABC, all sharing one `_SklearnEstimatorWrapper` template so the public
+contract is identical regardless of library: `predict_proba` always returns
+`(n, n_classes)` aligned to `classes_` (2 columns for binary), `predict` returns
+original-space labels, `feature_importance` returns a dict or `None`. Section 12 —
+`MODEL_REGISTRY` + `build_model` (canonical keys + short aliases LR/RF/XGB/LGBM/SVM/NB;
+additive rule: new models added here only). Section 10 — `evaluate_model` returns one
+JSON-serializable metrics dict (accuracy, weighted+macro precision/recall/F1 with
+F1-weighted primary, ROC-AUC, PR-AUC, log-loss, MCC, confusion matrix, per-class report,
+binary calibration curve), guarding undefined cases as `None`. Section 13 — `classify`
+builds the per-sample predictions table (actual/predicted/probability_*/confidence/
+correct_flag). class_weight is consumed uniformly via sample_weight translation (numeric-
+string labels break sklearn's native class_weight-dict path); SVM uses
+`CalibratedClassifierCV` (SVC probability= deprecated in 1.9); XGBoost label-encodes
+internally. 117 tests passing (70 prior + 47 new). Ready for Phase 7 (plots + ModelRunner
++ CLI).
 
 ---
 
@@ -38,7 +47,7 @@ Phase 6 (models + evaluation — the big one).
 | 3 | Preprocessing (Section 6) | ✅ Done | Preprocessor (fit/transform, train-only stats) + 14 tests incl. leakage suite |
 | 4 | Feature engineering (Sections 7, 7B) | ✅ Done | FeatureBuilder + InteractionFeatureBuilder (fit/transform, train-only stats) + 19 tests incl. binning/auto-discovery leakage suite |
 | 5 | Class balancing (Section 8) | ✅ Done | handle_class_imbalance (smote/undersample/class_weight/none, train-only) + 10 tests; SMOTE k_neighbors auto-guard + tiny-minority fallback; multilabel→class_weight |
-| 6 | Models + evaluation (Sections 10–13) | ⬜ Not started | |
+| 6 | Models + evaluation (Sections 10–13) | ✅ Done | 6 wrappers via 1 ABC + MODEL_REGISTRY + evaluate_model + classify; 47 tests; xgboost/lightgbm added to deps |
 | 7 | Plots + ModelRunner + CLI (Sections 14–16) | ⬜ Not started | ⚠️ CLI (Sec 16) must `load_dotenv()` at startup — engine code does NOT auto-load `.env`; without it `LocalFolderStorage` falls back to relative `data`/`classification_output` |
 | 8 | FastAPI layer | ⬜ Not started | ⚠️ API startup must `load_dotenv()` (or rely on exported env) so DATA_DIR/OUTPUT_DIR/CORS_ORIGINS resolve — same fallback caveat as the CLI |
 | 9 | React dashboard (13 pages) | ⬜ Not started | Deviation from scope: React replaces single-file HTML |
@@ -76,6 +85,11 @@ Status legend: ⬜ Not started · 🔄 In progress · ✅ Done · ⚠️ Blocked
 | 2026-06-15 | Section 8 `handle_class_imbalance` is a pure function (not a fit/transform class) taking `(X_train, y_train, config)` and returning `(X_res, y_res, class_weight)` — no test argument exists | Balancing has nothing to apply to the test set (test is never resampled/reweighted); the train-only contract is enforced structurally by the signature, so a stateful transform would be misleading |
 | 2026-06-15 | SMOTE `k_neighbors` auto-reduced to `min(5, minority_count-1)`; `minority_count<=1` → `RandomOverSampler` fallback (logged) | SMOTE errors when `k_neighbors >= minority_count` and cannot interpolate from a single point; fraud (~99:1) routinely hits small minorities. Auto-guard keeps the pipeline from crashing on extreme ratios |
 | 2026-06-15 | Multilabel + smote/undersample → fall back to `class_weight` with a warning | A multilabel row carries several labels at once, so there is no single class to over/undersample on; imbalanced-learn's samplers expect a 1-D label. v1.0 defers multilabel resampling (plan_tweak) |
+| 2026-06-15 | Six model wrappers share ONE `_SklearnEstimatorWrapper` template base (provides fit/predict/predict_proba/feature_importance); concrete wrappers only declare `name` + `_build_estimator` | DRY — the contract (proba shape/order, original-label predict, importance dict-or-None) is implemented once and cannot drift between models; new models are a class + a registry entry (additive rule) |
+| 2026-06-15 | `class_weight` consumed UNIFORMLY via sample_weight translation for every wrapper (not the native `class_weight` dict for LR/RF/SVM/LGBM) | The loader coerces targets to string dtype, so numeric labels arrive as `"0"/"1"`; sklearn's native class_weight-dict path int-coerces them and fails to find the string keys (`ValueError: classes [0,1] are not in class_weight`). A per-sample weight vector is equivalent and library-agnostic |
+| 2026-06-15 | SVM wrapper uses `CalibratedClassifierCV(SVC(), ensemble=False)` for probabilities; `feature_importance` → `None` | `SVC(probability=True)` is deprecated in scikit-learn 1.9 and removed in 1.11; the calibrated wrapper is the sanctioned replacement and exposes no coefficients (None is correct for the default RBF kernel anyway) |
+| 2026-06-15 | XGBoost wrapper label-encodes `y` to `0..n-1` internally and maps predictions back | `XGBClassifier` 3.2.0 rejects non-consecutive/string labels (`Invalid classes inferred from unique values of y`); the engine's targets are strings, so encoding is mandatory |
+| 2026-06-15 | Added `xgboost` (3.2.0) + `lightgbm` (4.6.0) to deps; pinned all versions in `backend/requirements.lock` (`pip freeze`) | The two boosting wrappers require these libraries (not previously installed/listed); the lock file is the governance reproducible-env record |
 
 ---
 
@@ -253,6 +267,62 @@ Status legend: ⬜ Not started · 🔄 In progress · ✅ Done · ⚠️ Blocked
   `RandomOverSampler(...)`, `compute_class_weight(class_weight, *, classes, y)`.
 - Archived this session's prompt to `prompts/phase_05_class_balance.md`.
 
+## Completed this session (Phase 6 — 2026-06-15)
+
+- **Section 11** `backend/classifyos/models/base.py` + `wrappers.py`: the `ModelWrapper`
+  ABC (fit/predict/predict_proba/feature_importance, `name`, `classes_`) and six concrete
+  wrappers — `LogisticRegressionModel`, `RandomForestModel`, `XGBoostModel`,
+  `LightGBMModel`, `SVMModel`, `NaiveBayesModel` — all sharing one
+  `_SklearnEstimatorWrapper` template base. Contract held by every wrapper:
+  - `predict_proba` ALWAYS returns `(n_samples, n_classes)` aligned to `classes_`
+    (2 columns for binary, never 1; `(n, n_labels)` for multilabel via
+    `OneVsRestClassifier`). `[RISK]` comment: the engine indexes proba columns by
+    `classes_` everywhere downstream.
+  - `predict` returns labels in the ORIGINAL string label space (XGBoost label-encodes
+    internally and maps back).
+  - `feature_importance` → `{feature: importance}` for trees (gain/split) and LR (mean
+    |coef|); `None` for SVM (calibrated, no coef) and GaussianNB.
+  - `class_weight` consumed uniformly as `sample_weight` (single-label) — never silently
+    ignored.
+- **Section 12** `backend/classifyos/models/registry.py`: `MODEL_REGISTRY` (6 canonical
+  keys) + `build_model(name, problem_type, class_weight=None, random_state=42, **params)`;
+  case-insensitive aliases (LR, RF, XGB, LGBM, SVM, NB, …); unknown name → `ValueError`
+  listing every valid key. Additive rule enforced (new models added here only).
+- **Section 10** `backend/classifyos/evaluation/metrics.py`: `evaluate_model(y_true,
+  y_pred, y_proba, problem_type, classes)` → one JSON-serializable dict — accuracy,
+  precision/recall/F1 (weighted **primary** + macro), ROC-AUC (binary standard /
+  multiclass ovr-weighted / multilabel avg), PR-AUC (binary), log-loss, MCC, confusion
+  matrix (nested list in `classes` order), per-class `classification_report`, and binary
+  calibration-curve data. Undefined cases (single class present, non-binary calibration)
+  guarded → `None`. `_jsonify` strips every numpy scalar (`json.dumps` always succeeds).
+  `[RISK]` comment: accuracy misleads on imbalanced data → F1-weighted primary, MCC+PR-AUC
+  emphasized.
+- **Section 13** `backend/classifyos/predict.py`: `classify(model, X_test, y_test,
+  classes)` → per-sample DataFrame with `actual`, `predicted`, `probability_<class>`
+  (one per class), `confidence` (row-max proba), `correct_flag`; index aligned to
+  `X_test`; binary/multiclass row probabilities sum to ~1.
+- **Tests** (47 new): `test_models.py` (all-wrappers fit/predict on binary + multiclass,
+  proba shape/alignment, class_weight consumed + actually shifts ≥1 model, tree
+  feature-importance non-empty, SVM/NB importance None, bad problem_type raises),
+  `test_registry.py` (six models, aliases resolve, unknown → ValueError listing keys,
+  params forwarded), `test_metrics.py` (binary all-metrics + 2×2 + calibration + JSON,
+  multiclass ovr-AUC + 3×3, fraud imbalanced MCC/AUC finite, single-class guards →
+  None), `test_classify.py` (locked columns, row count, probs sum ~1, confidence bounds).
+  Shared `conftest.build_matrices` runs the full Phase 1–5 pipeline (load → split →
+  preprocess → features → interactions → balance) on the real CSVs; matrices subsampled
+  for SVM-calibration speed. **117 passed** (70 prior + 47 new) — no regressions.
+- **[RISK] comments**: proba shape/order engine-wide assumption (base + wrappers);
+  accuracy-misleads-on-imbalance (metrics); SVM no-importance.
+- Hallucination check ✅ — verified against the installed venv: **scikit-learn 1.9.0**
+  (CalibratedClassifierCV+sample_weight, GaussianNB sample_weight, OvR.classes_,
+  roc_auc/log_loss/calibration_curve signatures), **xgboost 3.2.0** (rejects string
+  labels → internal LabelEncoder; fit sample_weight; feature_importances_),
+  **lightgbm 4.6.0** (string labels OK; feature_importances_). `SVC(probability=True)`
+  confirmed deprecated → switched to `CalibratedClassifierCV`.
+- **Deps**: installed `xgboost==3.2.0` + `lightgbm==4.6.0`, added to `requirements.txt`,
+  and pinned the full env in `backend/requirements.lock` (`pip freeze`).
+- Archived this session's prompt to `prompts/phase_06_models_eval.md`.
+
 ## Completed this session (Doc-update enforcement hook — 2026-06-15)
 
 - **`scripts/check_docs_updated.py`** (stdlib only, cross-platform): computes the
@@ -300,7 +370,7 @@ Status legend: ⬜ Not started · 🔄 In progress · ✅ Done · ⚠️ Blocked
 
 ## In progress / partially done
 
-- Nothing in flight. Phase 5 closed; Phase 6 (Sections 10–13 — models + evaluation) not yet started.
+- Nothing in flight. Phase 6 closed; Phase 7 (Sections 14–16 — plots + ModelRunner + CLI) not yet started.
 
 ## Known issues / bugs
 
@@ -316,16 +386,17 @@ Status legend: ⬜ Not started · 🔄 In progress · ✅ Done · ⚠️ Blocked
 
 ## Next steps (priority order)
 
-1. Commit Phase 5 ("Phase 5: class imbalance handling — section 8 + tests").
+1. Commit Phase 6 ("Phase 6: model wrappers + registry + evaluation + classify — sections 10-13 + tests").
 2. Upload updated PROJECT_STATE.md to the Claude Project knowledge.
-3. Pin exact versions via `pip freeze > requirements.lock` (governance: reproducible env) — still pending.
-4. Phase 6 generation session: Sections 10–13 — model wrappers (×6 via the ABC in
-   `models/base.py`), `MODEL_REGISTRY` (`models/registry.py`), `evaluate_model`
-   (`evaluation/metrics.py`) and `classify`/`predict.py`. The big one. Wrappers consume
-   the Phase 5 outputs: SMOTE/undersample feed a rebalanced train frame; `class_weight`
-   passes the dict straight into the model. `predict_proba` must return shape
-   `(n, n_classes)` for every problem type; metrics stance is F1-weighted primary, with
-   MCC + PR-AUC alongside Accuracy on imbalanced problems.
+3. Phase 7 generation session: Sections 14–16 — `plot_results` (`evaluation/plots.py`:
+   confusion-matrix / ROC / PR / calibration / feature-importance PNGs via the Agg
+   backend + StorageAdapter), `ModelRunner` (`runner.py`: orchestrates the canonical
+   order load → impact → split → preprocess → features → interactions → balance → train
+   each algorithm → evaluate → classify → plots; deep-copies config per run, never
+   mutates `self.config`), and the CLI (`cli.py`: `--inspect`/run modes; **must
+   `load_dotenv()` at startup** — engine code does not auto-load `.env`).
+4. Wire the model layer into the runner: `build_model` for each `config["algorithms"]`
+   entry, pass the Phase 5 `class_weight` through, evaluate on the untouched test set.
 
 ---
 
@@ -336,12 +407,12 @@ Contract doc: docs/api_contract.md — stub only.
 
 ## Governance checklist (from scope §12)
 
-- [x] Prompt version control — prompts/ populated per section (phase_01_skeleton.md, phase_02_feature_impact.md, phase_03_preprocess.md, phase_04_feature_engineering.md archived)
-- [x] Section-level unit tests passing on real data (70 passing: 22 Phase 1 + 5 Phase 2 + 14 Phase 3 + 19 Phase 4 + 10 Phase 5)
-- [ ] [RISK] comments reviewed by team lead (3 Phase 1 + 2 Phase 2 + 4 Phase 3 + Phase 4 poly-cap/ratio-denominator/auto-discovery-pool/re-discovery-leakage + 4 Phase 5 train-only/tiny-minority/undersample-discards/multilabel, pending review)
-- [ ] Leakage audit (encoder/scaler/SMOTE train-only) confirmed — encoder/scaler/imputer (Phase 3), feature-engineering/interaction stats (Phase 4) and balancing (Phase 5) all train-only, enforced by design + dedicated leakage tests (binning edges, MI auto-discovery, test-set-untouched). SMOTE/undersample are train-only by construction (the balancer takes no test argument)
+- [x] Prompt version control — prompts/ populated per section (phase_01_skeleton.md, phase_02_feature_impact.md, phase_03_preprocess.md, phase_04_feature_engineering.md, phase_05_class_balance.md, phase_06_models_eval.md archived)
+- [x] Section-level unit tests passing on real data (117 passing: 22 Phase 1 + 5 Phase 2 + 14 Phase 3 + 19 Phase 4 + 10 Phase 5 + 47 Phase 6)
+- [ ] [RISK] comments reviewed by team lead (3 Phase 1 + 2 Phase 2 + 4 Phase 3 + Phase 4 poly-cap/ratio-denominator/auto-discovery-pool/re-discovery-leakage + 4 Phase 5 train-only/tiny-minority/undersample-discards/multilabel + Phase 6 proba-shape-order/accuracy-misleads/SVM-no-importance, pending review)
+- [ ] Leakage audit (encoder/scaler/SMOTE train-only) confirmed — encoder/scaler/imputer (Phase 3), feature-engineering/interaction stats (Phase 4) and balancing (Phase 5) all train-only, enforced by design + dedicated leakage tests (binning edges, MI auto-discovery, test-set-untouched). SMOTE/undersample are train-only by construction (the balancer takes no test argument). Phase 6 models fit on the balanced TRAIN matrices only; evaluate_model/classify only ever read the untouched test set
 - [ ] Output schema contract locked (post Phase 8)
-- [x] Hallucination check — library calls verified against installed versions (Phase 1: pandas 2.3.3 / sklearn 1.9.0; Phase 2: scipy 1.17.1 / sklearn 1.9.0 / matplotlib 3.11.0; Phase 3: sklearn 1.9.0 encoders/scalers; Phase 4: mutual_info_classif / scipy.stats.skew / pandas.qcut; Phase 5: imbalanced-learn 0.14.2 SMOTE/RandomUnderSampler/RandomOverSampler, sklearn 1.9.0 compute_class_weight)
+- [x] Hallucination check — library calls verified against installed versions (Phase 1: pandas 2.3.3 / sklearn 1.9.0; Phase 2: scipy 1.17.1 / sklearn 1.9.0 / matplotlib 3.11.0; Phase 3: sklearn 1.9.0 encoders/scalers; Phase 4: mutual_info_classif / scipy.stats.skew / pandas.qcut; Phase 5: imbalanced-learn 0.14.2 SMOTE/RandomUnderSampler/RandomOverSampler, sklearn 1.9.0 compute_class_weight; Phase 6: sklearn 1.9.0 CalibratedClassifierCV/GaussianNB sample_weight/OvR/roc_auc/log_loss/calibration_curve, xgboost 3.2.0 string-label rejection + sample_weight, lightgbm 4.6.0) — all versions pinned in backend/requirements.lock
 - [ ] Team lead sign-off per phase (Naveen)
 
 ---
@@ -360,4 +431,5 @@ Contract doc: docs/api_contract.md — stub only.
 | 2026-06-12 | Phase 4 — Sections 7 + 7B (FeatureBuilder, InteractionFeatureBuilder) + tests | 60 tests passing; feature_engineering config sub-dict added; binning/auto-discovery leakage tests + plot6 artifact; prompt archived; plan_tweak rows 12–17 added |
 | 2026-06-15 | Tooling — Stop hook enforcing PROJECT_STATE + short_desc updates on engine changes | `scripts/check_docs_updated.py` + `.claude/settings.json` Stop hook; verified block/pass/doc-only cases against v2.1.177; prompt archived |
 | 2026-06-15 | Phase 5 — Section 8 (`handle_class_imbalance`) + tests | 70 tests passing; smote/undersample/class_weight/none train-only; SMOTE k_neighbors auto-guard + tiny-minority fallback; multilabel→class_weight; prompt archived; plan_tweak rows 18–19 added |
+| 2026-06-15 | Phase 6 — Sections 10–13 (6 wrappers + registry + evaluate_model + classify) + tests | 117 tests passing (47 new); ModelWrapper ABC + shared template base; class_weight→sample_weight uniform; SVM via CalibratedClassifierCV; XGBoost internal label-encode; xgboost/lightgbm added + requirements.lock pinned; prompt archived; plan_tweak rows 20–22 added |
 | | | |

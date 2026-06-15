@@ -57,6 +57,15 @@ anyone returning after a break who wants the gist without reading code.
 - Train-only by design: the function is never even given the test data, so it physically cannot resample or reweight it — the core "no leakage" rule, made structural.
 - Multilabel safety: when each row can carry several labels at once (where resampling doesn't make sense), it automatically switches to the class-weight approach and says so.
 
+## Phase 6 — Models & evaluation (✅ Done, 2026-06-15)
+**In one line:** Added the part that actually trains models, scores how good they are, and produces a per-customer predictions table — six algorithms, all behind one common interface (117 tests passing).
+- Six model wrappers (`models/base.py` + `models/wrappers.py`): Logistic Regression, Random Forest, XGBoost, LightGBM, SVM, and Naive Bayes, all wearing the same "shape" so the rest of the app can use any of them interchangeably — same way of training, predicting, giving class probabilities, and reporting which features mattered.
+- Model registry (`models/registry.py`): a lookup table that turns an algorithm name (or a short nickname like "RF" or "XGB") into the right model; new models are added here and nowhere else.
+- `evaluate_model` (`evaluation/metrics.py`): given the true answers and the model's predictions, it computes the full scorecard — accuracy, precision/recall/F1, ROC-AUC, PR-AUC, log-loss, MCC, a confusion matrix, a per-class breakdown, and calibration data — all packaged so the web dashboard can read it directly. It deliberately leads with F1 (not accuracy), because accuracy lies on lopsided data like fraud.
+- `classify` (`predict.py`): builds the per-row results table — for each test record: the actual label, the predicted label, the probability of each class, the model's confidence, and whether it got it right.
+- Rare-class handling carried through: the "pay more attention to the rare class" weights from Phase 5 are fed into every model; SVM uses a calibrated variant so its probabilities are trustworthy; XGBoost's quirk of only accepting numeric labels is handled invisibly.
+- Two new libraries (XGBoost, LightGBM) were installed and the exact versions of everything were frozen into a lock file so the setup is reproducible on another machine.
+
 ## Tooling — Doc-update enforcement hook (✅ Done, 2026-06-15)
 **In one line:** Added a safety net that won't let a coding session finish if it changed the ML engine but forgot to update the project's living docs.
 - `scripts/check_docs_updated.py`: checks (via git) whether any pipeline code under `backend/classifyos/` changed; if so, it requires both PROJECT_STATE.md and short_desc.md to have been updated too.

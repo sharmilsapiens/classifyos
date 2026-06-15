@@ -12,11 +12,20 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from types import SimpleNamespace
+from typing import Any
 
 import pytest
 from dotenv import load_dotenv
 
+from classifyos.config import build_config
+from classifyos.io.loader import data_loader
 from classifyos.io.storage import LocalFolderStorage, StorageAdapter
+from classifyos.preprocessing.balance import handle_class_imbalance
+from classifyos.preprocessing.features import FeatureBuilder
+from classifyos.preprocessing.interactions import InteractionFeatureBuilder
+from classifyos.preprocessing.preprocess import Preprocessor
+from classifyos.split import train_test_split_cls
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
 
@@ -70,3 +79,155 @@ def fraud_csv() -> str:
 def risk_csv() -> str:
     """Logical key for the risk-tier sample (multiclass)."""
     return "risk_tier.csv"
+
+
+# --- Phase 6 shared fixtures: fully-engineered train/test matrices ----------------
+#
+# The model/metrics/classify tests all need real train/test matrices produced by the
+# full Phase 1–5 pipeline (load → split → preprocess → features → interactions →
+# balance). Building them is relatively expensive, so they are session-scoped and the
+# matrices are subsampled to keep the SVM's internal probability-calibration CV (and the
+# overall suite) fast while still exercising real, engineered insurance data.
+
+LAPSE_FEATURES = [
+    "age",
+    "occupation",
+    "region",
+    "policy_type",
+    "channel",
+    "payment_frequency",
+    "policy_tenure_years",
+    "annual_premium",
+    "sum_assured",
+    "num_late_payments",
+    "claims_count",
+    "has_agent",
+]
+
+RISK_FEATURES = [
+    "age",
+    "bmi",
+    "is_smoker",
+    "annual_income",
+    "credit_score",
+    "prior_violations",
+    "occupation_class",
+    "vehicle_age",
+    "region",
+]
+
+FRAUD_FEATURES = [
+    "claim_amount",
+    "policy_age_months",
+    "report_delay_days",
+    "num_prior_claims",
+    "incident_type",
+    "has_police_report",
+    "has_witness",
+    "claimant_age",
+    "region",
+]
+
+
+def build_matrices(
+    storage: StorageAdapter,
+    input_file: str,
+    target: str,
+    features: list[str],
+    problem_type: str = "binary",
+    class_balance: str = "none",
+    sample_n: int | None = 800,
+) -> SimpleNamespace:
+    """Run the full Phase 1–5 pipeline and return train/test matrices + metadata.
+
+    Auto-interaction discovery is disabled (``max_auto_pairs=0``) for speed. The TRAIN
+    matrices are balanced per ``class_balance`` (so ``X_train`` may be SMOTE-resampled).
+    ``sample_n`` caps the TRAIN rows (after balancing) and TEST rows to keep model
+    fitting fast; pass ``None`` to keep every row.
+
+    Returns a namespace with ``X_train, y_train, X_test, y_test, class_weight,
+    classes, config``.
+    """
+    cfg = build_config(
+        input_file,
+        target,
+        features,
+        problem_type=problem_type,
+        class_balance=class_balance,
+        interaction_features={
+            "enabled": True,
+            "interaction_pairs": {},
+            "default_interactions": ["multiply"],
+            "drop_original_if_interacted": False,
+            "max_auto_pairs": 0,
+            "fill_method": "zero",
+        },
+    )
+    df = data_loader(cfg, storage)
+    train, test = train_test_split_cls(df, cfg)
+
+    pp = Preprocessor(cfg)
+    train_pp, test_pp = pp.fit_transform(train), pp.transform(test)
+    fb = FeatureBuilder(cfg)
+    train_f, test_f = fb.fit_transform(train_pp, target), fb.transform(test_pp)
+    ib = InteractionFeatureBuilder(cfg)
+    train_i, test_i = ib.fit_transform(train_f, target), ib.transform(test_f)
+
+    X_train_full, y_train_full = train_i.drop(columns=[target]), train_i[target]
+    X_test, y_test = test_i.drop(columns=[target]), test_i[target]
+
+    X_bal, y_bal, class_weight = handle_class_imbalance(X_train_full, y_train_full, cfg)
+
+    if sample_n is not None:
+        X_bal, y_bal = _sample(X_bal, y_bal, sample_n)
+        X_test, y_test = _sample(X_test, y_test, sample_n)
+
+    return SimpleNamespace(
+        X_train=X_bal,
+        y_train=y_bal,
+        X_test=X_test,
+        y_test=y_test,
+        class_weight=class_weight,
+        classes=sorted(y_bal.unique()),
+        config=cfg,
+    )
+
+
+def _sample(X: Any, y: Any, n: int) -> tuple[Any, Any]:
+    """Stratified-ish subsample to ``n`` rows (keeps all rows if fewer than ``n``)."""
+    if len(X) <= n:
+        return X, y
+    # Group-aware sample so every class survives even when one is rare (fraud).
+    idx = (
+        y.groupby(y, group_keys=False)
+        .apply(lambda s: s.sample(max(1, int(round(len(s) * n / len(y)))), random_state=42))
+        .index
+    )
+    return X.loc[idx], y.loc[idx]
+
+
+@pytest.fixture(scope="session")
+def binary_matrices(storage: StorageAdapter) -> SimpleNamespace:
+    """Engineered policy-lapse matrices (binary), unbalanced train."""
+    return build_matrices(storage, "policy_lapse.csv", "will_lapse", LAPSE_FEATURES)
+
+
+@pytest.fixture(scope="session")
+def multiclass_matrices(storage: StorageAdapter) -> SimpleNamespace:
+    """Engineered risk-tier matrices (3-class multiclass), unbalanced train."""
+    return build_matrices(
+        storage, "risk_tier.csv", "risk_tier", RISK_FEATURES, problem_type="multiclass"
+    )
+
+
+@pytest.fixture(scope="session")
+def fraud_smote_matrices(storage: StorageAdapter) -> SimpleNamespace:
+    """Engineered fraud matrices (binary, ~99:1) with SMOTE applied to the TRAIN split."""
+    return build_matrices(
+        storage,
+        "fraud_claims.csv",
+        "is_fraud",
+        FRAUD_FEATURES,
+        problem_type="binary",
+        class_balance="smote",
+    )
