@@ -5,25 +5,26 @@
 > planning/overseer chat stays in sync with the local repo.
 
 **Last updated:** 2026-06-15
-**Updated by:** Claude Code (doc-enforcement tooling session)
-**Repo tag / commit:** 15f4676 (Phase 4 docs backfill) + doc-hook commit pending
+**Updated by:** Claude Code (Phase 5 — class imbalance handling)
+**Repo tag / commit:** 76684ac (doc-enforcement Stop hook) + Phase 5 commit pending
 
 ---
 
 ## Current status
 
-**Active phase:** Phase 4 complete — Feature engineering + interactions (Sections 7, 7B)
-**Sprint day:** Phase 4 done
-**Overall:** 🟢 Leakage boundary holds through the engineering layer — FeatureBuilder and
-InteractionFeatureBuilder both fit on train only; all tests green
+**Active phase:** Phase 5 complete — Class imbalance handling (Section 8)
+**Sprint day:** Phase 5 done
+**Overall:** 🟢 Leakage boundary now extends through balancing — `handle_class_imbalance`
+operates on the TRAIN arrays only and never sees the test set; all tests green
 
-One-line summary: Sections 7 (`FeatureBuilder`) and 7B (`InteractionFeatureBuilder`)
-implemented as picklable fit/transform classes mirroring the Preprocessor's train-only
-discipline — polynomial (off by default), heuristic ratios, skew-triggered quantile
-binning, and explicit/auto-discovered pairwise interactions (MI-gain scored on train,
-pool-capped) with the locked `a_x_b`/`a_div_b`/`a_minus_b` naming, ratio zero-guard, and
-the `plot6_interaction_summary.png` artifact. 60 tests passing (41 prior + 19 new, incl.
-binning- and auto-discovery-leakage tests). Ready for Phase 5 (class balancing).
+One-line summary: Section 8 (`handle_class_imbalance`) implemented as a pure function
+returning the locked 3-tuple `(X_res, y_res, class_weight)` — SMOTE (with auto-reduced
+`k_neighbors` and a random-oversampling fallback for ≤1-sample minorities),
+RandomUnderSampler (logs rows dropped), `class_weight` ("balanced" dict, the only
+non-`None` weight path, no resampling), and `none` passthrough. Multilabel falls back to
+`class_weight` with a warning. Train-only by construction (no test arg); column order
+preserved; inputs/config never mutated. 70 tests passing (60 prior + 10 new). Ready for
+Phase 6 (models + evaluation — the big one).
 
 ---
 
@@ -36,7 +37,7 @@ binning- and auto-discovery-leakage tests). Ready for Phase 5 (class balancing).
 | 2 | Feature analysis (Section 5) | ✅ Done | analyze_feature_impact + 5 tests on real samples; CSV + 2-panel PNG outputs |
 | 3 | Preprocessing (Section 6) | ✅ Done | Preprocessor (fit/transform, train-only stats) + 14 tests incl. leakage suite |
 | 4 | Feature engineering (Sections 7, 7B) | ✅ Done | FeatureBuilder + InteractionFeatureBuilder (fit/transform, train-only stats) + 19 tests incl. binning/auto-discovery leakage suite |
-| 5 | Class balancing (Section 8) | ⬜ Not started | |
+| 5 | Class balancing (Section 8) | ✅ Done | handle_class_imbalance (smote/undersample/class_weight/none, train-only) + 10 tests; SMOTE k_neighbors auto-guard + tiny-minority fallback; multilabel→class_weight |
 | 6 | Models + evaluation (Sections 10–13) | ⬜ Not started | |
 | 7 | Plots + ModelRunner + CLI (Sections 14–16) | ⬜ Not started | ⚠️ CLI (Sec 16) must `load_dotenv()` at startup — engine code does NOT auto-load `.env`; without it `LocalFolderStorage` falls back to relative `data`/`classification_output` |
 | 8 | FastAPI layer | ⬜ Not started | ⚠️ API startup must `load_dotenv()` (or rely on exported env) so DATA_DIR/OUTPUT_DIR/CORS_ORIGINS resolve — same fallback caveat as the CLI |
@@ -72,6 +73,9 @@ Status legend: ⬜ Not started · 🔄 In progress · ✅ Done · ⚠️ Blocked
 | 2026-06-12 | Interaction auto-discovery: candidate pool capped at the 15 most target-correlated numeric cols; MI-gain scored on the multiplicative term; kept pairs materialized with `default_interactions` ops; pair list + ops FIXED at fit time | Bounds O(n²) pair explosion; re-discovery on test would be leakage. Trade-off: a strong pair outside the top-15 pool can be missed |
 | 2026-06-12 | `feature_engineering` sub-dict added to `DEFAULT_CONFIG` (`enabled`/`polynomial`/`ratios`/`binning`/`max_poly_features`) — the single sanctioned Phase 4 config edit | Section 7 toggles must live in the one config contract; validated alongside the existing keys |
 | 2026-06-12 | FeatureBuilder heuristic ratio denominator = numeric col with largest \|train median\|; near-zero denominator → 0.0 (guard) | After standard scaling medians sit near 0, so the heuristic is weakly determined; the per-row guard prevents inf. Explicit interaction_pairs (7B) are the reliable path |
+| 2026-06-15 | Section 8 `handle_class_imbalance` is a pure function (not a fit/transform class) taking `(X_train, y_train, config)` and returning `(X_res, y_res, class_weight)` — no test argument exists | Balancing has nothing to apply to the test set (test is never resampled/reweighted); the train-only contract is enforced structurally by the signature, so a stateful transform would be misleading |
+| 2026-06-15 | SMOTE `k_neighbors` auto-reduced to `min(5, minority_count-1)`; `minority_count<=1` → `RandomOverSampler` fallback (logged) | SMOTE errors when `k_neighbors >= minority_count` and cannot interpolate from a single point; fraud (~99:1) routinely hits small minorities. Auto-guard keeps the pipeline from crashing on extreme ratios |
+| 2026-06-15 | Multilabel + smote/undersample → fall back to `class_weight` with a warning | A multilabel row carries several labels at once, so there is no single class to over/undersample on; imbalanced-learn's samplers expect a 1-D label. v1.0 defers multilabel resampling (plan_tweak) |
 
 ---
 
@@ -211,6 +215,44 @@ Status legend: ⬜ Not started · 🔄 In progress · ✅ Done · ⚠️ Blocked
   signatures verified against sklearn 1.9.0 / scipy 1.17.1 / pandas 2.3.3 in the venv.
 - Archived this session's prompt to `prompts/phase_04_feature_engineering.md`.
 
+## Completed this session (Phase 5 — 2026-06-15)
+
+- **Section 8** `backend/classifyos/preprocessing/balance.py`:
+  `handle_class_imbalance(X_train, y_train, config) -> (X_res, y_res, class_weight)` —
+  a pure function (no test argument by design; train-only is structural):
+  - **smote**: imbalanced-learn `SMOTE`. `k_neighbors` auto-reduced to
+    `min(5, minority_count - 1)` when the minority is small (logged); `minority_count <= 1`
+    → `RandomOverSampler` fallback (logged — duplicates, no synthetic variety). Returns
+    `class_weight=None`.
+  - **undersample**: `RandomUnderSampler`; returns `class_weight=None`; logs how many
+    majority rows were dropped.
+  - **class_weight**: NO resampling — returns the inputs plus a `"balanced"` dict
+    (`sklearn.utils.class_weight.compute_class_weight`, one entry per class). The ONLY
+    strategy returning a non-`None` weight; the model applies it during training so the
+    test set is never altered.
+  - **none**: inputs returned unchanged, `class_weight=None`.
+  - **Multilabel** (`problem_type="multilabel"`) + smote/undersample → falls back to
+    `class_weight` with a logged warning (resampling unsupported in v1.0).
+  - Always a 3-tuple; `X_res` columns identical to `X_train` (order re-imposed defensively
+    in `_coerce`); inputs and config never mutated (works on copies). Unknown
+    `class_balance` raises `ValueError`.
+- **[RISK] comments** (4): module-level + per-strategy — train-only-by-design as THE
+  leakage guard; tiny-minority synthetic realism (random-oversample fallback);
+  undersampling discards majority data; multilabel resampling unsupported.
+- **Tests** `tests/test_balance.py` (10): SMOTE lifts fraud's ~1% minority to parity;
+  test arrays untouched (and never passed in); tiny-minority guards (count=3 →
+  k_neighbors reduced; count=1 → random-oversample fallback, warnings asserted via
+  caplog); undersample drops majority / keeps minority / logs dropped count; class_weight
+  no-resample + one-entry-per-class (+ smote/undersample give `None`); none passthrough;
+  multiclass risk_tier SMOTE balances all 3 classes; column-order preserved;
+  config+input immutability across all 4 strategies; invalid-strategy `ValueError`.
+  **70 passed** total (60 prior + 10 new) — no regressions.
+- Hallucination check ✅ — verified against **imbalanced-learn 0.14.2** / **sklearn 1.9.0**
+  in the venv: `SMOTE(*, sampling_strategy, random_state, k_neighbors=5)`,
+  `RandomUnderSampler(*, sampling_strategy, random_state, replacement)`,
+  `RandomOverSampler(...)`, `compute_class_weight(class_weight, *, classes, y)`.
+- Archived this session's prompt to `prompts/phase_05_class_balance.md`.
+
 ## Completed this session (Doc-update enforcement hook — 2026-06-15)
 
 - **`scripts/check_docs_updated.py`** (stdlib only, cross-platform): computes the
@@ -258,7 +300,7 @@ Status legend: ⬜ Not started · 🔄 In progress · ✅ Done · ⚠️ Blocked
 
 ## In progress / partially done
 
-- Nothing in flight. Phase 4 closed; Phase 5 (Section 8 — class balancing) not yet started.
+- Nothing in flight. Phase 5 closed; Phase 6 (Sections 10–13 — models + evaluation) not yet started.
 
 ## Known issues / bugs
 
@@ -274,17 +316,16 @@ Status legend: ⬜ Not started · 🔄 In progress · ✅ Done · ⚠️ Blocked
 
 ## Next steps (priority order)
 
-1. Commit Phase 4 ("Phase 4: feature engineering + interaction layer — sections 7, 7B + tests").
+1. Commit Phase 5 ("Phase 5: class imbalance handling — section 8 + tests").
 2. Upload updated PROJECT_STATE.md to the Claude Project knowledge.
 3. Pin exact versions via `pip freeze > requirements.lock` (governance: reproducible env) — still pending.
-4. Phase 5 generation session: Section 8 — `handle_class_imbalance`
-   (`backend/classifyos/preprocessing/balance.py`) + tests. MUST be TRAIN-ONLY: SMOTE /
-   undersampling resample the train split only; the test set is never resampled
-   (`class_weight` passes through to the model). Runs AFTER interactions in the pipeline
-   order (split → preprocess → build_features → interactions → balance → train) so it
-   resamples the fully-engineered numeric train frame. Fraud (~99:1) is the key
-   validation case; `[RISK]` comments on SMOTE-as-leakage if fitted on test and on
-   synthetic-minority realism.
+4. Phase 6 generation session: Sections 10–13 — model wrappers (×6 via the ABC in
+   `models/base.py`), `MODEL_REGISTRY` (`models/registry.py`), `evaluate_model`
+   (`evaluation/metrics.py`) and `classify`/`predict.py`. The big one. Wrappers consume
+   the Phase 5 outputs: SMOTE/undersample feed a rebalanced train frame; `class_weight`
+   passes the dict straight into the model. `predict_proba` must return shape
+   `(n, n_classes)` for every problem type; metrics stance is F1-weighted primary, with
+   MCC + PR-AUC alongside Accuracy on imbalanced problems.
 
 ---
 
@@ -296,11 +337,11 @@ Contract doc: docs/api_contract.md — stub only.
 ## Governance checklist (from scope §12)
 
 - [x] Prompt version control — prompts/ populated per section (phase_01_skeleton.md, phase_02_feature_impact.md, phase_03_preprocess.md, phase_04_feature_engineering.md archived)
-- [x] Section-level unit tests passing on real data (60 passing: 22 Phase 1 + 5 Phase 2 + 14 Phase 3 + 19 Phase 4)
-- [ ] [RISK] comments reviewed by team lead (3 Phase 1 + 2 Phase 2 + 4 Phase 3 + Phase 4 poly-cap/ratio-denominator/auto-discovery-pool/re-discovery-leakage, pending review)
-- [ ] Leakage audit (encoder/scaler/SMOTE train-only) confirmed — encoder/scaler/imputer (Phase 3) and feature-engineering/interaction stats (Phase 4) train-only, enforced by design + dedicated leakage tests (binning edges, MI auto-discovery); SMOTE pending Phase 5
+- [x] Section-level unit tests passing on real data (70 passing: 22 Phase 1 + 5 Phase 2 + 14 Phase 3 + 19 Phase 4 + 10 Phase 5)
+- [ ] [RISK] comments reviewed by team lead (3 Phase 1 + 2 Phase 2 + 4 Phase 3 + Phase 4 poly-cap/ratio-denominator/auto-discovery-pool/re-discovery-leakage + 4 Phase 5 train-only/tiny-minority/undersample-discards/multilabel, pending review)
+- [ ] Leakage audit (encoder/scaler/SMOTE train-only) confirmed — encoder/scaler/imputer (Phase 3), feature-engineering/interaction stats (Phase 4) and balancing (Phase 5) all train-only, enforced by design + dedicated leakage tests (binning edges, MI auto-discovery, test-set-untouched). SMOTE/undersample are train-only by construction (the balancer takes no test argument)
 - [ ] Output schema contract locked (post Phase 8)
-- [x] Hallucination check — library calls verified against installed versions (Phase 1: pandas 2.3.3 / sklearn 1.9.0; Phase 2: scipy 1.17.1 / sklearn 1.9.0 / matplotlib 3.11.0; Phase 3: sklearn 1.9.0 encoders/scalers; Phase 4: mutual_info_classif / scipy.stats.skew / pandas.qcut)
+- [x] Hallucination check — library calls verified against installed versions (Phase 1: pandas 2.3.3 / sklearn 1.9.0; Phase 2: scipy 1.17.1 / sklearn 1.9.0 / matplotlib 3.11.0; Phase 3: sklearn 1.9.0 encoders/scalers; Phase 4: mutual_info_classif / scipy.stats.skew / pandas.qcut; Phase 5: imbalanced-learn 0.14.2 SMOTE/RandomUnderSampler/RandomOverSampler, sklearn 1.9.0 compute_class_weight)
 - [ ] Team lead sign-off per phase (Naveen)
 
 ---
@@ -318,4 +359,5 @@ Contract doc: docs/api_contract.md — stub only.
 | 2026-06-12 | Docs backfill — created short_desc.md + plan_tweak.md (Phases 0–3) | Plain-language phase summaries + deviation register added; CLAUDE.md working-style updated to maintain both per phase going forward |
 | 2026-06-12 | Phase 4 — Sections 7 + 7B (FeatureBuilder, InteractionFeatureBuilder) + tests | 60 tests passing; feature_engineering config sub-dict added; binning/auto-discovery leakage tests + plot6 artifact; prompt archived; plan_tweak rows 12–17 added |
 | 2026-06-15 | Tooling — Stop hook enforcing PROJECT_STATE + short_desc updates on engine changes | `scripts/check_docs_updated.py` + `.claude/settings.json` Stop hook; verified block/pass/doc-only cases against v2.1.177; prompt archived |
+| 2026-06-15 | Phase 5 — Section 8 (`handle_class_imbalance`) + tests | 70 tests passing; smote/undersample/class_weight/none train-only; SMOTE k_neighbors auto-guard + tiny-minority fallback; multilabel→class_weight; prompt archived; plan_tweak rows 18–19 added |
 | | | |

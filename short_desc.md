@@ -47,6 +47,16 @@ anyone returning after a break who wants the gist without reading code.
 - PNG output `plot6_interaction_summary.png`: a bar chart of how strongly each new interaction column relates to the target.
 - Dev tool `backend/scripts/dev_run.py`: runs the whole pipeline so far (Phases 1–4) end-to-end on a real CSV and writes the real artifacts (feature_impact_summary.csv, plot4, plot6) to OUTPUT_DIR, failing readably stage-by-stage.
 
+## Phase 5 — Class imbalance handling (✅ Done, 2026-06-15)
+**In one line:** Added the stage that evens out lopsided training data (e.g. fraud, where only ~1% of rows are positive) — strictly on the training data, never the test data (70 tests passing).
+- `preprocessing/balance.py` (`handle_class_imbalance`): given the training features and labels, it rebalances them one of four ways chosen in the config:
+  - **SMOTE** — invents realistic synthetic minority-class rows until the classes are even (with safety guards so it never crashes when the minority is tiny, falling back to simple duplication for a one-of-a-kind class).
+  - **Undersample** — randomly drops majority-class rows until the classes are even (and logs how many it threw away).
+  - **Class weight** — changes nothing in the data; instead hands the model a "pay more attention to the rare class" instruction. The only option that returns weights.
+  - **None** — leaves the data exactly as-is.
+- Train-only by design: the function is never even given the test data, so it physically cannot resample or reweight it — the core "no leakage" rule, made structural.
+- Multilabel safety: when each row can carry several labels at once (where resampling doesn't make sense), it automatically switches to the class-weight approach and says so.
+
 ## Tooling — Doc-update enforcement hook (✅ Done, 2026-06-15)
 **In one line:** Added a safety net that won't let a coding session finish if it changed the ML engine but forgot to update the project's living docs.
 - `scripts/check_docs_updated.py`: checks (via git) whether any pipeline code under `backend/classifyos/` changed; if so, it requires both PROJECT_STATE.md and short_desc.md to have been updated too.

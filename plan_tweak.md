@@ -4,7 +4,7 @@
 > plan, or made an assumption the plan didn't cover. A register, not an essay — one line
 > per cell. "Impact" = what a reviewer (Naveen / stakeholders) needs to know at sign-off.
 >
-> Covers Phases 0–4. Updated at the end of every phase.
+> Covers Phases 0–5. Updated at the end of every phase.
 
 | # | Phase | What the plan said | What we did instead / assumed | Why | Impact |
 |---|---|---|---|---|---|
@@ -25,6 +25,8 @@
 | 15 | 4 | Auto-discover interaction pairs by MI gain | Candidate pool capped at the 15 most target-correlated numeric columns before pairing; scoring uses the multiplicative term; kept pairs materialized with `default_interactions` ops | O(n²) pair explosion otherwise; "interaction_term" is singular in the scope | Discovery considers ≤105 pairs, not all C(n,2); a strong pair outside the top-15 pool can be missed |
 | 16 | 4 | Ratio denominator unspecified vs scaling | FeatureBuilder's heuristic ratio denominator (largest |train median|) is weakly determined post-standard-scaling (medians ≈ 0) and often small → guard fires → 0.0 | Pipeline runs features AFTER preprocessing (incl. scaling) | Heuristic ratios are noisy by default; explicit interaction_pairs (Section 7B) are the reliable path. Per-row guard prevents inf |
 | 17 | 4 | Binning fires on skewed numerics (|skew|>1.5) | With default IQR outlier capping the lognormal tail is clipped (skew drops below 1.5), so binning rarely fires unless `outlier_method="none"` | Capping precedes feature engineering in the pipeline | Binning is conditional on the capping setting; reviewers should know the two interact |
+| 18 | 5 | SMOTE with a fixed default `k_neighbors` (5) | `k_neighbors` is auto-reduced to `min(5, minority_count-1)` when the minority is small, and a minority of ≤1 sample falls back to `RandomOverSampler` (duplication) with a logged warning | SMOTE errors when `k_neighbors >= minority_count` and cannot interpolate from a single point; fraud (~99:1) routinely produces tiny minorities | Auto-guard keeps the pipeline robust on extreme ratios; reviewers should note the ≤1-sample fallback adds no synthetic variety (pure duplication) |
+| 19 | 5 | Class balancing applies to all problem types | Multilabel targets cannot be SMOTE'd/undersampled; the balancer falls back to `class_weight` with a logged warning | A multilabel row carries several labels at once, so there is no single class for imbalanced-learn's 1-D samplers to balance on | **Multilabel resampling is unsupported in v1.0** — multilabel imbalance is handled only via class weights |
 
 ---
 
