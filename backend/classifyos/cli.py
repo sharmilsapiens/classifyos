@@ -25,13 +25,14 @@ override ``OUTPUT_DIR`` for a single invocation.
 from __future__ import annotations
 
 import argparse
+import copy
 import sys
 from typing import Any
 
 import pandas as pd
 from dotenv import load_dotenv
 
-from .config import build_config
+from .config import DEFAULT_CONFIG, build_config
 from .io.inspect import inspect_file
 from .io.storage import LocalFolderStorage, StorageAdapter
 from .runner import ModelRunner
@@ -84,6 +85,39 @@ def build_parser() -> argparse.ArgumentParser:
                    "(smote|undersample|class_weight|none).")
     p.add_argument("--encoding", default=None, help="encoding_method override.")
     p.add_argument("--scaling", default=None, help="scaling_method override.")
+    # -- hyperparameter tuning (Section 8B; Optuna). OFF unless --tune is given. --
+    p.add_argument(
+        "--tune",
+        action="store_true",
+        help="Enable Optuna hyperparameter tuning before each model is fit (OFF by "
+        "default). Multiplies fit cost; tree models benefit most.",
+    )
+    p.add_argument(
+        "--tune-models",
+        default=None,
+        help="Comma-separated models to tune (names/aliases). Default when --tune is "
+        "set: all algorithms in the run.",
+    )
+    p.add_argument(
+        "--tune-metric",
+        default=None,
+        help="Metric to optimise (e.g. f1_weighted, roc_auc, mcc). Default: f1_weighted.",
+    )
+    p.add_argument(
+        "--trials", type=int, default=None, help="Optuna trials per model (default 30)."
+    )
+    p.add_argument(
+        "--timeout",
+        type=int,
+        default=None,
+        help="Per-model tuning timeout in seconds (default: no timeout).",
+    )
+    p.add_argument(
+        "--tune-cv-folds",
+        type=int,
+        default=None,
+        help="CV folds used to score each trial within the train split (default 3).",
+    )
     p.add_argument(
         "--inspect",
         action="store_true",
@@ -143,6 +177,28 @@ def default_features(
             continue
         features.append(col)
     return features, id_like
+
+
+def _build_tuning_override(args: argparse.Namespace) -> dict[str, Any]:
+    """Assemble a complete ``tuning`` sub-dict from the CLI flags (``--tune`` was given).
+
+    Starts from the config defaults so the stored config (and the run_profile audit) always
+    carries every tuning key, then overlays the flags the user set. An empty ``models`` list
+    means "tune every algorithm in the run" (handled by the tuner).
+    """
+    tuning = copy.deepcopy(DEFAULT_CONFIG["tuning"])
+    tuning["enabled"] = True
+    if args.tune_models:
+        tuning["models"] = [m.strip() for m in args.tune_models.split(",") if m.strip()]
+    if args.tune_metric:
+        tuning["metric"] = args.tune_metric
+    if args.trials is not None:
+        tuning["n_trials"] = args.trials
+    if args.timeout is not None:
+        tuning["timeout_seconds"] = args.timeout
+    if args.tune_cv_folds is not None:
+        tuning["cv_folds"] = args.tune_cv_folds
+    return tuning
 
 
 def _print_inspection(inspection: dict[str, Any], target: str) -> None:
@@ -252,6 +308,8 @@ def main(argv: list[str] | None = None) -> int:
             overrides["encoding_method"] = args.encoding
         if args.scaling:
             overrides["scaling_method"] = args.scaling
+        if args.tune:
+            overrides["tuning"] = _build_tuning_override(args)
 
         config = build_config(args.file, args.target, feature_cols, **overrides)
     except Exception as exc:  # noqa: BLE001
@@ -266,6 +324,14 @@ def main(argv: list[str] | None = None) -> int:
     print(f"algorithms   : {config['algorithms']}")
     print(f"balance={config['class_balance']}  encoding={config['encoding_method']}  "
           f"scaling={config['scaling_method']}")
+    tuning = config.get("tuning", {})
+    if tuning.get("enabled"):
+        models = tuning.get("models") or ["all"]
+        print(
+            f"tuning      : ON  models={models}  metric={tuning.get('metric')}  "
+            f"trials={tuning.get('n_trials')}  cv_folds={tuning.get('cv_folds')}  "
+            f"timeout={tuning.get('timeout_seconds')}"
+        )
     print(f"features ({len(feature_cols)}): {feature_cols}")
     print()
 
@@ -279,6 +345,12 @@ def main(argv: list[str] | None = None) -> int:
     print("=== metrics summary ===")
     _print_metrics_table(runner)
     print()
+
+    if runner.tuned_params_:
+        print("=== tuned hyperparameters ===")
+        for name, params in runner.tuned_params_.items():
+            print(f"  {name}: {params}")
+        print()
 
     print("=== files written to OUTPUT_DIR ===")
     for key in _written_keys(runner, storage):

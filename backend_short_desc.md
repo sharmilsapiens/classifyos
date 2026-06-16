@@ -74,6 +74,14 @@ anyone returning after a break who wants the gist without reading code.
 - Outputs written for every run: a per-customer predictions table, a model-comparison scoreboard, a per-class breakdown, a JSON "run profile" (an audit record of exactly what was run), and the six charts.
 - First real-data run: pointed the tool at a real dataset and trained four algorithms end-to-end — 93–97% accuracy — confirming the whole engine works outside the synthetic samples.
 
+## Phase 7B — Hyperparameter tuning (✅ Done, 2026-06-16)
+**In one line:** Added an optional, OFF-by-default Optuna layer that automatically searches for better settings for each model before training it — strictly on the training data, so it never peeks at the test set (147 tests passing).
+- `tuning.py` (`tune_model`): for a chosen model, runs a small Optuna "study" that tries different hyperparameter combinations and keeps the best one. One uniform mechanism for all six models; rich search spaces for the ones that benefit (XGBoost, LightGBM, RandomForest, LogisticRegression) and deliberately thin ones for the rest (SVM is slow; NaiveBayes barely changes).
+- Runtime dials (all in config / on the CLI): which models to tune, the metric to optimise (default F1-weighted), how many trials, a per-model time cap, and k-fold-vs-single-split scoring. Tuning is OFF unless you ask for it.
+- No leakage: every candidate is scored using cross-validation *inside the training split only*; the test set is never touched. Balancing (SMOTE) is applied only to the final fit, never inside the tuning folds.
+- Safety: each model is tuned independently — if one model's search errors, it quietly falls back to defaults and the run continues. A **hard default time cap (600s per model)** means a tuning run can never run unbounded.
+- The conductor (ModelRunner) calls the tuner before fitting each requested model, feeds the best settings into the final fit, and records what was tuned (and the winning settings) in `run_profile.json`. CLI flags: `--tune`, `--tune-models`, `--tune-metric`, `--trials`, `--timeout`, `--tune-cv-folds`.
+
 ## Tooling — Doc-update enforcement hook (✅ Done 2026-06-15, ❌ Removed 2026-06-16)
 **In one line:** Briefly added a safety net that wouldn't let a coding session finish if it changed the ML engine but forgot to update the project's living docs — then removed it as ineffective.
 - `scripts/check_docs_updated.py`: checked (via git) whether any pipeline code under `backend/classifyos/` changed; if so, it required both PROJECT_STATE.md and backend_short_desc.md to have been updated too.

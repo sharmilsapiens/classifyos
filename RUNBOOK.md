@@ -266,3 +266,75 @@ $env:PYTHONWARNINGS="default"; python -m classifyos.cli --file <key> --target <c
 
 The CLI prints readable `ERROR ...` lines (not raw tracebacks) and exits non-zero
 (`2` for inspect/config errors, `1` for a run failure).
+
+---
+
+## 7. Hyperparameter tuning (optional, Optuna)
+
+Tuning is **OFF by default.** When enabled, ClassifyOS runs an Optuna study per model
+*before* fitting it, searching for better hyperparameters and using the best set for the
+final fit. It wraps around the existing models — a non-tuned run is completely unchanged.
+
+### Enable it from the CLI
+
+```powershell
+python -m classifyos.cli --file policy_lapse.csv --target will_lapse `
+    --algos LR,RF,XGB --tune --tune-models XGB --trials 40 --timeout 300
+```
+
+### Flags
+
+| Flag | Meaning | Default |
+|---|---|---|
+| `--tune` | Turn tuning ON. | OFF |
+| `--tune-models` | Comma-separated models to tune (names/aliases). Empty → all. | all algorithms in the run |
+| `--tune-metric` | Metric to maximise (`f1_weighted`, `roc_auc`, `mcc`, `pr_auc`, `accuracy`, `log_loss`, …). | `f1_weighted` |
+| `--trials` | Optuna trials per model. | `30` |
+| `--timeout` | Per-model wall-clock cap, in seconds (hard ceiling). | `600` |
+| `--tune-cv-folds` | CV folds used to score each trial within the train split. | `3` |
+
+The same dials are settable programmatically via the `tuning` config sub-dict (`enabled`,
+`models`, `metric`, `cv`, `cv_folds`, `n_trials`, `timeout_seconds`,
+`search_space_overrides`). `search_space_overrides` lets you narrow a model's bounds, e.g.
+`{"XGBoost": {"max_depth": {"low": 3, "high": 6}}}`.
+
+### How it's scored (no leakage)
+
+Every trial is scored **inside the training split only** — k-fold CV (default) or a single
+train-internal validation split (`cv=False`). The **test set is never seen during tuning.**
+Class balancing (SMOTE) is *not* applied inside the CV folds — that would leak synthetic
+minority rows across folds; tuning runs on the pre-balance train folds and balancing is
+applied only to the final fit.
+
+### Cost — tuning multiplies fits
+
+Each tuned model costs roughly **`n_trials × cv_folds` model fits** before the final fit.
+With the defaults (30 trials × 3 folds) that is ~90 fits *per tuned model*. Plan accordingly:
+
+- **Tree models (XGBoost, LightGBM, RandomForest) benefit most** — they get rich search spaces.
+- **SVM is slow** — its calibrated wrapper re-runs internal CV on every trial. Scope it with
+  `--tune-models` and a small `--trials`/`--timeout`; don't hand it a large budget.
+- **NaiveBayes rarely moves** — only `var_smoothing` to tune; usually not worth it.
+- The per-model `--timeout` is a **hard ceiling**: a study stops at the timeout OR the trial
+  cap, whichever comes first, so a tuning run can never go unbounded (default 600s/model).
+  Set `timeout_seconds=None` in config only when you have scoped the run with a short
+  `--tune-models` list.
+
+### What's recorded
+
+`run_profile.json` gains a `tuning` block — the audit trail: `enabled`, `metric`, `cv`,
+`cv_folds`, `n_trials`, `timeout_seconds`, the list of `tuned_models`, and the `best_params`
+found per model. The CLI also prints a `=== tuned hyperparameters ===` block after the
+metrics summary.
+
+### Worked example
+
+```powershell
+python -m classifyos.cli --file risk_tier.csv --target risk_tier `
+    --problem-type multiclass --algos LR,RF,XGB --tune --tune-models XGB `
+    --tune-metric f1_weighted --trials 25 --tune-cv-folds 3
+```
+
+Tunes only XGBoost (25 trials, 3-fold CV, maximising F1-weighted) and leaves LR and RF on
+their defaults; the best XGBoost params land in `run_profile.json` under
+`tuning.best_params` and are used for XGBoost's final fit.

@@ -5,16 +5,17 @@
 > planning/overseer chat stays in sync with the local repo.
 
 **Last updated:** 2026-06-16
-**Updated by:** Claude Code (housekeeping — prompts/ reorg, hook removal, short_desc rename)
-**Repo tag / commit:** 707f595 (RUNBOOK.md) + reorg commit pending
+**Updated by:** Claude Code (Phase 7B — Optuna hyperparameter tuning layer)
+**Repo tag / commit:** 236a0a0 (prompts reorg) + Phase 7B commit pending
 
 ---
 
 ## Current status
 
-**Active phase:** Phase 7 complete — Plots + ModelRunner + CLI (Sections 14–16). **The ML
-engine is now feature-complete and runs end-to-end from a single call.**
-**Sprint day:** Phase 7 done
+**Active phase:** Phase 7B complete — Optuna hyperparameter tuning layer (Section 8B), an
+optional add-on to the feature-complete engine. **The ML engine runs end-to-end from a
+single call, now with opt-in automatic hyperparameter tuning.**
+**Sprint day:** Phase 7B done
 **Overall:** 🟢 A single `ModelRunner(config, storage).run()` (or the CLI) executes the
 whole pipeline — load → feature impact → split → preprocess → features → interactions →
 balance (train only) → train/evaluate every algorithm → write every artifact. Full suite
@@ -58,6 +59,7 @@ written. Engine complete; ready for Phase 8 (FastAPI layer).
 | 5 | Class balancing (Section 8) | ✅ Done | handle_class_imbalance (smote/undersample/class_weight/none, train-only) + 10 tests; SMOTE k_neighbors auto-guard + tiny-minority fallback; multilabel→class_weight |
 | 6 | Models + evaluation (Sections 10–13) | ✅ Done | 6 wrappers via 1 ABC + MODEL_REGISTRY + evaluate_model + classify; 47 tests; xgboost/lightgbm added to deps |
 | 7 | Plots + ModelRunner + CLI (Sections 14–16) | ✅ Done | ModelRunner (deep-copy config isolation, corrected order, robust per-algo failures) + plot_results (plot1/2/3/5) + CLI (load_dotenv, inspect/run modes); 13 tests; real-data run on iris done; engine feature-complete |
+| 7B | Optuna hyperparameter tuning (Section 8B) | ✅ Done | `tuning.py` (`tune_model`) — OFF by default; one uniform mechanism for all 6 models; CV-in-train trial scoring (leakage-safe); per-model isolation + hard 600s/model timeout; ModelRunner + config + CLI (`--tune…`) sanctioned edits; 17 tests; **AutoML pulled v1.5→v1.0** (plan_tweak 24–25) |
 | 8 | FastAPI layer | ⬜ Not started | ⚠️ API startup must `load_dotenv()` (or rely on exported env) so DATA_DIR/OUTPUT_DIR/CORS_ORIGINS resolve — same fallback caveat as the CLI |
 | 9 | React dashboard (13 pages) | ⬜ Not started | Deviation from scope: React replaces single-file HTML |
 | 10 | Unit tests (full pytest suite) | ⬜ Not started | |
@@ -103,6 +105,11 @@ Status legend: ⬜ Not started · 🔄 In progress · ✅ Done · ⚠️ Blocked
 | 2026-06-15 | A failing algorithm is caught, logged, and recorded as a `status="failed"` row in `metrics_df_` (with the error string); the run continues for the others. Unknown algorithm names (build_model `ValueError`) are caught the same way | Scope robustness requirement: "one bad model must not kill the whole run." Real data + a 6-model registry makes per-model failures a realistic edge case |
 | 2026-06-15 | `plot_results` writes plot1/2/3/5 only (plot4/plot6 are written upstream in Sections 5/7B). Degenerate cases emit a labelled placeholder PNG instead of skipping the file: no model exposes importances → plot3 placeholder; multiclass → plot5 placeholder (calibration is binary-only) and plot2 uses one-vs-rest ROC per class (PR omitted) | Keeps the OUTPUT_DIR artifact set stable/complete for the frontend regardless of problem type or model mix; avoids duplicating the two plots earlier sections already own |
 | 2026-06-15 | `run_profile.json` records both `features` (configured) and `active_features` (final engineered columns incl. interaction cols), plus class_distribution, class_weight, n_rows/n_train/n_test, models_succeeded, and a UTC `timestamp` | The profile is the run's audit record; the active-vs-configured feature distinction makes the engineering effect visible at sign-off |
+| 2026-06-16 | **Phase 7B**: added an Optuna tuning layer (`tuning.py`) as a NEW module — wrappers/registry untouched; ModelRunner/config/CLI got sanctioned edits. AutoML pulled from v1.5 into v1.0 | Sanctioned deviation (plan_tweak 24). One uniform `tune_model(name, X_train, y_train, problem_type, config, …)` for all six models; Optuna/TPE over a grid; OFF by default |
+| 2026-06-16 | Tuning trial scoring is **k-fold CV inside the TRAIN split** (default; single train-internal split optional via `cv=False`); the test set is never passed to `tune_model` (structural). Balancing/SMOTE is NOT applied inside the CV folds — tuning runs on the pre-balance train folds, and ModelRunner balances only the final fit (the prompt's documented safe default); `class_weight` is passed through to per-trial `build_model` (mild approximation, [RISK]-noted) | Per-fold balancing would leak synthetic minority rows across folds; the safe default keeps trial scoring leakage-free without the per-fold-SMOTE complexity |
+| 2026-06-16 | Best params are read from `study.best_trial.user_attrs["tuned_params"]`, NOT `study.best_params` | A search-space function may transform a suggestion (e.g. the LogisticRegression `"solver|penalty"` categorical splits into two estimator kwargs); reading the stored derived params guarantees the returned dict is exactly what was scored |
+| 2026-06-16 | `tuning.timeout_seconds` default is a **hard 600s per model**, NOT `None` (the prompt's literal default) — explicit `None` still accepted as an opt-out | With `models=[]` (tune-all) + `n_trials=30`, an unbounded default would run a 30-trial study for every algorithm incl. the slow calibrated-SVM. A finite ceiling makes a tuning run impossible to leave unbounded; a study stops at the timeout OR the trial cap, whichever first |
+| 2026-06-16 | Per-model isolation: each model's study runs in its own try/except — a study that errors (or whose every trial fails, e.g. an inverted-bound override) returns `{}` and the model falls back to defaults, never aborting the run (same pattern as the Phase 6/7 per-algo isolation) | "One bad model must not kill the run" extended to tuning; robustness on real data / extreme configs |
 
 ---
 
@@ -399,6 +406,66 @@ Status legend: ⬜ Not started · 🔄 In progress · ✅ Done · ⚠️ Blocked
   default `override=False` (so the test env's OUTPUT_DIR is preserved).
 - Archived this session's prompt to `prompts/phase_07_runner.md`.
 
+## Completed this session (Phase 7B — 2026-06-16)
+
+- **Section 8B** `backend/classifyos/tuning.py` (NEW module): `tune_model(model_name,
+  X_train, y_train, problem_type, config, class_weight=None, random_state=42) -> dict` —
+  an Optuna tuning layer that wraps *around* the Phase 6 wrappers (wrappers/registry
+  **untouched**). One uniform mechanism for all six models:
+  - **Per-model studies.** One Optuna `study` per model, TPE sampler seeded from
+    `random_state`, `direction="maximize"` the configured metric. `SEARCH_SPACES` holds one
+    function per model — **rich** spaces for XGBoost / LightGBM / RandomForest /
+    LogisticRegression, **honestly minimal** for SVM (slow — calibrated CV per trial) and
+    NaiveBayes (only `var_smoothing`; rarely moves). Per-model **bound overrides** via
+    `tuning.search_space_overrides`.
+  - **[RISK] leakage-safe scoring.** Every trial is scored INSIDE the train split only —
+    k-fold CV (default; `cv_folds`) or a single train-internal split (`cv=False`). The test
+    set is never passed to the module (structural). Balancing/SMOTE is NOT applied inside the
+    CV folds (would leak synthetic rows across folds) — tuning runs on the pre-balance train
+    folds; ModelRunner balances only the final fit. `class_weight` is passed through to
+    per-trial `build_model` (mild approximation, [RISK]-noted).
+  - **Budget + safety.** `n_trials` and a **hard `timeout_seconds` (default 600s/model)**
+    bound every study — a study stops at the timeout OR the trial cap, whichever first, so a
+    tuning run can never be unbounded. `cv_folds` is auto-clamped to the smallest class size
+    (falls back to a single split when CV is infeasible).
+  - **Robustness.** Each study runs in try/except: a study that errors or whose every trial
+    fails (e.g. an inverted-bound override) returns `{}` and the model falls back to defaults
+    — never aborts the run. Best params are read from `study.best_trial.user_attrs` so a
+    transformed suggestion (LR `solver|penalty`) round-trips exactly.
+- **Sanctioned edits:**
+  - `config.py`: added the `tuning` sub-dict to `DEFAULT_CONFIG` + `TUNING_METRICS` tuple +
+    `_validate_tuning` (enabled/cv bool, models list-of-str, metric ∈ TUNING_METRICS,
+    cv_folds ≥ 2, n_trials ≥ 1, timeout None-or-positive, overrides dict).
+  - `runner.py`: a new `_tune(...)` step (stage 7B) runs each requested model's study on the
+    PRE-balance TRAIN matrices and feeds the best params into `build_model` for the final
+    fit; `_run_one_algorithm` gained a `best_params` arg; `run_profile.json` gained a
+    `tuning` audit block (`enabled`, `metric`, `cv`, `cv_folds`, `n_trials`,
+    `timeout_seconds`, `tuned_models`, `best_params`). `_run_config` deep-copy isolation
+    intact (tuning never mutates `self.config`).
+  - `cli.py`: `--tune`, `--tune-models`, `--tune-metric`, `--trials`, `--timeout`,
+    `--tune-cv-folds`; prints a tuning line + a `=== tuned hyperparameters ===` block.
+- **Tests** `tests/test_tuning.py` (17): XGBoost returns expected keys; tuned CV score ≥
+  default on identical seeded folds (LR — model-agnostic, fast); test-set-untouched
+  (structural signature); enabled=False is a no-op (unit + runner metrics-identical);
+  model-not-in-list → defaults; study-failure → `{}`; n_trials × cv_folds fit count;
+  timeout honored (scorer stubbed → bounded, can't hang); single-split alternative;
+  config-not-mutated; LR solver/penalty validity; tune-list resolution; all six models have
+  a space; default timeout bounded; runner tunes only the requested model + records the
+  audit. **147 passed** (130 prior + 17 new) — no regressions. **Speed:** the tuning file
+  runs in ~20s (tests cap search-space bounds + disable interaction auto-discovery; never
+  tune SVM/NaiveBayes); full suite 3m29s.
+- **Real-data CLI run** (`--output-dir` to a temp dir, not committed): `--file
+  policy_lapse.csv --target will_lapse --algos XGB,RF --balance class_weight --tune
+  --tune-models XGB --trials 3 --tune-cv-folds 2` → XGB tuned (RF on defaults), tuned params
+  printed, `run_profile.json` tuning block populated, all 11 artifacts written.
+- **Deps**: `optuna==4.9.0` (+ alembic/colorlog/SQLAlchemy/Mako/greenlet/tqdm/MarkupSafe)
+  installed, added to `requirements.txt`, re-pinned in `requirements.lock` (`pip freeze`).
+- **Hallucination check ✅** — verified against **Optuna 4.9.0** in the venv: `create_study(*,
+  direction, sampler)`, `TPESampler(seed=…)`, `Study.optimize(func, n_trials, timeout,
+  catch=…)`, `Trial.suggest_float/int(…, log=…)/suggest_categorical`,
+  `study.best_trial.user_attrs`, `optuna.TrialPruned`, `optuna.logging.set_verbosity`.
+- Prompt archived to `prompts/backend_phases/phase_07B_tuning.md`; plan_tweak rows 24–25 added.
+
 ## Completed this session (Doc-update enforcement hook — 2026-06-15) — ⚠️ REMOVED 2026-06-16
 
 > This hook was removed in the 2026-06-16 reorg session (see below). Kept here as a record.
@@ -503,8 +570,9 @@ Status legend: ⬜ Not started · 🔄 In progress · ✅ Done · ⚠️ Blocked
 
 ## In progress / partially done
 
-- Nothing in flight. Phase 7 closed — the ML engine (Sections 1–16) is feature-complete
-  and runs end-to-end via `ModelRunner` / the CLI. Phase 8 (FastAPI layer) not yet started.
+- Nothing in flight. Phase 7B closed — the ML engine (Sections 1–16) is feature-complete and
+  now has an optional Optuna hyperparameter-tuning layer (Section 8B, OFF by default). Runs
+  end-to-end via `ModelRunner` / the CLI. Phase 8 (FastAPI layer) not yet started.
 
 ## Known issues / bugs
 
@@ -520,7 +588,7 @@ Status legend: ⬜ Not started · 🔄 In progress · ✅ Done · ⚠️ Blocked
 
 ## Next steps (priority order)
 
-1. Commit Phase 7 ("Phase 7: plots + ModelRunner + CLI — sections 14-16 + tests").
+1. Commit Phase 7B ("Phase 7B: Optuna hyperparameter tuning layer + RUNBOOK update + tests").
 2. Upload updated PROJECT_STATE.md to the Claude Project knowledge.
 3. Phase 8 — FastAPI layer (`backend/api/`): `RunConfig` Pydantic model mirroring the
    config contract, routes under `/api/v1/` (`/inspect`, `/run`, etc.) driving
@@ -539,12 +607,12 @@ Contract doc: docs/api_contract.md — stub only.
 
 ## Governance checklist (from scope §12)
 
-- [x] Prompt version control — prompts/ populated per section (phase_01_skeleton.md, phase_02_feature_impact.md, phase_03_preprocess.md, phase_04_feature_engineering.md, phase_05_class_balance.md, phase_06_models_eval.md, phase_07_runner.md archived)
-- [x] Section-level unit tests passing on real data (130 passing: 22 Phase 1 + 5 Phase 2 + 14 Phase 3 + 19 Phase 4 + 10 Phase 5 + 47 Phase 6 + 13 Phase 7)
-- [ ] [RISK] comments reviewed by team lead (3 Phase 1 + 2 Phase 2 + 4 Phase 3 + Phase 4 poly-cap/ratio-denominator/auto-discovery-pool/re-discovery-leakage + 4 Phase 5 train-only/tiny-minority/undersample-discards/multilabel + Phase 6 proba-shape-order/accuracy-misleads/SVM-no-importance, pending review)
-- [ ] Leakage audit (encoder/scaler/SMOTE train-only) confirmed — encoder/scaler/imputer (Phase 3), feature-engineering/interaction stats (Phase 4) and balancing (Phase 5) all train-only, enforced by design + dedicated leakage tests (binning edges, MI auto-discovery, test-set-untouched). SMOTE/undersample are train-only by construction (the balancer takes no test argument). Phase 6 models fit on the balanced TRAIN matrices only; evaluate_model/classify only ever read the untouched test set
+- [x] Prompt version control — prompts/ populated per section (phase_01_skeleton.md, phase_02_feature_impact.md, phase_03_preprocess.md, phase_04_feature_engineering.md, phase_05_class_balance.md, phase_06_models_eval.md, phase_07_runner.md, phase_07B_tuning.md archived)
+- [x] Section-level unit tests passing on real data (147 passing: 22 Phase 1 + 5 Phase 2 + 14 Phase 3 + 19 Phase 4 + 10 Phase 5 + 47 Phase 6 + 13 Phase 7 + 17 Phase 7B)
+- [ ] [RISK] comments reviewed by team lead (3 Phase 1 + 2 Phase 2 + 4 Phase 3 + Phase 4 poly-cap/ratio-denominator/auto-discovery-pool/re-discovery-leakage + 4 Phase 5 train-only/tiny-minority/undersample-discards/multilabel + Phase 6 proba-shape-order/accuracy-misleads/SVM-no-importance + Phase 7B tuning-CV-leakage/per-fold-balancing-deferred/runaway-timeout-cap/per-model-isolation, pending review)
+- [ ] Leakage audit (encoder/scaler/SMOTE train-only) confirmed — encoder/scaler/imputer (Phase 3), feature-engineering/interaction stats (Phase 4) and balancing (Phase 5) all train-only, enforced by design + dedicated leakage tests (binning edges, MI auto-discovery, test-set-untouched). SMOTE/undersample are train-only by construction (the balancer takes no test argument). Phase 6 models fit on the balanced TRAIN matrices only; evaluate_model/classify only ever read the untouched test set. Phase 7B tuning scores every trial with CV *inside the train split only* (the test set is never passed to `tune_model`), and balancing is applied only to the final fit, not inside the CV folds
 - [ ] Output schema contract locked (post Phase 8)
-- [x] Hallucination check — library calls verified against installed versions (Phase 1: pandas 2.3.3 / sklearn 1.9.0; Phase 2: scipy 1.17.1 / sklearn 1.9.0 / matplotlib 3.11.0; Phase 3: sklearn 1.9.0 encoders/scalers; Phase 4: mutual_info_classif / scipy.stats.skew / pandas.qcut; Phase 5: imbalanced-learn 0.14.2 SMOTE/RandomUnderSampler/RandomOverSampler, sklearn 1.9.0 compute_class_weight; Phase 6: sklearn 1.9.0 CalibratedClassifierCV/GaussianNB sample_weight/OvR/roc_auc/log_loss/calibration_curve, xgboost 3.2.0 string-label rejection + sample_weight, lightgbm 4.6.0) — all versions pinned in backend/requirements.lock
+- [x] Hallucination check — library calls verified against installed versions (Phase 1: pandas 2.3.3 / sklearn 1.9.0; Phase 2: scipy 1.17.1 / sklearn 1.9.0 / matplotlib 3.11.0; Phase 3: sklearn 1.9.0 encoders/scalers; Phase 4: mutual_info_classif / scipy.stats.skew / pandas.qcut; Phase 5: imbalanced-learn 0.14.2 SMOTE/RandomUnderSampler/RandomOverSampler, sklearn 1.9.0 compute_class_weight; Phase 6: sklearn 1.9.0 CalibratedClassifierCV/GaussianNB sample_weight/OvR/roc_auc/log_loss/calibration_curve, xgboost 3.2.0 string-label rejection + sample_weight, lightgbm 4.6.0; Phase 7B: optuna 4.9.0 create_study/TPESampler/Study.optimize/Trial.suggest_*/best_trial.user_attrs/TrialPruned/logging.set_verbosity) — all versions pinned in backend/requirements.lock
 - [ ] Team lead sign-off per phase (Naveen)
 
 ---
@@ -567,4 +635,5 @@ Contract doc: docs/api_contract.md — stub only.
 | 2026-06-15 | Phase 7 — Sections 14–16 (plot_results + ModelRunner + CLI) + tests | 130 tests passing (13 new); ModelRunner deep-copy config isolation + corrected order + robust per-algo failures; plot1/2/3/5 with placeholder fallbacks; CLI inspect/run with load_dotenv; engine feature-complete; real-data run on iris (LR/RF/XGB/LGBM, acc 0.93–0.97); prompt archived; plan_tweak row 23 added |
 | 2026-06-15 | Docs — RUNBOOK.md (how to run the engine + interpret outputs) | Command-first operator's manual added (setup/inspect/run/outputs/re-run-overwrite/troubleshooting); all claims derived from code + verified with live --inspect + binary + multiclass runs; prompt archived to prompts/doc_runbook.md |
 | 2026-06-16 | Housekeeping — prompts/ reorg, removed doc Stop hook, renamed short_desc.md→backend_short_desc.md | `prompts/` split into backend_phases/api_phases/frontend_phases/tooling/docs (+ README); `scripts/check_docs_updated.py` + Stop hook deleted; CLAUDE.md/plan_tweak/PROJECT_STATE references updated; Phase 7 (and Phase 4) short_desc entries verified already present + accurate; no engine code touched; prompt archived to prompts/tooling/reorg.md |
+| 2026-06-16 | Phase 7B — Section 8B Optuna hyperparameter tuning layer (`tuning.py`) + sanctioned config/runner/CLI edits + RUNBOOK section | 147 tests passing (17 new); OFF by default; one uniform per-model study, CV-in-train leakage-safe scoring, hard 600s/model timeout, per-model isolation; AutoML pulled v1.5→v1.0 (plan_tweak 24–25); optuna 4.9.0 added + pinned; real-data CLI `--tune` run verified; prompt archived to prompts/backend_phases/phase_07B_tuning.md |
 | | | |

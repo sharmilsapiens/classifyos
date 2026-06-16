@@ -19,7 +19,10 @@ Phase 3 pipeline-order decision in PROJECT_STATE.md / plan_tweak.md row 4):
 #. ``FeatureBuilder.fit(train)`` → transform both
 #. ``InteractionFeatureBuilder.fit(train)`` → transform both (+ writes ``plot6``)
 #. ``handle_class_imbalance`` on the TRAIN matrices ONLY → balanced train + class weight
-#. for each algorithm: ``build_model`` → ``fit`` → ``classify`` → ``evaluate_model``
+#. (optional, OFF by default) ``tune_model`` per algorithm on the PRE-balance TRAIN
+   matrices → best hyperparameters (Section 8B / Phase 7B; ``config["tuning"]``)
+#. for each algorithm: ``build_model`` (with tuned params, if any) → ``fit`` →
+   ``classify`` → ``evaluate_model``
 #. save everything (Section 14 plots + CSVs + ``run_profile.json``)
 
 [RISK] _run_config isolation: :meth:`run` deep-copies the config once at the start and
@@ -105,6 +108,8 @@ class ModelRunner:
         self.metrics_df_: pd.DataFrame | None = None
         self.models_: dict[str, Any] = {}
         self.metrics_: dict[str, dict[str, Any]] = {}
+        #: {model_name: best hyperparameters} for every model that was tuned this run.
+        self.tuned_params_: dict[str, dict[str, Any]] = {}
         self.X_test_: pd.DataFrame | None = None
         self.y_test_: pd.Series | None = None
         self.classes_: list[Any] = []
@@ -146,13 +151,20 @@ class ModelRunner:
         logger.info("ModelRunner: handling class imbalance (%s)", cfg.get("class_balance"))
         X_bal, y_bal, class_weight = handle_class_imbalance(train_X, train_y, cfg)
 
+        # -- 7B. optional hyperparameter tuning (per model, PRE-balance TRAIN) --
+        # [RISK] leakage — tuning is scored on folds carved from the PRE-balance train
+        # matrices (train_X/train_y), never the test set; balancing is applied only to the
+        # final fit below (X_bal/y_bal). See classifyos.tuning for the full leakage note.
+        self.tuned_params_ = self._tune(cfg, algorithms, train_X, train_y, class_weight)
+
         # -- 8. per-algorithm train → classify → evaluate ----------------------
         self.classes_ = sorted(pd.Series(y_bal).astype(str).unique())
         metrics_rows: list[dict[str, Any]] = []
         prediction_frames: list[pd.DataFrame] = []
         for name in algorithms:
             row, preds = self._run_one_algorithm(
-                name, X_bal, y_bal, test_X, test_y, problem_type, class_weight, cfg
+                name, X_bal, y_bal, test_X, test_y, problem_type, class_weight, cfg,
+                best_params=self.tuned_params_.get(name, {}),
             )
             metrics_rows.append(row)
             if preds is not None:
@@ -220,6 +232,51 @@ class ModelRunner:
         y_test = test_fin[target]
         return X_train, y_train, X_test, y_test
 
+    def _tune(
+        self,
+        cfg: dict[str, Any],
+        algorithms: list[str],
+        train_X: pd.DataFrame,
+        train_y: pd.Series,
+        class_weight: dict[Any, float] | None,
+    ) -> dict[str, dict[str, Any]]:
+        """Stage 7B — tune each requested algorithm (when enabled), returning best params.
+
+        Tuning is OFF unless ``cfg["tuning"]["enabled"]``. For each algorithm in the tune
+        list, :func:`classifyos.tuning.tune_model` runs its own Optuna study on the
+        PRE-balance TRAIN matrices and returns the best hyperparameters (or ``{}`` to fall
+        back to defaults). Imported lazily so the (optional) Optuna dependency is only
+        touched when tuning is actually requested.
+        """
+        from .tuning import should_tune_model, tune_model
+
+        tuning_enabled = bool(cfg.get("tuning", {}).get("enabled", False))
+        if not tuning_enabled:
+            return {}
+
+        problem_type = cfg.get("problem_type", "binary")
+        random_state = cfg.get("random_state", 42)
+        tuned: dict[str, dict[str, Any]] = {}
+        for name in algorithms:
+            if not should_tune_model(name, cfg):
+                continue
+            logger.info("ModelRunner: tuning %s …", name)
+            best = tune_model(
+                name,
+                train_X,
+                train_y,
+                problem_type,
+                cfg,
+                class_weight=class_weight,
+                random_state=random_state,
+            )
+            if best:
+                tuned[name] = best
+                logger.info("ModelRunner: %s tuned → %s", name, best)
+            else:
+                logger.info("ModelRunner: %s tuning returned no params; using defaults", name)
+        return tuned
+
     def _run_one_algorithm(
         self,
         name: str,
@@ -230,20 +287,26 @@ class ModelRunner:
         problem_type: str,
         class_weight: dict[Any, float] | None,
         cfg: dict[str, Any],
+        best_params: dict[str, Any] | None = None,
     ) -> tuple[dict[str, Any], pd.DataFrame | None]:
         """Build → fit → classify → evaluate ONE algorithm; never raises.
+
+        ``best_params`` (from the optional tuning stage) are splatted into ``build_model``;
+        when empty the wrapper defaults are used — identical to the pre-tuning behaviour.
 
         On any failure the model is logged, recorded as a ``status="failed"`` row with
         the error message, and ``None`` predictions are returned so the run continues
         with the remaining algorithms.
         """
         random_state = cfg.get("random_state", 42)
+        params = dict(best_params or {})
         try:
             model = build_model(
                 name,
                 problem_type=problem_type,
                 class_weight=class_weight,
                 random_state=random_state,
+                **params,
             )
             model.fit(X_train, y_train)
             classes = np.asarray(model.classes_)
@@ -374,6 +437,20 @@ class ModelRunner:
             counts = self.raw_df_[target].astype(str).value_counts()
             class_distribution = {str(k): int(v) for k, v in counts.items()}
 
+        tuning_cfg = cfg.get("tuning", {}) or {}
+        tuning_profile = {
+            "enabled": bool(tuning_cfg.get("enabled", False)),
+            "metric": tuning_cfg.get("metric"),
+            "cv": tuning_cfg.get("cv"),
+            "cv_folds": tuning_cfg.get("cv_folds"),
+            "n_trials": tuning_cfg.get("n_trials"),
+            "timeout_seconds": tuning_cfg.get("timeout_seconds"),
+            "tuned_models": sorted(self.tuned_params_),
+            "best_params": {
+                name: params for name, params in self.tuned_params_.items()
+            },
+        }
+
         return {
             "input_file": cfg["input_file"],
             "target": target,
@@ -382,6 +459,7 @@ class ModelRunner:
             "active_features": list(self.active_features_),
             "algorithms": list(cfg.get("algorithms", [])),
             "class_balance": cfg.get("class_balance"),
+            "tuning": tuning_profile,
             "class_weight": (
                 {str(k): float(v) for k, v in class_weight.items()}
                 if class_weight

@@ -22,6 +22,22 @@ MISSING_STRATEGIES = ("median", "mean", "mode", "ffill", "drop")
 ENCODING_METHODS = ("onehot", "label", "ordinal", "target")
 SCALING_METHODS = ("standard", "minmax", "robust", "none")
 OUTLIER_METHODS = ("iqr", "zscore", "none")
+#: Metrics a tuning study may optimise (Section 8B). These reuse ``evaluate_model``'s
+#: own metric keys so the value a trial maximises is exactly the value reported later.
+#: All are higher-is-better except ``log_loss`` (the tuner negates it internally).
+TUNING_METRICS = (
+    "f1_weighted",
+    "f1_macro",
+    "accuracy",
+    "precision_weighted",
+    "precision_macro",
+    "recall_weighted",
+    "recall_macro",
+    "roc_auc",
+    "pr_auc",
+    "mcc",
+    "log_loss",
+)
 
 
 DEFAULT_CONFIG: dict[str, Any] = {
@@ -62,6 +78,27 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "drop_original_if_interacted": False,
         "max_auto_pairs": 10,
         "fill_method": "zero",
+    },
+    # --- hyperparameter tuning (Section 8B; Optuna) -------------------------------
+    # OFF by default. AutoML/search was scope v1.5; pulled into v1.0 as a sanctioned
+    # deviation (see plan_tweak.md). One uniform mechanism for all six models, fully
+    # controlled at RUN TIME: which models to tune, how hard, and which metric are
+    # config dials, not build-time choices.
+    "tuning": {
+        "enabled": False,  # OFF by default
+        "models": [],  # [] or ["all"] → every algorithm in the run; else only these
+        "metric": "f1_weighted",  # optimised metric; must be a TUNING_METRICS name
+        "cv": True,  # True = k-fold CV within train; False = single train-internal split
+        "cv_folds": 3,
+        "n_trials": 30,  # per model
+        # [RISK] runaway tuning — a HARD per-model wall-clock cap (seconds) so a tuning run
+        # can NEVER go unbounded. With models=[] (tune all), enabling tuning would otherwise
+        # run a 30-trial study for every algorithm including the slow SVM (calibrated SVC,
+        # internal CV per trial); without a cap that is an open-ended run. 600s/model is a
+        # safety ceiling, not a target — n_trials usually binds first. Set explicitly to
+        # ``None`` to opt out (only do so when scoping with a short ``models`` list).
+        "timeout_seconds": 600,  # per model; reach the cap OR n_trials, whichever first
+        "search_space_overrides": {},  # optional per-model bound overrides
     },
     "random_state": 42,
 }
@@ -165,6 +202,51 @@ def _validate_config(config: dict[str, Any]) -> None:
         )
 
     _validate_feature_engineering(config["feature_engineering"])
+    _validate_tuning(config["tuning"])
+
+
+def _validate_tuning(t: Any) -> None:
+    """Validate the ``tuning`` sub-dict (Section 8B — Optuna tuning layer)."""
+    if not isinstance(t, dict):
+        raise ValueError("'tuning' must be a dict")
+    for flag in ("enabled", "cv"):
+        if flag in t and not isinstance(t[flag], bool):
+            raise ValueError(f"'tuning.{flag}' must be a bool, got {t[flag]!r}")
+
+    models = t.get("models", [])
+    if not isinstance(models, list) or not all(isinstance(m, str) for m in models):
+        raise ValueError("'tuning.models' must be a list of model-name strings")
+
+    metric = t.get("metric", "f1_weighted")
+    if metric not in TUNING_METRICS:
+        raise ValueError(
+            f"'tuning.metric' must be one of {list(TUNING_METRICS)}, got {metric!r}"
+        )
+
+    folds = t.get("cv_folds", 3)
+    if not isinstance(folds, int) or isinstance(folds, bool) or folds < 2:
+        raise ValueError(f"'tuning.cv_folds' must be an integer >= 2, got {folds!r}")
+
+    n_trials = t.get("n_trials", 30)
+    if not isinstance(n_trials, int) or isinstance(n_trials, bool) or n_trials < 1:
+        raise ValueError(
+            f"'tuning.n_trials' must be a positive integer, got {n_trials!r}"
+        )
+
+    timeout = t.get("timeout_seconds", None)
+    if timeout is not None and (
+        not isinstance(timeout, (int, float))
+        or isinstance(timeout, bool)
+        or timeout <= 0
+    ):
+        raise ValueError(
+            "'tuning.timeout_seconds' must be a positive number or None, "
+            f"got {timeout!r}"
+        )
+
+    overrides = t.get("search_space_overrides", {})
+    if not isinstance(overrides, dict):
+        raise ValueError("'tuning.search_space_overrides' must be a dict")
 
 
 def _validate_feature_engineering(fe: Any) -> None:
