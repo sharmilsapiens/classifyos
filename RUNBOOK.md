@@ -31,6 +31,18 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
+**Running the tests.** From `backend/`, use the bundled runner (it calls the venv's Python
+directly — no activation needed, so PowerShell execution policy won't get in the way):
+
+```powershell
+./run_tests.ps1                          # whole suite, verbose (~3.5 min, 147 tests)
+./run_tests.ps1 tests/test_tuning.py -q  # just one file, quiet
+./run_tests.ps1 -q --durations=10        # whole suite + the 10 slowest tests
+```
+
+Any arguments are forwarded straight to `pytest`. Equivalent to
+`.\.venv\Scripts\python.exe -m pytest tests/ -v`.
+
 **`.env` must be present and correct.** The CLI calls `load_dotenv()` at startup, which
 reads `backend/.env`. That file sets where the engine reads data and writes outputs:
 
