@@ -4,9 +4,9 @@
 > A copy is uploaded to the ClassifyOS Claude Project knowledge after each update so the
 > planning/overseer chat stays in sync with the local repo.
 
-**Last updated:** 2026-06-15
-**Updated by:** Claude Code (docs — RUNBOOK.md)
-**Repo tag / commit:** e1631e4 (Phase 7) + RUNBOOK.md commit pending
+**Last updated:** 2026-06-16
+**Updated by:** Claude Code (housekeeping — prompts/ reorg, hook removal, short_desc rename)
+**Repo tag / commit:** 707f595 (RUNBOOK.md) + reorg commit pending
 
 ---
 
@@ -399,14 +399,16 @@ Status legend: ⬜ Not started · 🔄 In progress · ✅ Done · ⚠️ Blocked
   default `override=False` (so the test env's OUTPUT_DIR is preserved).
 - Archived this session's prompt to `prompts/phase_07_runner.md`.
 
-## Completed this session (Doc-update enforcement hook — 2026-06-15)
+## Completed this session (Doc-update enforcement hook — 2026-06-15) — ⚠️ REMOVED 2026-06-16
+
+> This hook was removed in the 2026-06-16 reorg session (see below). Kept here as a record.
 
 - **`scripts/check_docs_updated.py`** (stdlib only, cross-platform): computes the
   session's changed files as the union of `git diff --name-only HEAD`,
   `git diff --name-only --cached HEAD`, and `git ls-files --others --exclude-standard`.
   - ENGINE changed = any path under `backend/classifyos/` → if so, requires BOTH
-    `PROJECT_STATE.md` and `short_desc.md` in the changed set, else exit code 2 with a
-    STDERR message naming the missing doc(s).
+    `PROJECT_STATE.md` and `backend_short_desc.md` (then `short_desc.md`) in the changed
+    set, else exit code 2 with a STDERR message naming the missing doc(s).
   - plan_tweak.md is a **non-blocking reminder** only (printed to STDERR, still exit 0)
     when the engine changed but the tweak register wasn't touched — it can't be judged
     mechanically, so forcing it would produce fake entries.
@@ -443,7 +445,39 @@ Status legend: ⬜ Not started · 🔄 In progress · ✅ Done · ⚠️ Blocked
   (LR/RF/LGBM on `risk_tier.csv`), both to throwaway `--output-dir` temp folders. Example
   outputs in the doc are real (redaction not needed — synthetic sample data only). No data
   or real outputs committed; temp dirs removed after capture.
-- Prompt archived to `prompts/doc_runbook.md`.
+- Prompt archived to `prompts/doc_runbook.md` (now at `prompts/docs/doc_runbook.md`).
+
+## Completed this session (Repo reorg / housekeeping — 2026-06-16)
+
+> Docs/tooling/layout only — **no `backend/classifyos` pipeline code touched, no behaviour
+> changed.** Prompt archived to `prompts/tooling/reorg.md`.
+
+- **Removed the doc-update Stop hook.** Deleted `scripts/check_docs_updated.py` (the
+  `scripts/` folder is now empty/gone) and emptied `.claude/settings.json` to `{}` so the
+  `Stop` hook no longer fires. Rationale: the hook could detect that files changed but not
+  that docs were *meaningfully* updated, and missed cases anyway. Doc-update discipline now
+  lives in the phase PROMPTS + CLAUDE.md working-style rules instead.
+- **Reorganised `prompts/` into subfolders** (via `git mv`, history preserved):
+  `backend_phases/` (`phase_01`…`phase_07`), `api_phases/` + `frontend_phases/` (empty,
+  `.gitkeep`), `tooling/` (`tool_dev_run.md`, `tool_doc_hook.md`, `reorg.md`), `docs/`
+  (`doc_runbook.md`). Added `prompts/README.md` explaining the scheme. Earlier session-log
+  entries above still cite the old flat `prompts/X.md` paths (accurate as of their date) —
+  every prompt now lives under one of these subfolders.
+- **Renamed `short_desc.md` → `backend_short_desc.md`** (`git mv`) and updated references in
+  CLAUDE.md, plan_tweak.md, and the active parts of this file. Noted the future plan:
+  `api_short_desc.md` + `frontend_short_desc.md` will join it, each opening with a shared
+  short "About ClassifyOS" header then surface-specific summaries.
+- **Phase 7 entry in `backend_short_desc.md`: verified present and accurate** (overall +
+  ModelRunner + plot_results + CLI + run outputs), checked against `runner.py` / `plots.py` /
+  `cli.py`. The reorg prompt assumed it was missing (and that Phase 4 was skipped); in fact
+  **both Phase 4 and Phase 7 entries were already present and correct** — no backfill needed,
+  nothing silently skipped.
+- **CLAUDE.md fixes**: stale CLI example (`data/samples/lapse.csv` → `policy_lapse.csv`);
+  working-style now states doc updates are enforced by prompts, not a hook; documented the
+  `prompts/` subfolder scheme and the `backend_short_desc.md` rename + future siblings.
+- Archived prompt files are left **verbatim** (governance: they are the historical record of
+  what was actually asked), so their internal `short_desc.md` references are intentionally
+  unchanged — see the note in the wrap-up summary.
 
 ## Completed earlier (scaffold session)
 
@@ -532,4 +566,5 @@ Contract doc: docs/api_contract.md — stub only.
 | 2026-06-15 | Phase 6 — Sections 10–13 (6 wrappers + registry + evaluate_model + classify) + tests | 117 tests passing (47 new); ModelWrapper ABC + shared template base; class_weight→sample_weight uniform; SVM via CalibratedClassifierCV; XGBoost internal label-encode; xgboost/lightgbm added + requirements.lock pinned; prompt archived; plan_tweak rows 20–22 added |
 | 2026-06-15 | Phase 7 — Sections 14–16 (plot_results + ModelRunner + CLI) + tests | 130 tests passing (13 new); ModelRunner deep-copy config isolation + corrected order + robust per-algo failures; plot1/2/3/5 with placeholder fallbacks; CLI inspect/run with load_dotenv; engine feature-complete; real-data run on iris (LR/RF/XGB/LGBM, acc 0.93–0.97); prompt archived; plan_tweak row 23 added |
 | 2026-06-15 | Docs — RUNBOOK.md (how to run the engine + interpret outputs) | Command-first operator's manual added (setup/inspect/run/outputs/re-run-overwrite/troubleshooting); all claims derived from code + verified with live --inspect + binary + multiclass runs; prompt archived to prompts/doc_runbook.md |
+| 2026-06-16 | Housekeeping — prompts/ reorg, removed doc Stop hook, renamed short_desc.md→backend_short_desc.md | `prompts/` split into backend_phases/api_phases/frontend_phases/tooling/docs (+ README); `scripts/check_docs_updated.py` + Stop hook deleted; CLAUDE.md/plan_tweak/PROJECT_STATE references updated; Phase 7 (and Phase 4) short_desc entries verified already present + accurate; no engine code touched; prompt archived to prompts/tooling/reorg.md |
 | | | |

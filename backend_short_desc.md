@@ -74,11 +74,11 @@ anyone returning after a break who wants the gist without reading code.
 - Outputs written for every run: a per-customer predictions table, a model-comparison scoreboard, a per-class breakdown, a JSON "run profile" (an audit record of exactly what was run), and the six charts.
 - First real-data run: pointed the tool at a real dataset and trained four algorithms end-to-end — 93–97% accuracy — confirming the whole engine works outside the synthetic samples.
 
-## Tooling — Doc-update enforcement hook (✅ Done, 2026-06-15)
-**In one line:** Added a safety net that won't let a coding session finish if it changed the ML engine but forgot to update the project's living docs.
-- `scripts/check_docs_updated.py`: checks (via git) whether any pipeline code under `backend/classifyos/` changed; if so, it requires both PROJECT_STATE.md and short_desc.md to have been updated too.
-- Registered as a Claude Code "Stop" hook in `.claude/settings.json` — it runs automatically when a turn ends and blocks finishing until the docs are updated.
-- Doc-only, test-only, or config-only sessions are never blocked; plan_tweak.md is a gentle reminder only (it can't be judged mechanically).
+## Tooling — Doc-update enforcement hook (✅ Done 2026-06-15, ❌ Removed 2026-06-16)
+**In one line:** Briefly added a safety net that wouldn't let a coding session finish if it changed the ML engine but forgot to update the project's living docs — then removed it as ineffective.
+- `scripts/check_docs_updated.py`: checked (via git) whether any pipeline code under `backend/classifyos/` changed; if so, it required both PROJECT_STATE.md and backend_short_desc.md to have been updated too.
+- Was registered as a Claude Code "Stop" hook in `.claude/settings.json`.
+- **Removed 2026-06-16:** the hook could detect that files changed but not that the docs were *meaningfully* updated, and it missed cases anyway. Doc-update discipline now lives in the phase prompts instead (and in CLAUDE.md's working-style rules). The script and the hook entry are gone.
 
 ## RUNBOOK.md — operator's manual (✅ Done, 2026-06-15)
 **In one line:** RUNBOOK.md added — a plain, command-first guide to running the ML engine from the terminal and reading the results, written against the real CLI and verified with live runs.
@@ -91,4 +91,5 @@ anyone returning after a break who wants the gist without reading code.
 - **CLAUDE.md** — the conventions and hard rules (what must never be violated).
 - **PROJECT_STATE.md** — the live status: what's done, decisions made, known issues, next steps.
 - **plan_tweak.md** — the honest register of where we deviated from the original signed plan and why.
-- **short_desc.md** (this file) — the plain-language phase-by-phase summary.
+- **backend_short_desc.md** (this file) — the plain-language phase-by-phase summary of the
+  ML engine. (Future siblings: `api_short_desc.md`, `frontend_short_desc.md`.)

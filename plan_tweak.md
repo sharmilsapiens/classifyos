@@ -41,4 +41,12 @@
   left open. Most are deliberate, recorded decisions (see PROJECT_STATE.md decisions log).
 - The two rows a reviewer should weigh most at sign-off: **#4** (pipeline-order correction
   vs. the scope diagram) and **#5** (synthetic data — metrics not yet representative).
-- See `short_desc.md` for plain-language phase summaries, CLAUDE.md for the hard rules.
+- See `backend_short_desc.md` for plain-language phase summaries, CLAUDE.md for the hard rules.
+
+## Housekeeping note (2026-06-16)
+
+Repo reorg session (prompt: `prompts/tooling/reorg.md`): organised `prompts/` into
+subfolders, removed the doc-update Stop hook (`scripts/check_docs_updated.py` +
+`.claude/settings.json` entry), renamed `short_desc.md` → `backend_short_desc.md`, and
+backfilled/verified the Phase 7 summary. **No scope deviation (repo housekeeping only)** —
+no engine code touched, no behaviour changed.

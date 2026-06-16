@@ -71,7 +71,11 @@ prompts/    Archived generation prompts (governance requirement)
 - Default metrics stance: F1-weighted is primary; MCC and PR-AUC alongside Accuracy on
   imbalanced problems.
 - Every generated section gets a unit test on real sample data before integration.
-- Generation prompts are archived in prompts/section_NN_name.md (governance requirement).
+- Generation prompts are archived under `prompts/` (governance requirement), organised into
+  subfolders by surface: `backend_phases/` (engine, `phase_NN_*.md`), `api_phases/`,
+  `frontend_phases/`, `tooling/` (dev/tooling/housekeeping prompts), `docs/` (documentation
+  prompts). See `prompts/README.md` for where a new prompt lands. Archived prompts are kept
+  verbatim as the historical record.
 
 ## Environment record (installed versions — for machine migration)
 
@@ -105,8 +109,8 @@ cd frontend
 npm install
 npm run dev          # Vite dev server, proxies /api → :8000
 
-# ML engine standalone
-python -m classifyos.cli --file data/samples/lapse.csv --target will_lapse --inspect
+# ML engine standalone (--file is a key relative to DATA_DIR)
+python -m classifyos.cli --file policy_lapse.csv --target will_lapse --inspect
 ```
 
 Env vars (backend/.env): `DATA_DIR`, `OUTPUT_DIR`, `CORS_ORIGINS`.
@@ -136,10 +140,15 @@ Product Recommendation (multilabel).
 ## Working style
 
 - One section/phase per session where possible. Generate → unit test on real CSV → integrate.
-- After completing work, UPDATE PROJECT_STATE.md: what was completed, decisions made,
-  known issues, next steps. This file is synced to the planning Claude Project.
-- At the end of every phase, update short_desc.md (one-line summaries) and plan_tweak.md
-  (any new deviation/assumption).
+- **Doc updates are enforced via the phase prompts, not a hook.** At the end of EVERY session
+  that changes engine code, update PROJECT_STATE.md and backend_short_desc.md; update
+  plan_tweak.md only if a real deviation/assumption occurred (do not invent entries).
+- PROJECT_STATE.md is the live status (what was completed, decisions, known issues, next
+  steps); it is synced to the planning Claude Project after each update.
+- `backend_short_desc.md` holds the plain-language one-line phase summaries for the engine.
+  (Future: `api_short_desc.md` and `frontend_short_desc.md` when those surfaces are built;
+  each will open with a shared short "About ClassifyOS" header, then its own surface-specific
+  summaries.)
 - If a library API call is uncertain, verify against the installed version (hallucination
   check is a governance requirement) — run a quick import/dir check rather than guessing.
 - MANDATORY before committing any generated section: save the exact generation prompt
