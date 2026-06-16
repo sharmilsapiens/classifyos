@@ -181,20 +181,24 @@ def _space_randomforest(trial: Any, ov: Any) -> dict[str, Any]:
 
 
 def _space_logreg(trial: Any, ov: Any) -> dict[str, Any]:
-    """LogisticRegression space — C plus a compatible solver/penalty pair.
+    """LogisticRegression space — regularisation strength ``C`` only.
 
-    Only valid (solver, penalty) combinations are offered; an arbitrary product would
-    produce invalid sklearn configurations (e.g. ``lbfgs`` cannot use an L1 penalty).
+    Only ``C`` is tuned; the solver/penalty are left at the wrapper defaults (``lbfgs`` + L2).
+    Two reasons the older "compatible solver/penalty pairs" idea was dropped (both verified
+    against the installed scikit-learn 1.9):
+
+    * **``penalty`` is deprecated** (warns since 1.8, slated for removal in 1.10) — passing it
+      raises a ``FutureWarning``; the replacement is ``C`` / ``l1_ratio``.
+    * **``liblinear`` rejects multiclass** (``n_classes >= 3``) — offering it as a choice made
+      every liblinear trial error on multiclass targets.
+
+    Tuning the regularisation *type* cleanly now needs ``solver="saga"`` + ``l1_ratio``, which
+    is markedly slower per fit and risks non-convergence at our fixed ``max_iter`` — deferred.
+    ``C`` is LR's dominant knob regardless, and tuning it alone is warning-free and works
+    identically for binary and multiclass.
     """
-    combo = trial.suggest_categorical(
-        "solver_penalty",
-        _ch(ov, "solver_penalty", ["lbfgs|l2", "liblinear|l2", "liblinear|l1"]),
-    )
-    solver, penalty = combo.split("|")
     return {
         "C": trial.suggest_float("C", **_b(ov, "C", low=1e-3, high=1e2, log=True)),
-        "solver": solver,
-        "penalty": penalty,
     }
 
 

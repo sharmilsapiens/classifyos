@@ -5,7 +5,7 @@
 > planning/overseer chat stays in sync with the local repo.
 
 **Last updated:** 2026-06-16
-**Updated by:** Claude Code (Phase 7B — Optuna hyperparameter tuning layer)
+**Updated by:** Claude Code (Phase 7B — Optuna tuning layer; + LR-space sklearn-1.9 fix)
 **Repo tag / commit:** 236a0a0 (prompts reorg) + Phase 7B commit pending
 
 ---
@@ -110,6 +110,7 @@ Status legend: ⬜ Not started · 🔄 In progress · ✅ Done · ⚠️ Blocked
 | 2026-06-16 | Best params are read from `study.best_trial.user_attrs["tuned_params"]`, NOT `study.best_params` | A search-space function may transform a suggestion (e.g. the LogisticRegression `"solver|penalty"` categorical splits into two estimator kwargs); reading the stored derived params guarantees the returned dict is exactly what was scored |
 | 2026-06-16 | `tuning.timeout_seconds` default is a **hard 600s per model**, NOT `None` (the prompt's literal default) — explicit `None` still accepted as an opt-out | With `models=[]` (tune-all) + `n_trials=30`, an unbounded default would run a 30-trial study for every algorithm incl. the slow calibrated-SVM. A finite ceiling makes a tuning run impossible to leave unbounded; a study stops at the timeout OR the trial cap, whichever first |
 | 2026-06-16 | Per-model isolation: each model's study runs in its own try/except — a study that errors (or whose every trial fails, e.g. an inverted-bound override) returns `{}` and the model falls back to defaults, never aborting the run (same pattern as the Phase 6/7 per-algo isolation) | "One bad model must not kill the run" extended to tuning; robustness on real data / extreme configs |
+| 2026-06-16 | **Phase 7B follow-up**: LogisticRegression tuning space reduced to `C` only (dropped the solver/penalty pairs) | sklearn 1.9 deprecated the `penalty` arg (FutureWarning, removal in 1.10) and `liblinear` rejects multiclass (`n_classes >= 3`) — the pairs warned on every fit and hard-errored on multiclass targets (surfaced by a user tuning LR on 3-class iris). Clean penalty-type tuning needs `saga` + `l1_ratio` (slow / convergence risk) — deferred. plan_tweak row 26 |
 
 ---
 
@@ -414,9 +415,10 @@ Status legend: ⬜ Not started · 🔄 In progress · ✅ Done · ⚠️ Blocked
   **untouched**). One uniform mechanism for all six models:
   - **Per-model studies.** One Optuna `study` per model, TPE sampler seeded from
     `random_state`, `direction="maximize"` the configured metric. `SEARCH_SPACES` holds one
-    function per model — **rich** spaces for XGBoost / LightGBM / RandomForest /
-    LogisticRegression, **honestly minimal** for SVM (slow — calibrated CV per trial) and
-    NaiveBayes (only `var_smoothing`; rarely moves). Per-model **bound overrides** via
+    function per model — **rich** spaces for the tree models XGBoost / LightGBM /
+    RandomForest, **thinner** for the rest (LogisticRegression tunes `C` only — see the
+    2026-06-16 follow-up; SVM is slow — calibrated CV per trial; NaiveBayes only
+    `var_smoothing`, rarely moves). Per-model **bound overrides** via
     `tuning.search_space_overrides`.
   - **[RISK] leakage-safe scoring.** Every trial is scored INSIDE the train split only —
     k-fold CV (default; `cv_folds`) or a single train-internal split (`cv=False`). The test
@@ -451,7 +453,8 @@ Status legend: ⬜ Not started · 🔄 In progress · ✅ Done · ⚠️ Blocked
   timeout honored (scorer stubbed → bounded, can't hang); single-split alternative;
   config-not-mutated; LR solver/penalty validity; tune-list resolution; all six models have
   a space; default timeout bounded; runner tunes only the requested model + records the
-  audit. **147 passed** (130 prior + 17 new) — no regressions. **Speed:** the tuning file
+  audit; LR tunes C only + a multiclass no-failed-trials regression guard (2026-06-16
+  follow-up). **148 passed** (130 prior + 18 Phase 7B) — no regressions. **Speed:** the tuning file
   runs in ~20s (tests cap search-space bounds + disable interaction auto-discovery; never
   tune SVM/NaiveBayes); full suite 3m29s.
 - **Real-data CLI run** (`--output-dir` to a temp dir, not committed): `--file
@@ -608,7 +611,7 @@ Contract doc: docs/api_contract.md — stub only.
 ## Governance checklist (from scope §12)
 
 - [x] Prompt version control — prompts/ populated per section (phase_01_skeleton.md, phase_02_feature_impact.md, phase_03_preprocess.md, phase_04_feature_engineering.md, phase_05_class_balance.md, phase_06_models_eval.md, phase_07_runner.md, phase_07B_tuning.md archived)
-- [x] Section-level unit tests passing on real data (147 passing: 22 Phase 1 + 5 Phase 2 + 14 Phase 3 + 19 Phase 4 + 10 Phase 5 + 47 Phase 6 + 13 Phase 7 + 17 Phase 7B)
+- [x] Section-level unit tests passing on real data (148 passing: 22 Phase 1 + 5 Phase 2 + 14 Phase 3 + 19 Phase 4 + 10 Phase 5 + 47 Phase 6 + 13 Phase 7 + 18 Phase 7B)
 - [ ] [RISK] comments reviewed by team lead (3 Phase 1 + 2 Phase 2 + 4 Phase 3 + Phase 4 poly-cap/ratio-denominator/auto-discovery-pool/re-discovery-leakage + 4 Phase 5 train-only/tiny-minority/undersample-discards/multilabel + Phase 6 proba-shape-order/accuracy-misleads/SVM-no-importance + Phase 7B tuning-CV-leakage/per-fold-balancing-deferred/runaway-timeout-cap/per-model-isolation, pending review)
 - [ ] Leakage audit (encoder/scaler/SMOTE train-only) confirmed — encoder/scaler/imputer (Phase 3), feature-engineering/interaction stats (Phase 4) and balancing (Phase 5) all train-only, enforced by design + dedicated leakage tests (binning edges, MI auto-discovery, test-set-untouched). SMOTE/undersample are train-only by construction (the balancer takes no test argument). Phase 6 models fit on the balanced TRAIN matrices only; evaluate_model/classify only ever read the untouched test set. Phase 7B tuning scores every trial with CV *inside the train split only* (the test set is never passed to `tune_model`), and balancing is applied only to the final fit, not inside the CV folds
 - [ ] Output schema contract locked (post Phase 8)
@@ -637,4 +640,5 @@ Contract doc: docs/api_contract.md — stub only.
 | 2026-06-16 | Housekeeping — prompts/ reorg, removed doc Stop hook, renamed short_desc.md→backend_short_desc.md | `prompts/` split into backend_phases/api_phases/frontend_phases/tooling/docs (+ README); `scripts/check_docs_updated.py` + Stop hook deleted; CLAUDE.md/plan_tweak/PROJECT_STATE references updated; Phase 7 (and Phase 4) short_desc entries verified already present + accurate; no engine code touched; prompt archived to prompts/tooling/reorg.md |
 | 2026-06-16 | Phase 7B — Section 8B Optuna hyperparameter tuning layer (`tuning.py`) + sanctioned config/runner/CLI edits + RUNBOOK section | 147 tests passing (17 new); OFF by default; one uniform per-model study, CV-in-train leakage-safe scoring, hard 600s/model timeout, per-model isolation; AutoML pulled v1.5→v1.0 (plan_tweak 24–25); optuna 4.9.0 added + pinned; real-data CLI `--tune` run verified; prompt archived to prompts/backend_phases/phase_07B_tuning.md |
 | 2026-06-16 | Tooling — added `backend/run_tests.ps1` (venv-Python pytest runner; forwards args, no activation needed) + RUNBOOK note | Convenience only; **no engine code touched, no behaviour change** (so backend_short_desc/plan_tweak deliberately not updated). Commit ad44354 |
+| 2026-06-16 | Phase 7B follow-up — LogisticRegression tuning space → `C` only | Fixed FutureWarning (`penalty` deprecated, sklearn 1.9) + multiclass `liblinear` errors surfaced by a real LR-on-iris tuning run; +1 multiclass regression test (148 total); decisions log + plan_tweak row 26 + backend_short_desc updated |
 | | | |

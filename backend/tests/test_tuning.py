@@ -290,19 +290,44 @@ def test_config_not_mutated_by_tune_model(binary_matrices) -> None:
 
 
 def test_logreg_space_is_valid(binary_matrices) -> None:
-    """The LogisticRegression space yields a compatible solver/penalty pair + C."""
+    """The LogisticRegression space tunes C only — no deprecated penalty/solver args."""
     bm = binary_matrices
     cfg = _lapse_config(
         algorithms=["LogisticRegression"],
         tuning=_tuning_cfg(models=["LR"], n_trials=4),
     )
     best = tune_model("LogisticRegression", bm.X_train, bm.y_train, "binary", cfg)
-    assert {"C", "solver", "penalty"}.issubset(best)
-    assert (best["solver"], best["penalty"]) in {
-        ("lbfgs", "l2"),
-        ("liblinear", "l2"),
-        ("liblinear", "l1"),
-    }
+    assert "C" in best and best["C"] > 0
+    # solver/penalty are intentionally NOT tuned (sklearn 1.9 deprecated `penalty`;
+    # `liblinear` breaks multiclass) — they must stay at the wrapper defaults.
+    assert "penalty" not in best and "solver" not in best
+
+
+def test_logreg_tuning_multiclass_no_failed_trials(multiclass_matrices, monkeypatch) -> None:
+    """LR tuning on a 3-class target runs every trial to completion (regression guard).
+
+    With the old solver/penalty space, ``liblinear`` trials errored on multiclass; here every
+    trial must fit cleanly, so build_model is called exactly n_trials × cv_folds times.
+    """
+    mm = multiclass_matrices
+    calls = {"n": 0}
+    real_build = tuning.build_model
+
+    def _counting(*args, **kwargs):
+        calls["n"] += 1
+        return real_build(*args, **kwargs)
+
+    monkeypatch.setattr(tuning, "build_model", _counting)
+    cfg = build_config(
+        "risk_tier.csv",
+        "risk_tier",
+        ["age", "bmi"],  # placeholders; tune_model scores the matrices passed in
+        problem_type="multiclass",
+        tuning=_tuning_cfg(models=["LR"], n_trials=3, cv_folds=2),
+    )
+    best = tune_model("LogisticRegression", mm.X_train, mm.y_train, "multiclass", cfg)
+    assert "C" in best
+    assert calls["n"] == 3 * 2  # no trial errored mid-fold
 
 
 # --------------------------------------------------------------------------- #

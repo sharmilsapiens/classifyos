@@ -153,3 +153,8 @@ Deviations from the prompt's literal spec, all sanctioned and recorded in plan_t
   `class_weight` is passed through to `build_model` during tuning (mild approximation, noted).
 - **CLI flags added** (sanctioned `cli.py` edit): `--tune`, `--tune-models`, `--tune-metric`,
   `--trials`, `--timeout`, `--tune-cv-folds`.
+- **LogisticRegression space tunes `C` only** (follow-up fix, 2026-06-16) — the prompt's
+  "penalty/solver compatible pairs" use scikit-learn's `penalty` arg, which is deprecated in
+  the installed sklearn 1.9 (FutureWarning, removal in 1.10), and `liblinear` rejects
+  multiclass; both surfaced when a user tuned LR on the 3-class iris set. Penalty-type tuning
+  via `saga` + `l1_ratio` is deferred (slow / convergence risk). plan_tweak row 26.
