@@ -12,12 +12,13 @@ stream back and populate charts/tables. The ML engine has NO web dependencies �
 importable and runnable standalone via CLI.
 
 ```
-frontend/   React (Vite + TS) — 13 pages, charts, typed API client
+frontend/   React (Vite + TS) — 13 pages, shadcn/ui, charts, typed API client (Phase 9, in progress)
 backend/
-  classifyos/   ML engine (the "16 sections", split into modules)
-  api/          FastAPI layer — routes, RunConfig (Pydantic), serializers
+  classifyos/   ML engine (the "16 sections" + 8B tuning + curves helper, split into modules)
+  api/          FastAPI layer (Phase 8, done) — routes, RunConfig (Pydantic), serializers
   tests/        pytest — one test file per section + API tests
 prompts/    Archived generation prompts (governance requirement)
+docs/       api_contract.md — the LOCKED /api/v1/run schema (schema_version 1.0)
 ```
 
 ## Directory & module map (logical section → physical file)
@@ -40,6 +41,8 @@ prompts/    Archived generation prompts (governance requirement)
 | 14 plot_results | backend/classifyos/evaluation/plots.py |
 | 15 ModelRunner | backend/classifyos/runner.py |
 | 16 CLI | backend/classifyos/cli.py |
+| 8B tune_model (Optuna) | backend/classifyos/tuning.py |
+| — curve points (ROC/PR) | backend/classifyos/evaluation/curves.py (Phase 8, shared by plot2 + API) |
 
 ## Critical constraints — NEVER violate
 
@@ -56,8 +59,15 @@ prompts/    Archived generation prompts (governance requirement)
 - **[RISK] comments.** Embed inline [RISK] comments at known risk points (leakage, imbalance,
   calibration, multicollinearity, threshold sensitivity). Never remove an existing [RISK]
   comment without documented rationale.
-- **API contract is locked after Phase 8.** The /api/run response schema lives in
-  docs/api_contract.md. Frontend code is generated against it; do not change it silently.
+- **API contract is LOCKED (Phase 8).** The `/api/v1/run` request/response schema lives in
+  `docs/api_contract.md` (schema_version 1.0, frozen). Frontend code is generated against it;
+  never change it silently — additive changes only, bumping the version.
+- **Single source of curve points.** `evaluation/curves.py` (`compute_curve_points`) computes
+  all ROC/PR curve points, shared by `plot_results` (plot2) and the API so the PNG and the JSON
+  can never drift. It reads held-out test predictions only — fits nothing.
+- **API is stateless.** A FastAPI process holds no model between requests. No feature may assume
+  a previous request's state persists in v1.0 (this is why `/explain` is a stub until v2.0 model
+  persistence). The API WRAPS the engine — it never reimplements ML logic.
 
 ## Conventions
 
@@ -67,6 +77,12 @@ prompts/    Archived generation prompts (governance requirement)
   feature_importance`. predict_proba returns shape (n, n_classes) for every problem type.
 - All routes under `/api/v1/`. CORS uses an env-configured allowlist — never `["*"]` outside
   local dev.
+- **Frontend (Phase 9+):** React (Vite + TypeScript), built in slices (9a foundation → 9b
+  result pages → 9c remaining + polish). Uses **shadcn/ui** for components. Design language:
+  simple, vibrant, clear, easy to use — strong hierarchy, obvious primary actions, accessible
+  contrast. The typed API client mirrors `docs/api_contract.md` exactly (never invent/rename
+  fields — flag gaps instead). PNGs are fetched on demand via `/outputs/{name}`, never inlined.
+  Chart library + concrete design tokens are fixed in 9a (record the choice in PROJECT_STATE).
 - Type hints + docstrings on every public function. Pydantic v2 style validators.
 - Default metrics stance: F1-weighted is primary; MCC and PR-AUC alongside Accuracy on
   imbalanced problems.
