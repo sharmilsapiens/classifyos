@@ -1,35 +1,36 @@
 /* The route table. Each URL maps to a page; all pages render inside <AppLayout>
-   (sidebar + topbar). 9a built Overview / Upload / Configuration / Pipeline; 9b
-   adds the result pages (Feature Impact, Interactions, Confusion, Class Report,
-   ROC/PR, Predictions). The remaining entries (Explainability, Setup, Risks) are
-   still stub routes, filled in during 9c. */
+   (sidebar + topbar). 9a built Overview / Upload / Configuration; 9b added the
+   result pages (Feature Impact, Interactions, Confusion, Class Report, ROC/PR,
+   Predictions); 9c added the last three (Explainability, Setup, Risks) and MERGED
+   the old Pipeline page into Overview — so /pipeline now redirects to "/". */
 
-import { Route, Routes } from "react-router-dom"
+import { Navigate, Route, Routes } from "react-router-dom"
 
 import { AppLayout } from "@/components/layout/AppLayout"
-import { NAV_ITEMS } from "@/lib/nav"
 import Overview from "@/pages/Overview"
 import UploadPage from "@/pages/Upload"
 import Configure from "@/pages/Configure"
-import Pipeline from "@/pages/Pipeline"
 import FeatureImpact from "@/pages/FeatureImpact"
 import Interactions from "@/pages/Interactions"
 import ConfusionMatrix from "@/pages/ConfusionMatrix"
 import ClassReport from "@/pages/ClassReport"
 import Curves from "@/pages/Curves"
 import Predictions from "@/pages/Predictions"
-import { StubPage } from "@/pages/StubPage"
+import Explainability from "@/pages/Explainability"
+import SetupGuide from "@/pages/SetupGuide"
+import RiskRegister from "@/pages/RiskRegister"
 import NotFound from "@/pages/NotFound"
 
 function App() {
   return (
     <Routes>
       <Route element={<AppLayout />}>
-        {/* Workspace screens (9a) */}
+        {/* Workspace screens */}
         <Route path="/" element={<Overview />} />
         <Route path="/upload" element={<UploadPage />} />
         <Route path="/configure" element={<Configure />} />
-        <Route path="/pipeline" element={<Pipeline />} />
+        {/* 9c: Pipeline merged into Overview — keep the old link working. */}
+        <Route path="/pipeline" element={<Navigate to="/" replace />} />
 
         {/* Result pages (9b) */}
         <Route path="/feature-impact" element={<FeatureImpact />} />
@@ -38,11 +39,11 @@ function App() {
         <Route path="/class-report" element={<ClassReport />} />
         <Route path="/curves" element={<Curves />} />
         <Route path="/predictions" element={<Predictions />} />
+        <Route path="/explainability" element={<Explainability />} />
 
-        {/* Stub routes — remaining nav entries render a placeholder (9c). */}
-        {NAV_ITEMS.filter((item) => item.stub).map((item) => (
-          <Route key={item.path} path={item.path} element={<StubPage item={item} />} />
-        ))}
+        {/* Reference pages (9c) */}
+        <Route path="/setup" element={<SetupGuide />} />
+        <Route path="/risks" element={<RiskRegister />} />
 
         {/* Anything else */}
         <Route path="*" element={<NotFound />} />

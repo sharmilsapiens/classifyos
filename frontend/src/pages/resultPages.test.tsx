@@ -136,8 +136,9 @@ describe("failed-model handling", () => {
       error: "fit failed: out of memory",
     })
     renderPage(<Overview />, withFailed)
-    // The failed model is shown (never silently dropped), marked failed.
-    expect(screen.getByText(/SVM/)).toBeInTheDocument()
+    // The failed model is shown (never silently dropped), marked failed. (The
+    // merged Overview shows it in both the algorithm chips and the scoreboard.)
+    expect(screen.getAllByText(/SVM/).length).toBeGreaterThan(0)
     expect(screen.getByText(/\(failed\)/i)).toBeInTheDocument()
   })
 })

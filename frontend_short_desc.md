@@ -70,14 +70,14 @@ the current run configuration, the last `/run` result, and the loading/error fla
   artifact downloads, and the raw result envelope. (Rich charts/tables are 9b.) A real
   Upload→Configure→Run round-trip was verified against a live backend.
 
-## The 13 canonical pages
+## The 12 canonical pages (Phase 9 complete)
 
-Overview · Upload Data · Configuration · Pipeline · Feature Impact · Interaction Features ·
-Confusion Matrix · Class Report · ROC / PR Curves · Predictions Table · Explainability ·
-Setup Guide · Risk Register. **Real screens after 9b:** Overview, Upload, Configuration,
-Pipeline (9a) plus Feature Impact, Interaction Features, Confusion Matrix, Class Report,
-ROC / PR Curves, Predictions Table (9b). **Still stubs (9c):** Explainability, Setup Guide,
-Risk Register.
+Overview · Upload Data · Configuration · Feature Impact · Interaction Features · Confusion
+Matrix · Class Report · ROC / PR Curves · Predictions Table · Explainability · Setup Guide ·
+Risk Register. **All 12 are real screens.** 9a built Overview/Upload/Configuration; 9b built the
+six result pages; 9c built the last three (Explainability, Setup Guide, Risk Register). The
+**separate "Pipeline" page was merged into Overview in 9c** — so the nav went from 13 → 12 items
+and `/pipeline` now redirects to `/` (old links keep working).
 
 ## The result pages (Phase 9b)
 
@@ -114,6 +114,39 @@ feature-impact ranking are drawn live from the contract data. The plot PNGs (plo
 fetched on demand via `outputUrl(name)`, never base64-inlined, and always guarded — a missing
 or placeholder artifact shows a friendly "not generated for this run" panel rather than a broken
 image.
+
+## The remaining pages + polish (Phase 9c — Phase 9 complete)
+
+The final slice finished the dashboard and merged two pages into one.
+
+- **Overview is now the merged run page.** The old separate "Pipeline" page is gone; its
+  behaviour lives in Overview, which shows four states in one continuous screen: **while running**
+  it lists the pipeline stages with a spinner (honest — `/run` is synchronous, so there is no live
+  log to stream); on **error** it distinguishes a 422 (invalid config) from a 400 (run error); with
+  **no run** it invites you to start; and once a run **completes** it shows the KPI band, the
+  per-model comparison, the active configuration, the full model scoreboard, the artifact
+  downloads, quick links, and the raw result envelope. The nav dropped to **12 items** and
+  `/pipeline` redirects to Overview so old links never break.
+- **Explainability** is an honest **v2.0-ready stub**. A SHAP explanation needs a model kept in
+  memory, and the API is stateless with no model registry — so `/explain` returns a structured
+  "unavailable" response. The page says so plainly, but still lets you pick a trained model and a
+  test-row index and hit **Explain**, which calls the real endpoint and renders its structured
+  reply (status + the server's own reason/message). The region where the SHAP waterfall will go is
+  clearly reserved so v2.0 only has to fill in the values, not rebuild the page.
+- **Setup Guide** is a static getting-started reference authored from the real docs (API_RUNBOOK,
+  RUNBOOK, the locked contract): an architecture diagram (React → FastAPI → engine), the run flow
+  (start uvicorn → upload → configure → run → explore/download), a 6-endpoint API reference, and an
+  honest list of v1.0 limitations.
+- **Risk Register** is a static page of risk → mitigation cards drawn from the engine's real
+  `[RISK]` points (leakage, imbalance, calibration, multicollinearity, threshold/temporal leakage,
+  probability-shape, GenAI governance) plus the governance checklist — each mitigation describing
+  what the code actually does. (Both static pages are authored from the docs because no API
+  endpoint exposes setup steps or risk notes; a live one would be a future additive v1.1 path.)
+- **Polish pass:** the sidebar stays usable when the window narrows (sticky, fixed-width, never
+  crushed; content scrolls, tables have horizontal scroll, charts stay inside their containers); the
+  Overview comparison chart gained an accessible `role="img"` label; chart tick contrast was nudged
+  up within the palette; and every page reuses the shared empty/loading/error states so none ever
+  shows a blank screen. Keyboard focus rings and reduced-motion (from 9a) are intact.
 
 ---
 

@@ -11,7 +11,7 @@ import { cn } from "@/lib/utils"
 
 export function Sidebar() {
   return (
-    <aside className="flex h-screen w-60 flex-col gap-1 overflow-y-auto border-r bg-card px-3 py-5">
+    <aside className="sticky top-0 flex h-screen w-60 shrink-0 flex-col gap-1 overflow-y-auto border-r bg-card px-3 py-5">
       {/* brand */}
       <div className="flex items-center gap-3 px-2 pb-4">
         <div className="grid h-8 w-8 place-items-center rounded-lg bg-gradient-to-br from-primary to-sky font-bold text-primary-foreground">

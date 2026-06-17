@@ -5,10 +5,9 @@
 > planning/overseer chat stays in sync with the local repo.
 
 **Last updated:** 2026-06-17
-**Updated by:** Claude Code (Phase 9b — React frontend result-rendering pages: Overview,
-Feature Impact, Confusion Matrix, Class Report, ROC/PR Curves, Predictions, Interactions —
-against the LOCKED contract)
-**Repo tag / commit:** 5c9dee8 (docs + Phase 9a) + Phase 9b commit pending
+**Updated by:** Claude Code (Phase 9c — React frontend remaining pages + polish: Explainability
+stub, Setup Guide, Risk Register, Overview/Pipeline merge, polish pass — **Phase 9 complete**)
+**Repo tag / commit:** 15eb709 (Phase 9b) + Phase 9c commit pending
 
 ---
 
@@ -74,7 +73,7 @@ written. Engine complete; ready for Phase 8 (FastAPI layer).
 | 7 | Plots + ModelRunner + CLI (Sections 14–16) | ✅ Done | ModelRunner (deep-copy config isolation, corrected order, robust per-algo failures) + plot_results (plot1/2/3/5) + CLI (load_dotenv, inspect/run modes); 13 tests; real-data run on iris done; engine feature-complete |
 | 7B | Optuna hyperparameter tuning (Section 8B) | ✅ Done | `tuning.py` (`tune_model`) — OFF by default; one uniform mechanism for all 6 models; CV-in-train trial scoring (leakage-safe); per-model isolation + hard 600s/model timeout; ModelRunner + config + CLI (`--tune…`) sanctioned edits; 17 tests; **AutoML pulled v1.5→v1.0** (plan_tweak 24–25) |
 | 8 | FastAPI layer | ✅ Done | 6 endpoints under `/api/v1/`; `/run` schema LOCKED (docs/api_contract.md); `curves.py` helper + plot2 refactor; `save_input` upload support; `/explain` stub; 36 tests (184 total) |
-| 9 | React dashboard (13 pages) | 🔄 In progress | **9a done** (foundation: Option A design + Recharts; shadcn/ui; typed client vs LOCKED contract; app shell + 13-page nav; round-trip verified live; 13 FE tests). **9b done** (the 6 result pages + Overview upgrade — Feature Impact, Confusion, Class Report, ROC/PR, Predictions, Interactions — against the LOCKED contract; binary+multiclass verified vs fixtures; 46 FE tests). Next: 9c (Explainability stub page, Setup Guide, Risk Register, polish) |
+| 9 | React dashboard (12 pages) | ✅ Done | **9a** (foundation: Option A design + Recharts; shadcn/ui; typed client vs LOCKED contract; app shell + nav; live round-trip; 13 FE tests). **9b** (6 result pages + Overview upgrade; binary+multiclass vs fixtures; 46 FE tests). **9c** (Explainability v2.0-ready stub wired to `/explain`; Setup Guide + Risk Register authored from the real docs; **Overview/Pipeline merged → 12 nav items**, `/pipeline` redirects to `/`; polish pass; 55 FE tests). Build clean. |
 | 10 | Unit tests (full pytest suite) | ⬜ Not started | |
 | 11 | Integration: 7 use cases E2E + governance sign-off | ⬜ Not started | |
 
@@ -138,6 +137,10 @@ Status legend: ⬜ Not started · 🔄 In progress · ✅ Done · ⚠️ Blocked
 | 2026-06-17 | **Phase 9b**: a captured **multiclass `/run` envelope** (`run_envelope_multiclass.json`, risk_tier LR+RF) was committed as a second test fixture alongside the 9a binary one | The prompt asked for a multiclass fixture "if not present"; produced via the real FastAPI `TestClient` so the JSON is contract-accurate (same serializer the browser sees). Lets render tests prove binary AND multiclass shapes without a live server |
 | 2026-06-17 | **Phase 9b**: plot3 (model feature-importance) placed on **Feature Impact**; plot5 (calibration) placed on **ROC/PR Curves** — both PNG-only artifacts the prompt listed without assigning a page | Topical homes: plot3 is about features, plot5 (probability calibration) sits with the other probability-diagnostic curves. A UX placement decision, not a deviation. PNGs guarded for absence (plot5 is a placeholder for multiclass) |
 | 2026-06-17 | **Phase 9b**: confusion matrix is a **custom CSS-grid heatmap** (not a chart lib); raw↔row-normalised toggle computes the normalisation **client-side** from the raw counts | The contract gives raw integer counts; row-normalisation is pure display math (each cell ÷ its row total), not a second ML pass — doing it in the browser keeps the engine the only place that computes anything ML |
+| 2026-06-17 | **Phase 9c**: **Overview and Pipeline merged into one page** (`pages/Overview.tsx`); the old Pipeline page is deleted and `/pipeline` redirects to `/` (`<Navigate replace>`). Nav went 13 → 12 items. Overview now renders four states: running (in-progress) → error → no-run → results (KPI band + comparison + scoreboard + artifacts + quick links + raw envelope) | The scope listed Overview and Pipeline separately, but they are the two ends of one flow (Configure → Run → watch → see results). One continuous screen matches the mental model; keeping the redirect means existing links/state never break. Recorded as plan_tweak 33 (page/nav count) |
+| 2026-06-17 | **Phase 9c**: the merged Overview "while running" state shows the **canonical pipeline stages as a static checklist** + a spinner, NOT a fake streaming "live log" | `/run` is synchronous — the engine returns everything in one response, so there is no incremental log to stream. Listing the real stages (RUNBOOK order) is honest; a faked live feed would imply streaming the API does not do |
+| 2026-06-17 | **Phase 9c**: Explainability is built as a **v2.0-ready stub** — a model + test-row picker that calls the real `/explain` endpoint, then renders the structured `unavailable` response (surfacing the server's own `reason`/`message`) with a clearly-stubbed "SHAP waterfall reserved for v2.0" region | Honours the frozen `/explain` stub (plan_tweak 29) without faking SHAP over null data. Exercising the real client→`/explain` path means v2.0 only fills `shap_values`/`base_value` into an already-designed layout, not rebuilds the page |
+| 2026-06-17 | **Phase 9c**: Setup Guide and Risk Register are **static pages authored from the real docs** (RUNBOOK/API_RUNBOOK/api_contract for setup; CLAUDE.md constraints + engine `[RISK]` themes + scope §12 governance for risks) — not from any API response | The setup steps and `[RISK]` notes live in engine source + markdown, not in any endpoint; exposing them as data would be a frozen-backend change. Authoring from the docs is accurate and decoupled. A future live `[RISK]`/setup endpoint is a clean additive v1.1 path (noted, not built) |
 
 ---
 
@@ -684,6 +687,68 @@ Status legend: ⬜ Not started · 🔄 In progress · ✅ Done · ⚠️ Blocked
   extended with the seven result pages + the interactive-vs-PNG rule. No `plan_tweak` entry — no
   real deviation (chart/UX choices recorded in the decisions log above).
 
+## Completed this session (Phase 9c — 2026-06-17) — Phase 9 COMPLETE
+
+> **Final frontend slice.** Backend untouched (frozen). Pure HTTP client of the LOCKED contract.
+> 9a foundation → 9b result pages → **9c remaining + polish**. All 12 pages are now real.
+
+- **Three new pages built:**
+  - **Explainability** (`pages/Explainability.tsx`) — a **v2.0-ready stub** that consumes the
+    EXISTING frozen `/explain` response (no fake SHAP). It gates on a completed run (so it can list
+    the trained models + features), shows an honest "Explainability is coming in v2.0" framing, and
+    lets the user pick a model + a clamped test-row index and hit **Explain** — which calls the real
+    `api.explain(...)` client. The structured `unavailable` response renders cleanly (status badge +
+    the server's own `reason`/`message`, verbatim), and a clearly-commented **`WaterfallPlaceholder`**
+    marks where the SHAP waterfall drops in once `shap_values`/`base_value` are populated (v2.0). The
+    null-field branch is the live path; the populated branch is coded so the contract shape is honoured.
+  - **Setup Guide** (`pages/SetupGuide.tsx`) — **static, authored from the real docs** (API_RUNBOOK
+    start-the-API steps, RUNBOOK engine flow, `docs/api_contract.md`): an architecture
+    React→FastAPI→engine diagram, the 5-step run flow (uvicorn :8000 → Upload → Configure → Run →
+    explore/download, mirroring the Vite dev proxy + real endpoints), a 6-endpoint API reference
+    table, and an **honest v1.0 limitations** section (sync `/run`/gateway timeout, `/explain` stub,
+    outputs overwritten, multilabel preliminary, synthetic sample data). A comment records WHY it is
+    static (no endpoint exposes setup/risks; a live `[RISK]`/setup endpoint is a future additive v1.1).
+  - **Risk Register** (`pages/RiskRegister.tsx`) — **static**, nine risk→mitigation cards authored
+    from `CLAUDE.md` "critical constraints" + the engine's actual `[RISK]` themes (leakage,
+    imbalance, tiny-minority SMOTE realism, calibration, multicollinearity from interactions,
+    threshold sensitivity, temporal leakage, proba shape/order, GenAI governance) — each mitigation
+    describing what the code actually does — plus the **governance checklist** (scope §12) showing
+    done vs the still-open Week-4 sign-offs.
+- **Overview + Pipeline merged** into one continuous page (`pages/Overview.tsx`); `Pipeline.tsx`
+  deleted, `/pipeline` redirects to `/` via `<Navigate replace>`, and `lib/nav.ts` dropped the
+  Pipeline entry → **13 → 12 nav items** (no `stub` flags left; `StubPage.tsx` deleted). Overview
+  now renders four states: **running** (canonical pipeline-stage checklist + spinner — honest, since
+  `/run` is synchronous and has no live log to stream), **error** (422 vs 400, as the old Pipeline
+  page did), **no-run** (invite), and **results** (the 9b KPI band + per-model comparison + active
+  config, plus the old Pipeline content: the full model scoreboard, artifact downloads, and the
+  collapsed raw envelope, + quick links). `Configure` now navigates to `/` on run.
+- **Polish pass:** sidebar made `shrink-0` + `sticky` so it stays usable when the window narrows
+  (content keeps `min-w-0`; every table is in an `overflow-x-auto` wrapper; charts stay inside
+  `ResponsiveContainer`). Added `role="img"` + `aria-label` to the Overview comparison chart
+  (matching the 9b curve charts). Reused the shared `EmptyState`/`LoadingState`/`ErrorState` on the
+  new pages — no blank screens. Bumped two axis tick colours from `#64748b` → `#475569` for stronger
+  contrast on chart labels (still within the slate token family). Native `<select>`/`<input>`,
+  visible `:focus-visible` rings, and `prefers-reduced-motion` (from 9a) keep keyboard/contrast intact.
+- **Tests (vitest + Testing Library, render-level):** new `pages/referencePages.test.tsx` (9 tests):
+  nav has exactly **12 items + no Pipeline** entry and includes the 3 new routes; merged Overview
+  renders the **in-progress** state and the **results** state from the binary fixture and shows a 422
+  distinctly; Explainability invites a run when empty, renders the honest framing, and the **Explain
+  action triggers the mocked `/explain` client** then surfaces the `unavailable` status + `reason` +
+  the reserved waterfall region without crashing on null fields; Setup Guide + Risk Register render
+  their key sections. Updated the 9b failed-model assertion (the merged Overview now shows a model in
+  both the chips and the scoreboard). **55 FE tests pass** (46 prior + 9 new); `npm run build` clean
+  (tsc + vite). True browser E2E (incl. the unverified multilabel path) remains Phase 10/11.
+- **Contract gaps flagged: none.** Explainability renders only the contract's `ExplainResponse`
+  fields; the new static pages touch no contract data.
+- **Hallucination check ✅** — verified against the INSTALLED, pinned versions: **react-router-dom
+  7.18.0** (`Navigate` confirmed a real export, used for the `/pipeline`→`/` redirect; `useNavigate`),
+  **recharts 3.8.1** (`BarChart`/`Bar`/`ResponsiveContainer` — unchanged usage), **vitest 4.1.9** +
+  **@testing-library/react 16.3.2** (`render`/`screen`/`fireEvent`/`waitFor`/`findByText`) +
+  **jest-dom 6.9.1**, **react 19.2.6**, **vite 8.0.x**, **typescript 6.0.x**, and `import.meta.env`
+  (existing). No new deps.
+- Prompt archived to `prompts/frontend_phases/phase_09c_remaining_polish.md`; `frontend_short_desc.md`
+  updated; `plan_tweak.md` row 33 added (the 13→12 page/nav merge).
+
 ## Completed this session (Doc-update enforcement hook — 2026-06-15) — ⚠️ REMOVED 2026-06-16
 
 > This hook was removed in the 2026-06-16 reorg session (see below). Kept here as a record.
@@ -788,12 +853,13 @@ Status legend: ⬜ Not started · 🔄 In progress · ✅ Done · ⚠️ Blocked
 
 ## In progress / partially done
 
-- **Phase 9 (React dashboard) — 9a + 9b complete, 9c remaining.** Foundation + the result pages
-  are built. **Real screens:** Overview, Upload, Configuration, Pipeline (9a) + Feature Impact,
-  Interaction Features, Confusion Matrix, Class Report, ROC/PR Curves, Predictions Table (9b).
-  **Stub routes (9c):** Explainability, Setup Guide, Risk Register. The backend (engine + API) is
-  unchanged/frozen behind it. Binary + multiclass result rendering verified against committed
-  fixtures; multilabel rendered-but-unverified.
+- **Phase 9 (React dashboard) — ✅ COMPLETE (9a + 9b + 9c).** All **12 pages** are real screens:
+  Overview (now the merged run page), Upload, Configuration, Feature Impact, Interaction Features,
+  Confusion Matrix, Class Report, ROC/PR Curves, Predictions Table, Explainability (v2.0-ready
+  stub), Setup Guide, Risk Register. The old Pipeline page was merged into Overview (`/pipeline`
+  redirects to `/`). The backend (engine + API) is unchanged/frozen behind it. Binary + multiclass
+  result rendering verified against committed fixtures; **multilabel rendered-but-unverified**
+  (Phase 10/11). Nothing in Phase 9 remains open — the next work is the Week-4 testing/governance.
 - `frontend/design-mockups/` holds the three throwaway design-option HTML mockups (Option A
   chosen) — kept as the provenance of the design pick; not part of the built app.
 
@@ -837,18 +903,24 @@ Status legend: ⬜ Not started · 🔄 In progress · ✅ Done · ⚠️ Blocked
 
 ## Next steps (priority order)
 
-1. Commit Phase 9b ("Phase 9b: result-rendering pages (Overview, Feature Impact, Confusion,
-   Class Report, ROC/PR, Predictions, Interactions) against the locked contract").
+1. Commit Phase 9c ("Phase 9c: Explainability stub + Setup Guide + Risk Register +
+   Overview/Pipeline merge + polish — Phase 9 complete").
 2. Upload updated PROJECT_STATE.md to the Claude Project knowledge.
-3. **Phase 9c — remaining pages + polish.** Build the **Explainability** page (the `/explain`
-   v1.0 structured stub — surface the "needs a persisted model (v2.0)" response cleanly), the
-   **Setup Guide** (start the API → upload → configure → run), and the **Risk Register** (the
-   [RISK] points: leakage, imbalance, calibration, threshold sensitivity). Then the
-   responsiveness/polish pass across all 13 pages (mobile/narrow layouts, focus order, final
-   contrast/spacing). Consider capturing a multilabel fixture if a multilabel run becomes
-   runnable, to firm up that path.
-4. v1.5/v2.0 backlog (unchanged): background-job `/run` (submit→poll→fetch) to beat gateway
-   timeouts; real `/explain` once model persistence (MLflow / a model registry) lands.
+3. **Phase 10 — full test suite.** Run the whole pytest suite + the frontend vitest suite, then
+   add the missing layer: **true browser E2E** (real browser → live uvicorn → engine → rendered
+   chart), which neither TestClient nor jsdom covers. See the **"Testing debt / untested paths"**
+   section above — that is the Phase 10 agenda (frontend E2E, render-internals, CORS by a real
+   browser).
+4. **Phase 11 — 7-use-case integration + governance sign-off.** Exercise all seven insurance use
+   cases end-to-end **including the unverified multilabel (Product Recommendation) path**
+   (resampling→class_weight fallback, multilabel curves/calibration — highest surprise risk),
+   establish a **performance baseline** on 10k+ rows (the "<5 min" target is unverified), revalidate
+   on **real (non-synthetic) data** if any arrives, and close the open governance items ([RISK]-comment
+   review, leakage-audit sign-off, per-phase sign-off by Naveen). Consider capturing a multilabel
+   `/run` fixture once a multilabel run is runnable, to firm up that frontend path.
+5. v1.5/v2.0 backlog (unchanged): background-job `/run` (submit→poll→fetch) to beat gateway
+   timeouts; real `/explain` once model persistence (MLflow / a model registry) lands (the
+   Explainability page is already wired and shaped for it).
 
 ---
 
@@ -893,4 +965,5 @@ Contract doc: `docs/api_contract.md` — frozen; changes must be additive and bu
 | 2026-06-17 | Phase 8 — FastAPI layer (`backend/api/`) + `/api/v1/run` schema LOCKED | 184 tests (36 new); 6 endpoints (health/upload/run/explain/outputs) driving ModelRunner/inspect_file, no ML added; sanctioned `evaluation/curves.py` helper + plot2 refactor; additive `StorageAdapter.save_input` for uploads; `/explain` v1.0 stub; sync `/run` via threadpool (background jobs → v1.5); `docs/api_contract.md` locked; `api_short_desc.md` created; plan_tweak 27–31; prompt archived to `prompts/api_phases/phase_08_fastapi.md` |
 | 2026-06-17 | Phase 9a — React frontend foundation (design pick + typed client + Upload→Configure→Run round-trip) | Owner chose **Option A "Clarity"** + **Recharts** from 3 mockups; Tailwind v4 + shadcn/ui design system (one token block); typed client mirrors the LOCKED contract exactly (no invented fields, no contract gaps); 13-page app shell + health banner + global store; Upload/Configure/Pipeline/Overview real, 9 stubs; **live round-trip + Vite proxy verified**; 13 FE tests (vitest); deps pinned + hallucination-checked; `frontend_short_desc.md` created; plan_tweak 32; prompt archived to `prompts/frontend_phases/phase_09a_foundation.md` |
 | 2026-06-17 | Phase 9b — React result-rendering pages (Overview upgrade + 6 result pages) against the LOCKED contract | Built Feature Impact / Confusion Matrix / Class Report / ROC-PR Curves / Predictions / Interaction Features + upgraded Overview; shared `ResultGate`/`ModelSelector`/`PngArtifact` + `lib/results` helpers; interactive-vs-PNG rule honored (plot PNGs fetched via `/outputs`, guarded for absence); read from the app store, no backend edits; captured a **multiclass** fixture (real TestClient) alongside the binary one; **46 FE tests** (33 new), build clean; binary+multiclass verified vs fixtures, multilabel rendered-but-unverified; no contract gaps; recharts 3.8.1 hallucination-checked; no plan_tweak (chart/UX in decisions log); prompt archived to `prompts/frontend_phases/phase_09b_result_pages.md` |
+| 2026-06-17 | Phase 9c — React remaining pages + polish (Explainability stub, Setup Guide, Risk Register, Overview/Pipeline merge) — **Phase 9 complete** | Built Explainability (v2.0-ready stub wired to the frozen `/explain`), Setup Guide + Risk Register (static, authored from RUNBOOK/API_RUNBOOK/api_contract + CLAUDE.md constraints + engine `[RISK]` themes); **merged Overview + Pipeline → 12 nav items**, `/pipeline` redirects to `/`, deleted `Pipeline.tsx`/`StubPage.tsx`; polish pass (sticky/shrink-0 sidebar, chart `aria-label`, contrast bump, shared empty/loading/error states); **55 FE tests** (9 new), build clean; no contract gaps; react-router-dom 7.18.0 `Navigate` + recharts 3.8.1 + vitest/Testing Library hallucination-checked; plan_tweak row 33 (13→12 page/nav); prompt archived to `prompts/frontend_phases/phase_09c_remaining_polish.md` |
 | | | |

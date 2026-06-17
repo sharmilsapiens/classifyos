@@ -4,7 +4,8 @@
    the global store's `form`; each control reads from it and writes back via
    updateForm(). The "Run pipeline" button validates the 3 required fields
    client-side (a friendlier first pass than waiting for the server's 422), then
-   triggers runPipeline() and navigates to the Pipeline page to watch it run.
+   triggers runPipeline() and navigates to Overview to watch it run (9c merged the
+   old Pipeline page into Overview — it shows the in-progress state then results).
 
    The option lists below MUST match the engine's allowed values
    (backend/classifyos/config.py) so a run never 422s on a bad enum. */
@@ -79,9 +80,9 @@ export default function Configure() {
   }
 
   function onRun() {
-    // Navigate first so the Pipeline page shows the in-progress state immediately,
+    // Navigate to Overview first so it shows the in-progress state immediately,
     // then kick off the (synchronous, possibly slow) run.
-    navigate("/pipeline")
+    navigate("/")
     void runPipeline()
   }
 
