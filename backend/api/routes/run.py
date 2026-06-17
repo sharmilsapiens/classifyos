@@ -1,0 +1,259 @@
+"""``POST /api/v1/run`` — execute a full classification run and return the locked schema.
+
+This is the heart of the API. The body is a :class:`RunConfig` (validated by FastAPI before
+this function runs). The function translates it into an engine config, runs the WHOLE
+pipeline through :class:`~classifyos.runner.ModelRunner` (exactly as the CLI does), and then
+**reshapes** the finished runner's state into the locked ``/api/v1/run`` response documented
+in ``docs/api_contract.md``. It adds no ML — every number here was produced by the engine.
+
+Two design points worth understanding as a reader:
+
+* **Why a threadpool?** ``ModelRunner.run()`` is ordinary synchronous, CPU-heavy Python
+  (training models can take seconds to minutes). If we called it directly inside this
+  ``async def`` endpoint, it would block FastAPI's single event loop — the server could not
+  even answer ``/health`` until the run finished. ``run_in_threadpool`` moves the blocking
+  work onto a worker thread so the server stays responsive.
+* **Synchronous + gateway-timeout limitation.** This endpoint blocks until the run completes
+  and returns the result in one response. A long run (big data, many algorithms, tuning on)
+  can exceed a reverse-proxy/gateway timeout. v1.0 accepts this; a background-job path
+  (submit → poll → fetch) is deferred to v1.5 (recorded in plan_tweak).
+"""
+
+from __future__ import annotations
+
+from typing import Any
+
+import pandas as pd
+from fastapi import APIRouter, Depends
+from fastapi.concurrency import run_in_threadpool
+from fastapi.responses import JSONResponse
+
+from classifyos.evaluation.curves import compute_curve_points
+from classifyos.io.storage import StorageAdapter
+from classifyos.runner import RESULTS_CSV_KEY, ModelRunner
+
+from ..artifacts import collect_artifacts
+from ..deps import get_storage
+from ..models import RunConfig, RunResponse
+from ..serialize import safe_jsonify
+
+router = APIRouter(tags=["run"])
+
+#: Per-model cap on the prediction rows returned for DISPLAY. The full per-sample table is
+#: always written to classification_results.csv (fetch via /outputs); the JSON carries only
+#: a preview so the response stays small. Confusion matrices and curves are NOT sampled —
+#: they are always computed on the FULL test set.
+PREDICTION_SAMPLE_PER_MODEL = 100
+
+# Substrings that mark an engineered interaction column (the naming convention in CLAUDE.md).
+_INTERACTION_MARKERS = ("_x_", "_div_", "_minus_")
+
+
+@router.post("/run", response_model=None)
+async def run_endpoint(
+    cfg: RunConfig,
+    storage: StorageAdapter = Depends(get_storage),
+) -> Any:
+    """Run the full pipeline for ``cfg`` and return the locked result envelope.
+
+    On a bad config (missing target, unknown enum, target in features, …) the engine's
+    ``build_config`` raises ``ValueError`` → HTTP 422. On a failure while executing
+    (e.g. the input file does not exist) we return the ``status="error"`` envelope with the
+    message. On success we return the full ``result`` block (run metadata, per-model metrics,
+    a sampled predictions preview, full-test confusion matrices, per-class reports, ranked
+    feature impact, ROC/PR curve points, and the artifact list).
+    """
+    # 1. Translate the web request into a validated engine config. build_config is the single
+    #    authoritative validator; a problem there is a client error (422), not a 500.
+    try:
+        engine_config = cfg.to_engine_config()
+    except ValueError as exc:
+        return JSONResponse(status_code=422, content={"detail": str(exc)})
+
+    # 2-3. Run the synchronous pipeline off the event loop (see module docstring).
+    runner = ModelRunner(engine_config, storage)
+    try:
+        await run_in_threadpool(runner.run)
+    except (FileNotFoundError, ValueError) as exc:
+        # Known input problems surfaced at run time (missing file, unparseable column, …).
+        body = RunResponse(status="error", result=None, error=f"{type(exc).__name__}: {exc}")
+        return JSONResponse(status_code=400, content=body.model_dump())
+
+    # 4. Reshape the finished runner into the locked schema, then make it JSON-safe
+    #    (numpy → Python, NaN/Inf → None) so encoding can never 500.
+    result = _build_result(runner, storage)
+    response = RunResponse(status="ok", result=safe_jsonify(result))
+    return response
+
+
+# --------------------------------------------------------------------------- #
+# reshaping helpers — pure data plumbing, no ML                               #
+# --------------------------------------------------------------------------- #
+
+
+def _build_result(runner: ModelRunner, storage: StorageAdapter) -> dict[str, Any]:
+    """Assemble the ``result`` block from a completed runner (all values engine-produced)."""
+    return {
+        "run": _run_meta(runner),
+        "models": _models(runner),
+        "predictions": _predictions(runner),
+        "confusion_matrix": _confusion_matrix(runner),
+        "class_report": _class_report(runner),
+        "feature_impact": _feature_impact(runner),
+        "curves": _curves(runner),
+        "artifacts": collect_artifacts(storage),
+    }
+
+
+def _run_meta(runner: ModelRunner) -> dict[str, Any]:
+    """``result.run`` — curated metadata, derived from the run profile + active features."""
+    profile = runner.run_profile_ or {}
+    active = list(runner.active_features_)
+    interaction_cols = [c for c in active if any(m in c for m in _INTERACTION_MARKERS)]
+    return {
+        "target": profile.get("target"),
+        "problem_type": profile.get("problem_type"),
+        "features": profile.get("features", []),
+        "active_features": active,
+        "interaction_cols": interaction_cols,
+        "class_distribution": profile.get("class_distribution", {}),
+        "n_rows": profile.get("n_rows", 0),
+        "n_train": profile.get("n_train", 0),
+        "n_test": profile.get("n_test", 0),
+        "class_balance": profile.get("class_balance"),
+        "class_weight": profile.get("class_weight"),
+        # run_profile stores the list of succeeded model names; the schema wants a count.
+        "models_succeeded": len(profile.get("models_succeeded", [])),
+        "timestamp": profile.get("timestamp"),
+    }
+
+
+def _models(runner: ModelRunner) -> list[dict[str, Any]]:
+    """``result.models`` — one row per requested algorithm (a LIST; includes failed rows)."""
+    if runner.metrics_df_ is None or runner.metrics_df_.empty:
+        return []
+    rows: list[dict[str, Any]] = []
+    for record in runner.metrics_df_.to_dict(orient="records"):
+        rows.append(
+            {
+                "name": record.get("model"),
+                "status": record.get("status"),
+                "accuracy": record.get("accuracy"),
+                "f1_weighted": record.get("f1_weighted"),
+                "f1_macro": record.get("f1_macro"),
+                "precision_weighted": record.get("precision_weighted"),
+                "recall_weighted": record.get("recall_weighted"),
+                "roc_auc": record.get("roc_auc"),
+                "pr_auc": record.get("pr_auc"),
+                "log_loss": record.get("log_loss"),
+                "mcc": record.get("mcc"),
+                "error": record.get("error"),
+            }
+        )
+    return rows
+
+
+def _predictions(runner: ModelRunner) -> dict[str, Any]:
+    """``result.predictions`` — first-N-per-model preview; full table via the artifacts CSV."""
+    df = runner.predictions_df_
+    if df is None or df.empty:
+        return {
+            "sample_rows": [],
+            "sampled": False,
+            "rows_returned": 0,
+            "rows_total": 0,
+            "full_csv": RESULTS_CSV_KEY,
+        }
+
+    rows_total = int(len(df))
+    # First N rows per model (group order preserved) — the display preview.
+    sampled_df = df.groupby("model", sort=False).head(PREDICTION_SAMPLE_PER_MODEL)
+    prob_cols = [c for c in df.columns if c.startswith("probability_")]
+
+    sample_rows: list[dict[str, Any]] = []
+    for record in sampled_df.to_dict(orient="records"):
+        probabilities = {
+            col[len("probability_"):]: record.get(col) for col in prob_cols
+        }
+        sample_rows.append(
+            {
+                "model": record.get("model"),
+                "sample_index": record.get("sample_index"),
+                "actual": str(record.get("actual")),
+                "predicted": str(record.get("predicted")),
+                "confidence": record.get("confidence"),
+                "correct_flag": bool(record.get("correct_flag")),
+                "probabilities": probabilities,
+            }
+        )
+
+    rows_returned = len(sample_rows)
+    return {
+        "sample_rows": sample_rows,
+        "sampled": rows_returned < rows_total,
+        "rows_returned": rows_returned,
+        "rows_total": rows_total,
+        "full_csv": RESULTS_CSV_KEY,
+    }
+
+
+def _confusion_matrix(runner: ModelRunner) -> dict[str, Any]:
+    """``result.confusion_matrix`` — per successful model, on the FULL test set."""
+    out: dict[str, Any] = {}
+    for name, metrics in runner.metrics_.items():
+        cm = metrics.get("confusion_matrix")
+        if cm is None:
+            continue
+        out[name] = {
+            "labels": [str(c) for c in (metrics.get("labels") or [])],
+            "matrix": cm,
+        }
+    return out
+
+
+def _class_report(runner: ModelRunner) -> dict[str, Any]:
+    """``result.class_report`` — per class (and avg rows) per successful model."""
+    out: dict[str, list[dict[str, Any]]] = {}
+    for name, metrics in runner.metrics_.items():
+        report = metrics.get("classification_report") or {}
+        rows: list[dict[str, Any]] = []
+        for label, vals in report.items():
+            if not isinstance(vals, dict):  # the scalar "accuracy" entry — skip
+                continue
+            rows.append(
+                {
+                    "class": label,
+                    "precision": vals.get("precision"),
+                    "recall": vals.get("recall"),
+                    "f1": vals.get("f1-score"),
+                    "support": vals.get("support"),
+                }
+            )
+        out[name] = rows
+    return out
+
+
+def _feature_impact(runner: ModelRunner) -> list[dict[str, Any]]:
+    """``result.feature_impact`` — the ranked impact frame as records (preserves id_like)."""
+    fi = runner.feature_impact_
+    if fi is None or not isinstance(fi, pd.DataFrame) or fi.empty:
+        return []
+    return fi.to_dict(orient="records")
+
+
+def _curves(runner: ModelRunner) -> dict[str, Any]:
+    """``result.curves`` — ROC/PR points per successful model, on the FULL test set.
+
+    Uses the sanctioned :func:`compute_curve_points` helper — the SAME source ``plot2`` draws
+    from — so the interactive chart and the PNG can never disagree. Always the full test set,
+    never the sampled predictions preview.
+    """
+    out: dict[str, Any] = {}
+    if runner.X_test_ is None or runner.y_test_ is None:
+        return out
+    for name, model in runner.models_.items():
+        proba = model.predict_proba(runner.X_test_)
+        out[name] = compute_curve_points(
+            runner.y_test_, proba, model.classes_, runner.problem_type_
+        )
+    return out

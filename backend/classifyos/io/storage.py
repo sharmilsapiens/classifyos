@@ -50,6 +50,29 @@ class StorageAdapter(ABC):
         """
 
     @abstractmethod
+    def save_input(self, key: str, fileobj: IO) -> str:
+        """Persist an uploaded byte stream into the *input* root and return its key.
+
+        This is the write-side twin of :meth:`open_read`: ``open_write`` targets the
+        OUTPUT root (artifacts), but an uploaded dataset must land in the INPUT root so
+        that :func:`~classifyos.io.inspect.inspect_file` and
+        :func:`~classifyos.io.loader.data_loader` (which read via :meth:`open_read`) can
+        find it afterwards. Added in Phase 8 to keep file uploads behind the storage
+        abstraction (CLAUDE.md: ALL file I/O goes through ``StorageAdapter``) — see the
+        plan_tweak deviation row.
+
+        Args:
+            key: Logical key, relative to the adapter's input root. Parent
+                "directories" are created as needed; path-traversal escapes are rejected.
+            fileobj: A binary file-like object (e.g. ``fastapi.UploadFile.file``) whose
+                contents are copied verbatim.
+
+        Returns:
+            The logical key the data was stored under (echoes ``key``), suitable for
+            passing back to ``inspect_file`` / a run config's ``input_file``.
+        """
+
+    @abstractmethod
     def exists(self, key: str) -> bool:
         """Return whether an object exists for ``key`` (checks both roots)."""
 
@@ -109,6 +132,17 @@ class LocalFolderStorage(StorageAdapter):
         path = self._resolve(key, self.output_dir)
         path.parent.mkdir(parents=True, exist_ok=True)
         return open(path, "wb" if binary else "w", encoding=None if binary else "utf-8")
+
+    def save_input(self, key: str, fileobj: IO) -> str:
+        # Resolve under the INPUT root (data_dir), not the output root — uploaded data
+        # must be readable by inspect_file/data_loader, which read from data_dir.
+        import shutil
+
+        path = self._resolve(key, self.data_dir)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "wb") as dst:
+            shutil.copyfileobj(fileobj, dst)
+        return key
 
     def exists(self, key: str) -> bool:
         return (

@@ -31,15 +31,9 @@ matplotlib.use("Agg")  # headless safety: non-interactive backend before pyplot
 
 import matplotlib.pyplot as plt  # noqa: E402  (must follow matplotlib.use)
 import numpy as np  # noqa: E402
-from sklearn.metrics import (  # noqa: E402
-    auc,
-    average_precision_score,
-    precision_recall_curve,
-    roc_curve,
-)
-from sklearn.preprocessing import label_binarize  # noqa: E402
 
 from ..io.storage import StorageAdapter  # noqa: E402
+from .curves import compute_curve_points  # noqa: E402
 
 if TYPE_CHECKING:  # avoid a runtime import cycle (runner imports this module lazily)
     from ..runner import ModelRunner
@@ -150,24 +144,28 @@ def _plot_roc_pr(runner: "ModelRunner", storage: StorageAdapter) -> None:
 
 
 def _plot_roc_pr_binary(runner: "ModelRunner", storage: StorageAdapter) -> None:
-    """ROC and Precision-Recall curves, one line per algorithm (positive = last class)."""
+    """ROC and Precision-Recall curves, one line per algorithm (positive = last class).
+
+    The curve coordinates come from :func:`compute_curve_points` — the SAME helper the
+    API uses for its JSON ``curves`` — so this PNG and the interactive chart can never
+    drift apart (Phase 8 sanctioned refactor; the source of the points changed, the
+    appearance/filename did not).
+    """
     X_test, y_test = runner.X_test_, np.asarray(runner.y_test_).astype(str)
     fig, (ax_roc, ax_pr) = plt.subplots(1, 2, figsize=(14, 6), facecolor="white")
 
     for name, model in runner.models_.items():
         classes = np.asarray(model.classes_).astype(str)
-        positive = classes[-1]  # lexicographically-last label (matches metrics.py)
-        proba_pos = np.asarray(model.predict_proba(X_test))[:, -1]
-        y_bin = (y_test == positive).astype(int)
-        if len(np.unique(y_bin)) < 2:
+        positive = str(classes[-1])  # lexicographically-last label (matches metrics.py)
+        proba = np.asarray(model.predict_proba(X_test))
+        points = compute_curve_points(y_test, proba, classes, "binary")
+        roc_pt = points["roc"].get(positive)
+        pr_pt = points["pr"].get(positive)
+        if roc_pt is None or pr_pt is None:
             continue  # ROC/PR undefined with a single class present
 
-        fpr, tpr, _ = roc_curve(y_bin, proba_pos)
-        ax_roc.plot(fpr, tpr, label=f"{name} (AUC={auc(fpr, tpr):.3f})")
-
-        prec, rec, _ = precision_recall_curve(y_bin, proba_pos)
-        ap = average_precision_score(y_bin, proba_pos)
-        ax_pr.plot(rec, prec, label=f"{name} (AP={ap:.3f})")
+        ax_roc.plot(roc_pt["fpr"], roc_pt["tpr"], label=f"{name} (AUC={roc_pt['auc']:.3f})")
+        ax_pr.plot(pr_pt["recall"], pr_pt["precision"], label=f"{name} (AP={pr_pt['ap']:.3f})")
 
     ax_roc.plot([0, 1], [0, 1], "--", color="#999999", label="chance")
     ax_roc.set_xlabel("false positive rate", color=_DARK)
@@ -200,12 +198,13 @@ def _plot_roc_ovr_multiclass(runner: "ModelRunner", storage: StorageAdapter) -> 
         ax = axes[0][col]
         classes = np.asarray(model.classes_).astype(str)
         proba = np.asarray(model.predict_proba(X_test))
-        y_bin = label_binarize(y_test, classes=classes)
-        for i, cls in enumerate(classes):
-            if i >= y_bin.shape[1] or len(np.unique(y_bin[:, i])) < 2:
+        # One-vs-rest ROC points per class from the shared helper (same source as the API).
+        roc = compute_curve_points(y_test, proba, classes, "multiclass")["roc"]
+        for cls in classes:
+            pt = roc.get(str(cls))
+            if pt is None:
                 continue
-            fpr, tpr, _ = roc_curve(y_bin[:, i], proba[:, i])
-            ax.plot(fpr, tpr, label=f"{cls} (AUC={auc(fpr, tpr):.3f})")
+            ax.plot(pt["fpr"], pt["tpr"], label=f"{cls} (AUC={pt['auc']:.3f})")
         ax.plot([0, 1], [0, 1], "--", color="#999999")
         ax.set_xlabel("false positive rate", color=_DARK)
         ax.set_ylabel("true positive rate", color=_DARK)

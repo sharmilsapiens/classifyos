@@ -100,4 +100,7 @@ anyone returning after a break who wants the gist without reading code.
 - **PROJECT_STATE.md** — the live status: what's done, decisions made, known issues, next steps.
 - **plan_tweak.md** — the honest register of where we deviated from the original signed plan and why.
 - **backend_short_desc.md** (this file) — the plain-language phase-by-phase summary of the
-  ML engine. (Future siblings: `api_short_desc.md`, `frontend_short_desc.md`.)
+  ML engine.
+- **api_short_desc.md** — the plain-language summary of the API surface (Phase 8 FastAPI layer).
+  (Future sibling: `frontend_short_desc.md`.)
+- **docs/api_contract.md** — the **locked** `/api/v1/run` request/response schema.

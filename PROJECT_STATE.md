@@ -4,24 +4,35 @@
 > A copy is uploaded to the ClassifyOS Claude Project knowledge after each update so the
 > planning/overseer chat stays in sync with the local repo.
 
-**Last updated:** 2026-06-16
-**Updated by:** Claude Code (Phase 7B — Optuna tuning layer; + LR-space sklearn-1.9 fix)
-**Repo tag / commit:** 236a0a0 (prompts reorg) + Phase 7B commit pending
+**Last updated:** 2026-06-17
+**Updated by:** Claude Code (Phase 8 — FastAPI layer; /api/v1/run schema LOCKED)
+**Repo tag / commit:** b423d49 (Phase 7B LR-space fix) + Phase 8 commit pending
 
 ---
 
 ## Current status
 
-**Active phase:** Phase 7B complete — Optuna hyperparameter tuning layer (Section 8B), an
-optional add-on to the feature-complete engine. **The ML engine runs end-to-end from a
-single call, now with opt-in automatic hyperparameter tuning.**
-**Sprint day:** Phase 7B done
-**Overall:** 🟢 A single `ModelRunner(config, storage).run()` (or the CLI) executes the
-whole pipeline — load → feature impact → split → preprocess → features → interactions →
-balance (train only) → train/evaluate every algorithm → write every artifact. Full suite
-green; first real-data end-to-end run completed.
+**Active phase:** Phase 8 complete — **FastAPI layer** (`backend/api/`) wraps the engine over
+HTTP for the Phase 9 frontend, and the **`/api/v1/run` response schema is now LOCKED**
+(`docs/api_contract.md`). **The engine is reachable from a browser; the contract is frozen.**
+**Sprint day:** Phase 8 done
+**Overall:** 🟢 Six endpoints under `/api/v1/` (`health`, `upload`, `run`, `explain`,
+`outputs`, `outputs/{name}`) drive the existing `ModelRunner` / `inspect_file` — no ML logic
+added. The synchronous `/run` runs the pipeline on a threadpool and returns the locked
+envelope; predictions are sampled for display while curves/confusion are full-test. Full
+suite green (184 tests).
 
-One-line summary: Sections 14–16 implemented. **Section 15 `ModelRunner`** (`runner.py`)
+Phase 8 one-line summary: the FastAPI layer (`backend/api/`) is a thin HTTP translator over
+the engine — `main.py` (load_dotenv, lifespan logging the storage roots, CORS allowlist from
+env, routers mounted under `/api/v1`), `models.py` (Pydantic v2 `RunConfig` + locked response
+models + `to_engine_config()`), `serialize.py` (numpy→Python + NaN/Inf→None on top of the
+engine's `_jsonify`), and `routes/` (health/upload/run/explain/outputs). The single sanctioned
+ML touch is `evaluation/curves.py::compute_curve_points` (ROC/PR points; plot2 refactored to
+use it). A second additive engine edit — `StorageAdapter.save_input` — was needed so uploads
+land in `DATA_DIR` (plan_tweak 31). `/explain` is a v1.0 structured stub (no model persistence).
+184 tests passing (148 prior + 36 new).
+
+Engine summary (Phase 7/7B, unchanged): Sections 14–16 implemented. **Section 15 `ModelRunner`** (`runner.py`)
 is the orchestrator: it deep-copies the config once at the start of `run()` and never
 mutates `self.config` (the `_run_config` isolation rule — asserted by a test), executes
 the corrected canonical order (split BEFORE preprocessing — plan_tweak row 4, not the
@@ -60,8 +71,8 @@ written. Engine complete; ready for Phase 8 (FastAPI layer).
 | 6 | Models + evaluation (Sections 10–13) | ✅ Done | 6 wrappers via 1 ABC + MODEL_REGISTRY + evaluate_model + classify; 47 tests; xgboost/lightgbm added to deps |
 | 7 | Plots + ModelRunner + CLI (Sections 14–16) | ✅ Done | ModelRunner (deep-copy config isolation, corrected order, robust per-algo failures) + plot_results (plot1/2/3/5) + CLI (load_dotenv, inspect/run modes); 13 tests; real-data run on iris done; engine feature-complete |
 | 7B | Optuna hyperparameter tuning (Section 8B) | ✅ Done | `tuning.py` (`tune_model`) — OFF by default; one uniform mechanism for all 6 models; CV-in-train trial scoring (leakage-safe); per-model isolation + hard 600s/model timeout; ModelRunner + config + CLI (`--tune…`) sanctioned edits; 17 tests; **AutoML pulled v1.5→v1.0** (plan_tweak 24–25) |
-| 8 | FastAPI layer | ⬜ Not started | ⚠️ API startup must `load_dotenv()` (or rely on exported env) so DATA_DIR/OUTPUT_DIR/CORS_ORIGINS resolve — same fallback caveat as the CLI |
-| 9 | React dashboard (13 pages) | ⬜ Not started | Deviation from scope: React replaces single-file HTML |
+| 8 | FastAPI layer | ✅ Done | 6 endpoints under `/api/v1/`; `/run` schema LOCKED (docs/api_contract.md); `curves.py` helper + plot2 refactor; `save_input` upload support; `/explain` stub; 36 tests (184 total) |
+| 9 | React dashboard (13 pages) | ⬜ Not started | Deviation from scope: React replaces single-file HTML. **Generate against the LOCKED `docs/api_contract.md`** |
 | 10 | Unit tests (full pytest suite) | ⬜ Not started | |
 | 11 | Integration: 7 use cases E2E + governance sign-off | ⬜ Not started | |
 
@@ -111,6 +122,11 @@ Status legend: ⬜ Not started · 🔄 In progress · ✅ Done · ⚠️ Blocked
 | 2026-06-16 | `tuning.timeout_seconds` default is a **hard 600s per model**, NOT `None` (the prompt's literal default) — explicit `None` still accepted as an opt-out | With `models=[]` (tune-all) + `n_trials=30`, an unbounded default would run a 30-trial study for every algorithm incl. the slow calibrated-SVM. A finite ceiling makes a tuning run impossible to leave unbounded; a study stops at the timeout OR the trial cap, whichever first |
 | 2026-06-16 | Per-model isolation: each model's study runs in its own try/except — a study that errors (or whose every trial fails, e.g. an inverted-bound override) returns `{}` and the model falls back to defaults, never aborting the run (same pattern as the Phase 6/7 per-algo isolation) | "One bad model must not kill the run" extended to tuning; robustness on real data / extreme configs |
 | 2026-06-16 | **Phase 7B follow-up**: LogisticRegression tuning space reduced to `C` only (dropped the solver/penalty pairs) | sklearn 1.9 deprecated the `penalty` arg (FutureWarning, removal in 1.10) and `liblinear` rejects multiclass (`n_classes >= 3`) — the pairs warned on every fit and hard-errored on multiclass targets (surfaced by a user tuning LR on 3-class iris). Clean penalty-type tuning needs `saga` + `l1_ratio` (slow / convergence risk) — deferred. plan_tweak row 26 |
+| 2026-06-17 | **Phase 8**: sanctioned curve-points helper — new `evaluation/curves.py::compute_curve_points` (ROC/PR points + AUC/AP per class, one-vs-rest for multiclass), and `plot_results` plot2 refactored to draw from it | The frontend needs raw curve coordinates; deriving them in two places (plot + API) would drift. One additive module = one source of truth. Reads held-out test predictions only, fits nothing (leakage-safe). plan_tweak 27 |
+| 2026-06-17 | **Phase 8**: `/api/v1/run` is **synchronous** — runs on `run_in_threadpool` and returns the full result in one response | The engine is synchronous CPU-heavy Python; a threadpool keeps the event loop responsive without a job queue. A submit→poll→fetch background path is deferred to v1.5 (a long run can exceed a gateway timeout). plan_tweak 28 |
+| 2026-06-17 | **Phase 8**: `/api/v1/run` prefix is `/api/v1/` (mounted via `FastAPI.include_router(prefix=...)`); responses JSON-safe via `api/serialize.safe_jsonify` (numpy→Python, NaN/Inf→None) extending the engine's `_jsonify` | CLAUDE.md mandates `/api/v1/` (supersedes the scope's bare `/api/...` table, plan_tweak 30); NaN/Inf are invalid JSON and would 500 or break the browser parser, so they map to null |
+| 2026-06-17 | **Phase 8**: `/explain` ships option **(B)** — a structured "needs a persisted model (v2.0)" stub for ALL models; no training on request | v1.0 is stateless with no model registry, and `shap` is not installed; the prompt's default (A) (re-fit + TreeExplainer) needs a heavy dep + retraining per call. The response shape is final so v2.0 fills it in without a contract change. Owner-confirmed. plan_tweak 29 |
+| 2026-06-17 | **Phase 8**: added additive `StorageAdapter.save_input(key, fileobj)` (ABC + `LocalFolderStorage`) writing into the INPUT root | `open_write` targets `OUTPUT_DIR` but inspect/loader read from `DATA_DIR`, so an upload saved via the existing API couldn't be read by `/run`. A second sanctioned engine edit beyond the curve helper, honoring "ALL I/O through StorageAdapter" over "no other engine edits". Additive, traversal-guarded. Owner-confirmed. plan_tweak 31 |
 
 ---
 
@@ -469,6 +485,58 @@ Status legend: ⬜ Not started · 🔄 In progress · ✅ Done · ⚠️ Blocked
   `study.best_trial.user_attrs`, `optuna.TrialPruned`, `optuna.logging.set_verbosity`.
 - Prompt archived to `prompts/backend_phases/phase_07B_tuning.md`; plan_tweak rows 24–25 added.
 
+## Completed this session (Phase 8 — 2026-06-17)
+
+- **FastAPI layer** under `backend/api/` — a thin HTTP translator over the engine, NO ML logic:
+  - **`main.py`**: `load_dotenv()` as the first real work (mandatory — engine doesn't auto-load
+    `.env`); an `@asynccontextmanager` `lifespan` logging the resolved absolute
+    `DATA_DIR`/`OUTPUT_DIR` + CORS allowlist; `CORSMiddleware` reading `CORS_ORIGINS`
+    (comma-separated; never `["*"]` unless the `CLASSIFYOS_CORS_DEV` marker is set); routers
+    mounted under `/api/v1`. Teaching docstrings throughout (request/response flow, uvicorn,
+    endpoints, Pydantic, CORS, lifespan, threadpool).
+  - **`deps.py`**: lazily-cached `get_storage()` dependency (built on first request, so the test
+    suite's temp-`OUTPUT_DIR` override lands before construction).
+  - **`models.py`**: Pydantic v2 `RunConfig` (3 required fields → 422; `extra="forbid"`; nested
+    `feature_engineering`/`interaction_features`/`tuning` sub-models) + `to_engine_config()`
+    (forwards to `build_config` — the single authoritative validator) + the locked response
+    models (`RunResponse`/`RunResult`/`RunMeta`/`ModelMetrics`/`PredictionsBlock`/… ).
+  - **`serialize.py`**: `safe_jsonify` — numpy→Python (via the engine's `_jsonify`) + NaN/Inf→None,
+    so a degenerate metric can never 500 or emit invalid JSON.
+  - **`artifacts.py`**: the canonical 11-artifact key list + `collect_artifacts(storage)` (shared
+    by `/run` and `/outputs`).
+- **Six endpoints** (`backend/api/routes/`): `GET /health`; `POST /upload` (multipart →
+  `save_input` into `DATA_DIR/uploads/` → `inspect_file` → keys + `server_path`); `POST /run`
+  (`async`, `run_in_threadpool(runner.run)`, reshape → locked envelope, predictions sampled at
+  100/model, curves+confusion full-test); `POST /explain` (v1.0 structured stub); `GET /outputs`
+  (list) + `GET /outputs/{name}` (stream CSV/PNG via `FileResponse`, traversal-guarded by the
+  adapter).
+- **Sanctioned engine edits (2):** (1) NEW `classifyos/evaluation/curves.py::compute_curve_points`
+  (ROC/PR points + AUC/AP per class, one-vs-rest for multiclass, ≤500 pts/curve, [RISK]
+  leakage-safe — test predictions only) and `plot_results` plot2 refactored to use it
+  (filename/appearance/placeholder unchanged); (2) additive `StorageAdapter.save_input` for
+  uploads. Both recorded in plan_tweak (27, 31).
+- **`/api/v1/run` schema LOCKED** in `docs/api_contract.md` (envelope + `schema_version` 1.0 +
+  the notes + the synchronous/gateway-timeout limitation).
+- **Tests (36 new → 184 total):** `test_curves.py` (5 — point well-formedness, multiclass OvR,
+  single-class omission, structural no-training-data guard, plot2 regression), `test_api_health.py`
+  (1), `test_api_upload.py` (5 — each sample's inspect keys + `server_path`, server_path runnable
+  by `/run`, unsupported-type 422), `test_api_run.py` (15 — 422 validation incl. bad enum; binary
+  locked-schema assertions incl. failed-algo row + sampled predictions + full-test curves +
+  artifacts PNGs + strict-JSON round-trip; multiclass OvR; `safe_jsonify` NaN/Inf/numpy unit),
+  `test_api_outputs.py` (5 — list, PNG+CSV stream, 404, traversal rejected), `test_api_explain.py`
+  (5 — stub shape + all model kinds). Prior 148 still pass.
+- **Hallucination check ✅** — verified against the installed venv: **FastAPI 0.136.3**
+  (`FastAPI(lifespan=…)`, `CORSMiddleware`, `UploadFile`/`File`/`Form`, `APIRouter`,
+  `run_in_threadpool`, `FileResponse`), **Starlette 1.3.0** `TestClient` (httpx-based;
+  emits a benign StarletteDeprecationWarning suggesting httpx2 — filtered, still works on
+  **httpx 0.28.1**), **Pydantic 2.13.4** (`BaseModel`, `Field`, `field_validator`, `ConfigDict`,
+  `model_dump`/`model_validate`), **scikit-learn 1.9.0** (`roc_curve`/`precision_recall_curve`/
+  `auc`/`average_precision_score`). **No new deps** added (`shap` deliberately not added — see
+  `/explain` decision); the API deps were already pinned in `requirements.lock`.
+- Two design forks were surfaced to the owner and resolved to the recommended options: the
+  upload storage gap → additive `save_input`; `/explain` → structured stub (B).
+- Prompt archived to `prompts/api_phases/phase_08_fastapi.md`; plan_tweak rows 27–31 added.
+
 ## Completed this session (Doc-update enforcement hook — 2026-06-15) — ⚠️ REMOVED 2026-06-16
 
 > This hook was removed in the 2026-06-16 reorg session (see below). Kept here as a record.
@@ -573,9 +641,10 @@ Status legend: ⬜ Not started · 🔄 In progress · ✅ Done · ⚠️ Blocked
 
 ## In progress / partially done
 
-- Nothing in flight. Phase 7B closed — the ML engine (Sections 1–16) is feature-complete and
-  now has an optional Optuna hyperparameter-tuning layer (Section 8B, OFF by default). Runs
-  end-to-end via `ModelRunner` / the CLI. Phase 8 (FastAPI layer) not yet started.
+- Nothing in flight. Phase 8 closed — the FastAPI layer (`backend/api/`) wraps the engine over
+  HTTP and the `/api/v1/run` response schema is LOCKED (`docs/api_contract.md`). The ML engine
+  (Sections 1–16 + 8B tuning) is unchanged behind it. Next: Phase 9 (React dashboard, generated
+  against the locked contract).
 
 ## Known issues / bugs
 
@@ -591,31 +660,32 @@ Status legend: ⬜ Not started · 🔄 In progress · ✅ Done · ⚠️ Blocked
 
 ## Next steps (priority order)
 
-1. Commit Phase 7B ("Phase 7B: Optuna hyperparameter tuning layer + RUNBOOK update + tests").
+1. Commit Phase 8 ("Phase 8: FastAPI layer (health/upload/run/explain/outputs) + locked
+   /api/v1/run schema + curves helper + tests").
 2. Upload updated PROJECT_STATE.md to the Claude Project knowledge.
-3. Phase 8 — FastAPI layer (`backend/api/`): `RunConfig` Pydantic model mirroring the
-   config contract, routes under `/api/v1/` (`/inspect`, `/run`, etc.) driving
-   `ModelRunner`, JSON serializers for `metrics_df_` / `predictions_df_` / `run_profile_`
-   / the plot artifacts. **API startup must `load_dotenv()`** (same caveat as the CLI).
-   This is the point the `/api/v1/run` response schema gets LOCKED (docs/api_contract.md).
-4. After Phase 8, lock docs/api_contract.md and generate the React frontend against it
-   (Phase 9).
+3. **Phase 9 — React dashboard (13 pages), generated against the LOCKED `docs/api_contract.md`.**
+   The frontend talks to `/api/v1/` (already proxied via Vite `/api → :8000`). Build the typed
+   API client from the locked envelope; `models` is a list, `predictions` is sampled (link the
+   full CSV via `/outputs/{name}`), charts (curves) come from `result.curves`, PNGs are fetched
+   from `/outputs/{name}` on demand.
+4. v1.5/v2.0 backlog surfaced this phase: background-job `/run` (submit→poll→fetch) to beat
+   gateway timeouts; real `/explain` once model persistence (MLflow / a model registry) lands.
 
 ---
 
 ## API contract status
 
-`/api/v1/run` response schema: **NOT LOCKED** (locks after Phase 8).
-Contract doc: docs/api_contract.md — stub only.
+`/api/v1/run` response schema: **🔒 LOCKED (Phase 8, schema_version 1.0).**
+Contract doc: `docs/api_contract.md` — frozen; changes must be additive and bump the version.
 
 ## Governance checklist (from scope §12)
 
-- [x] Prompt version control — prompts/ populated per section (phase_01_skeleton.md, phase_02_feature_impact.md, phase_03_preprocess.md, phase_04_feature_engineering.md, phase_05_class_balance.md, phase_06_models_eval.md, phase_07_runner.md, phase_07B_tuning.md archived)
-- [x] Section-level unit tests passing on real data (148 passing: 22 Phase 1 + 5 Phase 2 + 14 Phase 3 + 19 Phase 4 + 10 Phase 5 + 47 Phase 6 + 13 Phase 7 + 18 Phase 7B)
+- [x] Prompt version control — prompts/ populated per section (phase_01…phase_07B archived under `prompts/backend_phases/`; Phase 8 archived to `prompts/api_phases/phase_08_fastapi.md`)
+- [x] Section-level unit tests passing on real data (184 passing: 22 Phase 1 + 5 Phase 2 + 14 Phase 3 + 19 Phase 4 + 10 Phase 5 + 47 Phase 6 + 13 Phase 7 + 18 Phase 7B + 36 Phase 8 API/curves)
 - [ ] [RISK] comments reviewed by team lead (3 Phase 1 + 2 Phase 2 + 4 Phase 3 + Phase 4 poly-cap/ratio-denominator/auto-discovery-pool/re-discovery-leakage + 4 Phase 5 train-only/tiny-minority/undersample-discards/multilabel + Phase 6 proba-shape-order/accuracy-misleads/SVM-no-importance + Phase 7B tuning-CV-leakage/per-fold-balancing-deferred/runaway-timeout-cap/per-model-isolation, pending review)
 - [ ] Leakage audit (encoder/scaler/SMOTE train-only) confirmed — encoder/scaler/imputer (Phase 3), feature-engineering/interaction stats (Phase 4) and balancing (Phase 5) all train-only, enforced by design + dedicated leakage tests (binning edges, MI auto-discovery, test-set-untouched). SMOTE/undersample are train-only by construction (the balancer takes no test argument). Phase 6 models fit on the balanced TRAIN matrices only; evaluate_model/classify only ever read the untouched test set. Phase 7B tuning scores every trial with CV *inside the train split only* (the test set is never passed to `tune_model`), and balancing is applied only to the final fit, not inside the CV folds
-- [ ] Output schema contract locked (post Phase 8)
-- [x] Hallucination check — library calls verified against installed versions (Phase 1: pandas 2.3.3 / sklearn 1.9.0; Phase 2: scipy 1.17.1 / sklearn 1.9.0 / matplotlib 3.11.0; Phase 3: sklearn 1.9.0 encoders/scalers; Phase 4: mutual_info_classif / scipy.stats.skew / pandas.qcut; Phase 5: imbalanced-learn 0.14.2 SMOTE/RandomUnderSampler/RandomOverSampler, sklearn 1.9.0 compute_class_weight; Phase 6: sklearn 1.9.0 CalibratedClassifierCV/GaussianNB sample_weight/OvR/roc_auc/log_loss/calibration_curve, xgboost 3.2.0 string-label rejection + sample_weight, lightgbm 4.6.0; Phase 7B: optuna 4.9.0 create_study/TPESampler/Study.optimize/Trial.suggest_*/best_trial.user_attrs/TrialPruned/logging.set_verbosity) — all versions pinned in backend/requirements.lock
+- [x] Output schema contract locked — `/api/v1/run` response **LOCKED at Phase 8** (`docs/api_contract.md`, schema_version 1.0). The API contract is frozen; the Phase 9 frontend is generated against it (CLAUDE.md hard rule)
+- [x] Hallucination check — library calls verified against installed versions (Phase 1: pandas 2.3.3 / sklearn 1.9.0; Phase 2: scipy 1.17.1 / sklearn 1.9.0 / matplotlib 3.11.0; Phase 3: sklearn 1.9.0 encoders/scalers; Phase 4: mutual_info_classif / scipy.stats.skew / pandas.qcut; Phase 5: imbalanced-learn 0.14.2 SMOTE/RandomUnderSampler/RandomOverSampler, sklearn 1.9.0 compute_class_weight; Phase 6: sklearn 1.9.0 CalibratedClassifierCV/GaussianNB sample_weight/OvR/roc_auc/log_loss/calibration_curve, xgboost 3.2.0 string-label rejection + sample_weight, lightgbm 4.6.0; Phase 7B: optuna 4.9.0 create_study/TPESampler/Study.optimize/Trial.suggest_*/best_trial.user_attrs/TrialPruned/logging.set_verbosity; Phase 8: FastAPI 0.136.3 lifespan/CORSMiddleware/UploadFile/run_in_threadpool/FileResponse, Starlette 1.3.0 TestClient, Pydantic 2.13.4 BaseModel/field_validator/ConfigDict, httpx 0.28.1, sklearn 1.9.0 roc_curve/precision_recall_curve/auc/average_precision_score — no new deps added) — all versions pinned in backend/requirements.lock
 - [ ] Team lead sign-off per phase (Naveen)
 
 ---
@@ -641,4 +711,5 @@ Contract doc: docs/api_contract.md — stub only.
 | 2026-06-16 | Phase 7B — Section 8B Optuna hyperparameter tuning layer (`tuning.py`) + sanctioned config/runner/CLI edits + RUNBOOK section | 147 tests passing (17 new); OFF by default; one uniform per-model study, CV-in-train leakage-safe scoring, hard 600s/model timeout, per-model isolation; AutoML pulled v1.5→v1.0 (plan_tweak 24–25); optuna 4.9.0 added + pinned; real-data CLI `--tune` run verified; prompt archived to prompts/backend_phases/phase_07B_tuning.md |
 | 2026-06-16 | Tooling — added `backend/run_tests.ps1` (venv-Python pytest runner; forwards args, no activation needed) + RUNBOOK note | Convenience only; **no engine code touched, no behaviour change** (so backend_short_desc/plan_tweak deliberately not updated). Commit ad44354 |
 | 2026-06-16 | Phase 7B follow-up — LogisticRegression tuning space → `C` only | Fixed FutureWarning (`penalty` deprecated, sklearn 1.9) + multiclass `liblinear` errors surfaced by a real LR-on-iris tuning run; +1 multiclass regression test (148 total); decisions log + plan_tweak row 26 + backend_short_desc updated |
+| 2026-06-17 | Phase 8 — FastAPI layer (`backend/api/`) + `/api/v1/run` schema LOCKED | 184 tests (36 new); 6 endpoints (health/upload/run/explain/outputs) driving ModelRunner/inspect_file, no ML added; sanctioned `evaluation/curves.py` helper + plot2 refactor; additive `StorageAdapter.save_input` for uploads; `/explain` v1.0 stub; sync `/run` via threadpool (background jobs → v1.5); `docs/api_contract.md` locked; `api_short_desc.md` created; plan_tweak 27–31; prompt archived to `prompts/api_phases/phase_08_fastapi.md` |
 | | | |

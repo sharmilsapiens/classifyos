@@ -231,3 +231,71 @@ def fraud_smote_matrices(storage: StorageAdapter) -> SimpleNamespace:
         problem_type="binary",
         class_balance="smote",
     )
+
+
+# --- Phase 8 API fixtures: a TestClient over the real app + shared end-to-end runs --------
+#
+# The API tests drive the REAL engine over HTTP (no engine mocks), reusing the same sample
+# CSVs and the temp-OUTPUT_DIR isolation as the engine tests. A full /run is expensive, so
+# the binary + multiclass runs are executed ONCE at session scope and shared.
+
+
+@pytest.fixture(scope="session")
+def api_client(output_dir: Path):
+    """A FastAPI ``TestClient`` whose storage writes to the temp OUTPUT_DIR.
+
+    Depends on ``output_dir`` so the temp ``OUTPUT_DIR`` is exported first, then resets the
+    lazily-cached storage singleton so the app rebuilds its adapter against the temp folder
+    (never the real output dir).
+    """
+    from fastapi.testclient import TestClient
+
+    import api.deps as deps
+
+    deps._storage = None  # force the adapter to be rebuilt with the temp OUTPUT_DIR
+    from api.main import app
+
+    return TestClient(app)
+
+
+def _run_payload(input_file: str, target: str, features: list[str], **overrides: Any) -> dict:
+    """Build a /run request body; interaction auto-discovery off for test speed."""
+    body = {
+        "input_file": input_file,
+        "target": target,
+        "feature_cols": features,
+        "class_balance": "none",
+        "interaction_features": {"max_auto_pairs": 0},
+    }
+    body.update(overrides)
+    return body
+
+
+@pytest.fixture(scope="session")
+def binary_run_response(api_client) -> Any:
+    """Run the binary policy-lapse pipeline once over HTTP (includes a deliberately-bad algo).
+
+    ``NotAModel`` is an unknown algorithm: the engine records it as a ``status="failed"`` row
+    rather than aborting, which lets the schema tests assert the failed-row contract.
+    """
+    payload = _run_payload(
+        "policy_lapse.csv",
+        "will_lapse",
+        LAPSE_FEATURES,
+        problem_type="binary",
+        algorithms=["LogisticRegression", "RandomForest", "NotAModel"],
+    )
+    return api_client.post("/api/v1/run", json=payload)
+
+
+@pytest.fixture(scope="session")
+def multiclass_run_response(api_client) -> Any:
+    """Run the multiclass risk-tier pipeline once over HTTP."""
+    payload = _run_payload(
+        "risk_tier.csv",
+        "risk_tier",
+        RISK_FEATURES,
+        problem_type="multiclass",
+        algorithms=["LogisticRegression", "RandomForest"],
+    )
+    return api_client.post("/api/v1/run", json=payload)
