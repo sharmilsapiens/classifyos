@@ -1,0 +1,239 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>ClassifyOS · Option C — Atlas (Soft & friendly)</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
+<style>
+  /* ───────────────────────────────────────────────────────────────────
+     OPTION C — "Atlas": soft, friendly, approachable.
+     shadcn/ui token set tuned warm: a warm off-white canvas, pastel-tinted
+     cards, generous radius and gentle shadows. CHANGE --primary to re-skin.
+     ─────────────────────────────────────────────────────────────────── */
+  :root {
+    --background: #faf6f2;   /* warm off-white canvas      */
+    --card:       #ffffff;   /* surfaces                   */
+    --foreground: #2e2a33;   /* primary text (warm ink)    */
+    --muted:      #837c8c;   /* secondary text             */
+    --muted-2:    #aaa3b3;   /* captions                   */
+    --border:     #efe8e3;   /* soft hairline              */
+    --primary:    #7c6bf0;   /* PRIMARY ACTION (soft violet) */
+    --primary-50: #efeafe;
+    --coral:      #fb7185;
+    --mint:       #34d399;
+    --sky:        #38bdf8;
+    --peach:      #fdba74;
+    --radius:     18px;      /* generous, friendly rounding */
+    --shadow:     0 10px 28px -16px rgba(80,60,120,.30);
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: "Plus Jakarta Sans", system-ui, sans-serif;
+    background: var(--background);
+    color: var(--foreground);
+    -webkit-font-smoothing: antialiased;
+    line-height: 1.5;
+  }
+  .serif { font-family: "Fraunces", Georgia, serif; }
+  .num { font-variant-numeric: tabular-nums; }
+
+  .app { display: grid; grid-template-columns: 256px 1fr; min-height: 100vh; }
+
+  /* sidebar */
+  .side { padding: 22px 16px; position: sticky; top: 0; height: 100vh; overflow-y: auto; }
+  .brand { display: flex; align-items: center; gap: 12px; padding: 6px 8px 22px; }
+  .brand .mark { width: 38px; height: 38px; border-radius: 13px; background: linear-gradient(140deg, var(--primary), var(--coral)); display: grid; place-items: center; color: #fff; font-weight: 700; box-shadow: var(--shadow); }
+  .brand .name { font-weight: 700; letter-spacing: -.01em; }
+  .brand .name small { display: block; font-weight: 500; color: var(--muted-2); font-size: 11px; }
+  .navgroup { font-size: 11px; letter-spacing: .04em; color: var(--muted-2); padding: 16px 12px 6px; font-weight: 600; }
+  .nav a { display: flex; align-items: center; gap: 11px; padding: 10px 12px; border-radius: 13px; color: var(--muted); text-decoration: none; font-size: 13.5px; font-weight: 600; }
+  .nav a .ico { width: 18px; height: 18px; border-radius: 7px; background: #f1ece8; flex: none; }
+  .nav a:hover { background: #f3eef9; color: var(--foreground); }
+  .nav a.active { background: var(--card); color: var(--primary); box-shadow: var(--shadow); }
+  .nav a.active .ico { background: linear-gradient(140deg, var(--primary), var(--coral)); }
+
+  .main { padding: 26px 34px 52px; max-width: 1180px; }
+  .topbar { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; }
+  h1 { font-size: 30px; letter-spacing: -.01em; font-weight: 600; }
+  .sub { color: var(--muted); font-size: 14px; margin-top: 4px; }
+  .topbar-right { display: flex; align-items: center; gap: 12px; }
+  .health { display: inline-flex; align-items: center; gap: 8px; background: #e8fbf3; color: #0f9d6b; border: 1px solid #bff3dd; padding: 8px 14px; border-radius: 999px; font-size: 12.5px; font-weight: 600; }
+  .health .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--mint); box-shadow: 0 0 0 4px #d4f7e7; }
+  .btn { background: var(--primary); color: #fff; border: none; padding: 11px 18px; border-radius: 13px; font-weight: 700; font-size: 13.5px; cursor: pointer; box-shadow: 0 8px 20px -8px rgba(124,107,240,.7); }
+
+  .band { display: grid; grid-template-columns: repeat(5, 1fr); gap: 16px; margin: 24px 0; }
+  .stat { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); padding: 18px; box-shadow: var(--shadow); position: relative; }
+  .stat .pill { width: 34px; height: 34px; border-radius: 11px; display: grid; place-items: center; font-size: 16px; margin-bottom: 12px; }
+  .stat .label { font-size: 12px; color: var(--muted); font-weight: 600; }
+  .stat .value { font-size: 26px; font-weight: 700; letter-spacing: -.02em; margin-top: 4px; }
+  .stat .value small { font-size: 13px; color: var(--muted-2); font-weight: 600; }
+  .stat .delta { font-size: 11.5px; font-weight: 600; margin-top: 6px; color: var(--muted); }
+  .stat.featured { background: linear-gradient(150deg, #7c6bf0, #9d8bff); color: #fff; border-color: transparent; }
+  .stat.featured .label, .stat.featured .delta, .stat.featured .value small { color: #e6e0ff; }
+  .stat.featured .pill { background: rgba(255,255,255,.2); }
+  .b-violet { background: var(--primary-50); color: var(--primary); }
+  .b-sky { background: #e4f5ff; color: #0284c7; }
+  .b-peach { background: #fff1e0; color: #d97706; }
+  .b-mint { background: #e8fbf3; color: #0f9d6b; }
+
+  .grid { display: grid; grid-template-columns: 380px 1fr; gap: 20px; align-items: start; }
+  .panel { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow); }
+  .panel-h { padding: 18px 20px 4px; }
+  .panel-h h2 { font-size: 17px; font-weight: 600; letter-spacing: -.01em; }
+  .panel-h .hint { font-size: 12px; color: var(--muted-2); margin-top: 2px; }
+  .panel-b { padding: 12px 20px 20px; }
+
+  .kv { display: flex; justify-content: space-between; align-items: baseline; padding: 11px 0; border-bottom: 1px solid var(--border); font-size: 13.5px; }
+  .kv:last-child { border-bottom: none; }
+  .kv .k { color: var(--muted); font-weight: 500; }
+  .kv .v { font-weight: 700; }
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 6px; }
+  .chip { font-size: 12px; font-weight: 700; padding: 6px 12px; border-radius: 999px; background: #f3eef9; color: var(--muted); }
+  .chip.algo { background: var(--primary-50); color: var(--primary); }
+
+  /* pipeline as soft rounded pills */
+  .pipe { display: flex; flex-wrap: wrap; gap: 0; }
+  .step { flex: 1 1 calc(25% - 12px); min-width: 152px; display: flex; align-items: center; }
+  .step .node { flex: 1; background: #faf7ff; border: 1px solid var(--border); border-radius: 16px; padding: 14px; text-align: center; position: relative; }
+  .step .dot { width: 28px; height: 28px; border-radius: 50%; background: linear-gradient(140deg, var(--primary), var(--coral)); color: #fff; font-size: 12px; font-weight: 700; display: grid; place-items: center; margin: 0 auto 8px; }
+  .step .t { font-size: 13px; font-weight: 700; letter-spacing: -.01em; }
+  .step .meta { font-size: 11px; color: var(--muted-2); margin-top: 2px; }
+  .conn { width: 18px; height: 3px; border-radius: 3px; background: #e3d9f7; flex: none; align-self: center; }
+  .step:last-child .conn { display: none; }
+  .pipe-foot { margin-top: 16px; font-size: 12px; color: var(--muted); display: flex; gap: 16px; align-items: center; }
+  .legend { display: inline-flex; align-items: center; gap: 6px; }
+  .legend i { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+  .note { margin-top: 28px; font-size: 12px; color: var(--muted-2); }
+  .note strong { color: var(--foreground); }
+</style>
+</head>
+<body>
+<div class="app">
+  <aside class="side">
+    <div class="brand">
+      <div class="mark">C</div>
+      <div class="name">ClassifyOS<small>Insurance ML · Sapiens</small></div>
+    </div>
+    <div class="navgroup">Workspace</div>
+    <nav class="nav">
+      <a class="active" href="#"><span class="ico"></span> Overview</a>
+      <a href="#"><span class="ico"></span> Upload Data</a>
+      <a href="#"><span class="ico"></span> Configuration</a>
+      <a href="#"><span class="ico"></span> Pipeline</a>
+    </nav>
+    <div class="navgroup">Results</div>
+    <nav class="nav">
+      <a href="#"><span class="ico"></span> Feature Impact</a>
+      <a href="#"><span class="ico"></span> Interaction Features</a>
+      <a href="#"><span class="ico"></span> Confusion Matrix</a>
+      <a href="#"><span class="ico"></span> Class Report</a>
+      <a href="#"><span class="ico"></span> ROC / PR Curves</a>
+      <a href="#"><span class="ico"></span> Predictions Table</a>
+      <a href="#"><span class="ico"></span> Explainability</a>
+    </nav>
+    <div class="navgroup">Reference</div>
+    <nav class="nav">
+      <a href="#"><span class="ico"></span> Setup Guide</a>
+      <a href="#"><span class="ico"></span> Risk Register</a>
+    </nav>
+  </aside>
+
+  <main class="main">
+    <div class="topbar">
+      <div>
+        <h1 class="serif">Overview</h1>
+        <div class="sub">Last run · policy_lapse.csv · 2 minutes ago</div>
+      </div>
+      <div class="topbar-right">
+        <span class="health"><span class="dot"></span> API connected · :8000</span>
+        <button class="btn">New run</button>
+      </div>
+    </div>
+
+    <section class="band">
+      <div class="stat featured">
+        <div class="pill">★</div>
+        <div class="label">Best model</div>
+        <div class="value serif">XGBoost</div>
+        <div class="delta">F1-weighted 0.91</div>
+      </div>
+      <div class="stat">
+        <div class="pill b-violet">◎</div>
+        <div class="label">Test accuracy</div>
+        <div class="value num">0.89</div>
+        <div class="delta">▲ vs 0.84 baseline</div>
+      </div>
+      <div class="stat">
+        <div class="pill b-sky">◠</div>
+        <div class="label">ROC-AUC</div>
+        <div class="value num">0.94</div>
+        <div class="delta">full test set</div>
+      </div>
+      <div class="stat">
+        <div class="pill b-peach">◐</div>
+        <div class="label">MCC</div>
+        <div class="value num">0.78</div>
+        <div class="delta">imbalance-robust</div>
+      </div>
+      <div class="stat">
+        <div class="pill b-mint">✓</div>
+        <div class="label">Models trained</div>
+        <div class="value num">3<small> / 3</small></div>
+        <div class="delta">all succeeded</div>
+      </div>
+    </section>
+
+    <div class="grid">
+      <section class="panel">
+        <div class="panel-h"><h2>Active configuration</h2><div class="hint">from your last run</div></div>
+        <div class="panel-b">
+          <div class="kv"><span class="k">Dataset</span><span class="v">policy_lapse.csv</span></div>
+          <div class="kv"><span class="k">Rows · features</span><span class="v num">3,000 · 12</span></div>
+          <div class="kv"><span class="k">Target</span><span class="v">will_lapse · binary</span></div>
+          <div class="kv"><span class="k">Class balance</span><span class="v">SMOTE · 4:1 → even</span></div>
+          <div class="kv"><span class="k">Split</span><span class="v">80 / 20 stratified</span></div>
+          <div class="kv"><span class="k">Encoding · scaling</span><span class="v">one-hot · standard</span></div>
+          <div class="kv"><span class="k">Tuning · calibration</span><span class="v">off · on</span></div>
+          <div style="margin-top:14px"><span style="font-size:12px;color:var(--muted);font-weight:600">Algorithms</span>
+            <div class="chips">
+              <span class="chip algo">LogisticRegression</span>
+              <span class="chip algo">RandomForest</span>
+              <span class="chip algo">XGBoost</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-h"><h2>Pipeline</h2><div class="hint">canonical order · split before preprocessing</div></div>
+        <div class="panel-b">
+          <div class="pipe">
+            <div class="step"><div class="node"><div class="dot">1</div><div class="t">Load data</div><div class="meta">CSV via storage</div></div><div class="conn"></div></div>
+            <div class="step"><div class="node"><div class="dot">2</div><div class="t">Feature impact</div><div class="meta">raw association</div></div><div class="conn"></div></div>
+            <div class="step"><div class="node"><div class="dot">3</div><div class="t">Train / test split</div><div class="meta">stratified 80/20</div></div><div class="conn"></div></div>
+            <div class="step"><div class="node"><div class="dot">4</div><div class="t">Preprocess</div><div class="meta">fit on train only</div></div><div class="conn"></div></div>
+            <div class="step"><div class="node"><div class="dot">5</div><div class="t">Build features</div><div class="meta">ratios · binning</div></div><div class="conn"></div></div>
+            <div class="step"><div class="node"><div class="dot">6</div><div class="t">Interactions</div><div class="meta">auto-discovered</div></div><div class="conn"></div></div>
+            <div class="step"><div class="node"><div class="dot">7</div><div class="t">Balance (train)</div><div class="meta">SMOTE</div></div><div class="conn"></div></div>
+            <div class="step"><div class="node"><div class="dot">8</div><div class="t">Train &amp; evaluate</div><div class="meta">3 models</div></div><div class="conn"></div></div>
+          </div>
+          <div class="pipe-foot">
+            <span class="legend"><i style="background:var(--mint)"></i> complete</span>
+            <span class="legend"><i style="background:#e3d9f7"></i> pending</span>
+            <span style="margin-left:auto" class="num">8 steps · 1.4s</span>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <p class="note">Mockup · Option C “Atlas”. shadcn/ui themed warm from the token block at the top
+      (accent = <span class="num">--primary #7c6bf0</span>, radius 18px, soft shadows). Recommended chart library:
+      <strong>Recharts</strong> — rounded bar caps, soft gridlines and easy theming sit naturally in this gentle look,
+      and its React-component model keeps the result pages approachable to build.</p>
+  </main>
+</div>
+</body>
+</html>

@@ -1,0 +1,238 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>ClassifyOS · Option A — Clarity (Light & clean SaaS)</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;600&display=swap" rel="stylesheet" />
+<style>
+  /* ───────────────────────────────────────────────────────────────────
+     OPTION A — "Clarity": light & clean SaaS.
+     These are the shadcn/ui design tokens (HSL-ish hex here for the mockup).
+     In the real app these live in one CSS file (:root) and theme every
+     shadcn component. CHANGE THE ACCENT in --primary to re-skin the whole UI.
+     ─────────────────────────────────────────────────────────────────── */
+  :root {
+    --background: #f7f8fa;   /* app canvas            */
+    --card:       #ffffff;   /* surfaces / cards      */
+    --foreground: #0f172a;   /* primary text          */
+    --muted:      #64748b;   /* secondary text        */
+    --muted-2:    #94a3b8;   /* tertiary / captions   */
+    --border:     #e2e8f0;   /* hairline borders      */
+    --primary:    #4f46e5;   /* PRIMARY ACTION accent */
+    --primary-50: #eef2ff;
+    --sky:        #0ea5e9;   /* data accent           */
+    --emerald:    #10b981;   /* positive / good       */
+    --amber:      #f59e0b;
+    --radius:     10px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: "Inter", system-ui, sans-serif;
+    background: var(--background);
+    color: var(--foreground);
+    -webkit-font-smoothing: antialiased;
+    line-height: 1.45;
+  }
+  .mono { font-family: "JetBrains Mono", monospace; font-variant-numeric: tabular-nums; }
+
+  /* shell */
+  .app { display: grid; grid-template-columns: 248px 1fr; min-height: 100vh; }
+
+  /* sidebar */
+  .side { background: var(--card); border-right: 1px solid var(--border); padding: 20px 14px; position: sticky; top: 0; height: 100vh; overflow-y: auto; }
+  .brand { display: flex; align-items: center; gap: 10px; padding: 6px 8px 18px; }
+  .brand .mark { width: 30px; height: 30px; border-radius: 8px; background: linear-gradient(135deg, var(--primary), var(--sky)); display: grid; place-items: center; color: #fff; font-weight: 700; font-size: 15px; }
+  .brand .name { font-weight: 700; letter-spacing: -.01em; }
+  .brand .name small { display: block; font-weight: 500; color: var(--muted-2); font-size: 11px; letter-spacing: .02em; }
+  .navgroup { font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted-2); padding: 14px 10px 6px; font-weight: 600; }
+  .nav a { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 8px; color: var(--muted); text-decoration: none; font-size: 13.5px; font-weight: 500; }
+  .nav a .ico { width: 16px; height: 16px; border-radius: 5px; border: 1.6px solid currentColor; opacity: .55; flex: none; }
+  .nav a:hover { background: #f1f5f9; color: var(--foreground); }
+  .nav a.active { background: var(--primary-50); color: var(--primary); font-weight: 600; }
+  .nav a.active .ico { opacity: 1; background: var(--primary); border-color: var(--primary); }
+
+  /* main */
+  .main { padding: 22px 30px 48px; max-width: 1180px; }
+  .topbar { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; margin-bottom: 8px; }
+  h1 { font-size: 24px; letter-spacing: -.02em; font-weight: 700; }
+  .sub { color: var(--muted); font-size: 13.5px; margin-top: 2px; }
+  .topbar-right { display: flex; align-items: center; gap: 12px; }
+  .health { display: inline-flex; align-items: center; gap: 8px; background: #ecfdf5; color: #047857; border: 1px solid #a7f3d0; padding: 7px 12px; border-radius: 999px; font-size: 12.5px; font-weight: 600; }
+  .health .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--emerald); box-shadow: 0 0 0 3px #d1fae5; }
+  .btn { background: var(--primary); color: #fff; border: none; padding: 9px 16px; border-radius: 9px; font-weight: 600; font-size: 13.5px; cursor: pointer; box-shadow: 0 1px 2px rgba(79,70,229,.25); }
+
+  /* stat band */
+  .band { display: grid; grid-template-columns: repeat(5, 1fr); gap: 14px; margin: 22px 0; }
+  .stat { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; position: relative; overflow: hidden; }
+  .stat .label { font-size: 12px; color: var(--muted); font-weight: 500; }
+  .stat .value { font-size: 26px; font-weight: 700; letter-spacing: -.02em; margin-top: 6px; }
+  .stat .value small { font-size: 13px; color: var(--muted-2); font-weight: 600; }
+  .stat .delta { font-size: 11.5px; font-weight: 600; margin-top: 6px; display: inline-flex; gap: 4px; align-items: center; }
+  .stat .delta.up { color: var(--emerald); }
+  .stat.featured { background: linear-gradient(160deg, #4f46e5, #6366f1); color: #fff; border-color: transparent; }
+  .stat.featured .label, .stat.featured .value small { color: #c7d2fe; }
+  .spark { position: absolute; right: 12px; bottom: 10px; opacity: .9; }
+
+  /* layout grid */
+  .grid { display: grid; grid-template-columns: 380px 1fr; gap: 18px; align-items: start; }
+  .panel { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); }
+  .panel-h { padding: 16px 18px; border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; }
+  .panel-h h2 { font-size: 14px; font-weight: 700; letter-spacing: -.01em; }
+  .panel-h .hint { font-size: 11.5px; color: var(--muted-2); }
+  .panel-b { padding: 16px 18px; }
+
+  /* config rows */
+  .kv { display: flex; justify-content: space-between; align-items: baseline; padding: 9px 0; border-bottom: 1px dashed var(--border); font-size: 13px; }
+  .kv:last-child { border-bottom: none; }
+  .kv .k { color: var(--muted); }
+  .kv .v { font-weight: 600; }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
+  .chip { font-size: 11.5px; font-weight: 600; padding: 4px 9px; border-radius: 7px; background: #f1f5f9; color: #334155; border: 1px solid var(--border); }
+  .chip.algo { background: var(--primary-50); color: var(--primary); border-color: #c7d2fe; }
+
+  /* pipeline */
+  .pipe { display: flex; flex-wrap: wrap; gap: 0; }
+  .step { flex: 1 1 calc(25% - 12px); min-width: 150px; display: flex; align-items: center; }
+  .step .node { flex: 1; background: #fff; border: 1px solid var(--border); border-radius: 10px; padding: 12px 12px; position: relative; }
+  .step .num { font-size: 11px; font-weight: 700; color: var(--primary); font-family: "JetBrains Mono", monospace; }
+  .step .t { font-size: 13px; font-weight: 600; margin-top: 3px; letter-spacing: -.01em; }
+  .step .meta { font-size: 11px; color: var(--muted-2); margin-top: 2px; }
+  .step .check { position: absolute; top: 10px; right: 10px; width: 16px; height: 16px; border-radius: 50%; background: var(--emerald); color: #fff; font-size: 10px; display: grid; place-items: center; }
+  .conn { width: 22px; height: 2px; background: linear-gradient(90deg, var(--primary), var(--sky)); flex: none; align-self: center; }
+  .step:last-child .conn { display: none; }
+  .pipe-foot { margin-top: 14px; font-size: 12px; color: var(--muted); display: flex; gap: 16px; }
+  .legend { display: inline-flex; align-items: center; gap: 6px; }
+  .legend i { width: 9px; height: 9px; border-radius: 3px; display: inline-block; }
+  .note { margin-top: 26px; font-size: 12px; color: var(--muted-2); }
+</style>
+</head>
+<body>
+<div class="app">
+  <!-- ───────────── sidebar nav (13 canonical pages) ───────────── -->
+  <aside class="side">
+    <div class="brand">
+      <div class="mark">C</div>
+      <div class="name">ClassifyOS<small>Insurance ML · Sapiens</small></div>
+    </div>
+    <div class="navgroup">Workspace</div>
+    <nav class="nav">
+      <a class="active" href="#"><span class="ico"></span> Overview</a>
+      <a href="#"><span class="ico"></span> Upload Data</a>
+      <a href="#"><span class="ico"></span> Configuration</a>
+      <a href="#"><span class="ico"></span> Pipeline</a>
+    </nav>
+    <div class="navgroup">Results</div>
+    <nav class="nav">
+      <a href="#"><span class="ico"></span> Feature Impact</a>
+      <a href="#"><span class="ico"></span> Interaction Features</a>
+      <a href="#"><span class="ico"></span> Confusion Matrix</a>
+      <a href="#"><span class="ico"></span> Class Report</a>
+      <a href="#"><span class="ico"></span> ROC / PR Curves</a>
+      <a href="#"><span class="ico"></span> Predictions Table</a>
+      <a href="#"><span class="ico"></span> Explainability</a>
+    </nav>
+    <div class="navgroup">Reference</div>
+    <nav class="nav">
+      <a href="#"><span class="ico"></span> Setup Guide</a>
+      <a href="#"><span class="ico"></span> Risk Register</a>
+    </nav>
+  </aside>
+
+  <!-- ───────────── main ───────────── -->
+  <main class="main">
+    <div class="topbar">
+      <div>
+        <h1>Overview</h1>
+        <div class="sub">Last run · policy_lapse.csv · 2 minutes ago</div>
+      </div>
+      <div class="topbar-right">
+        <span class="health"><span class="dot"></span> API connected · :8000</span>
+        <button class="btn">New run</button>
+      </div>
+    </div>
+
+    <!-- stats band -->
+    <section class="band">
+      <div class="stat featured">
+        <div class="label">Best model</div>
+        <div class="value">XGBoost</div>
+        <div class="delta up">F1-weighted 0.91</div>
+      </div>
+      <div class="stat">
+        <div class="label">Test accuracy</div>
+        <div class="value mono">0.89</div>
+        <div class="delta up">▲ vs 0.84 baseline</div>
+      </div>
+      <div class="stat">
+        <div class="label">ROC-AUC</div>
+        <div class="value mono">0.94</div>
+        <div class="delta">full test set</div>
+      </div>
+      <div class="stat">
+        <div class="label">MCC</div>
+        <div class="value mono">0.78</div>
+        <div class="delta">imbalance-robust</div>
+      </div>
+      <div class="stat">
+        <div class="label">Models trained</div>
+        <div class="value mono">3<small> / 3</small></div>
+        <div class="delta up">all succeeded</div>
+      </div>
+    </section>
+
+    <div class="grid">
+      <!-- active configuration -->
+      <section class="panel">
+        <div class="panel-h"><h2>Active configuration</h2><span class="hint">from last /run</span></div>
+        <div class="panel-b">
+          <div class="kv"><span class="k">Dataset</span><span class="v mono">policy_lapse.csv</span></div>
+          <div class="kv"><span class="k">Rows · features</span><span class="v mono">3,000 · 12</span></div>
+          <div class="kv"><span class="k">Target</span><span class="v">will_lapse · binary</span></div>
+          <div class="kv"><span class="k">Class balance</span><span class="v">SMOTE · 4:1 → even</span></div>
+          <div class="kv"><span class="k">Split</span><span class="v">80 / 20 stratified</span></div>
+          <div class="kv"><span class="k">Encoding · scaling</span><span class="v">one-hot · standard</span></div>
+          <div class="kv"><span class="k">Tuning · calibration</span><span class="v">off · on</span></div>
+          <div style="margin-top:12px"><span class="k" style="font-size:12px;color:var(--muted)">Algorithms</span>
+            <div class="chips">
+              <span class="chip algo">LogisticRegression</span>
+              <span class="chip algo">RandomForest</span>
+              <span class="chip algo">XGBoost</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- pipeline -->
+      <section class="panel">
+        <div class="panel-h"><h2>Pipeline</h2><span class="hint">canonical order · split before preprocessing</span></div>
+        <div class="panel-b">
+          <div class="pipe">
+            <div class="step"><div class="node"><div class="check">✓</div><div class="num">01</div><div class="t">Load data</div><div class="meta">CSV via storage</div></div><div class="conn"></div></div>
+            <div class="step"><div class="node"><div class="check">✓</div><div class="num">02</div><div class="t">Feature impact</div><div class="meta">raw association</div></div><div class="conn"></div></div>
+            <div class="step"><div class="node"><div class="check">✓</div><div class="num">03</div><div class="t">Train / test split</div><div class="meta">stratified 80/20</div></div><div class="conn"></div></div>
+            <div class="step"><div class="node"><div class="check">✓</div><div class="num">04</div><div class="t">Preprocess</div><div class="meta">fit on train only</div></div><div class="conn"></div></div>
+            <div class="step"><div class="node"><div class="check">✓</div><div class="num">05</div><div class="t">Build features</div><div class="meta">ratios · binning</div></div><div class="conn"></div></div>
+            <div class="step"><div class="node"><div class="check">✓</div><div class="num">06</div><div class="t">Interactions</div><div class="meta">auto-discovered</div></div><div class="conn"></div></div>
+            <div class="step"><div class="node"><div class="check">✓</div><div class="num">07</div><div class="t">Balance (train)</div><div class="meta">SMOTE</div></div><div class="conn"></div></div>
+            <div class="step"><div class="node"><div class="check">✓</div><div class="num">08</div><div class="t">Train &amp; evaluate</div><div class="meta">3 models</div></div><div class="conn"></div></div>
+          </div>
+          <div class="pipe-foot">
+            <span class="legend"><i style="background:var(--emerald)"></i> complete</span>
+            <span class="legend"><i style="background:var(--border)"></i> pending</span>
+            <span style="margin-left:auto">8 steps · 1.4s</span>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <p class="note">Mockup · Option A “Clarity”. shadcn/ui themed from the token block at the top of this file
+      (accent = <span class="mono">--primary #4f46e5</span>). Recommended chart library:
+      <strong>Recharts</strong> — declarative React components match this clean, composed SaaS look and render the
+      standard bars / lines / heatmaps the result pages need with minimal ceremony.</p>
+  </main>
+</div>
+</body>
+</html>

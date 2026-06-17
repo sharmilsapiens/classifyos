@@ -102,5 +102,5 @@ anyone returning after a break who wants the gist without reading code.
 - **backend_short_desc.md** (this file) — the plain-language phase-by-phase summary of the
   ML engine.
 - **api_short_desc.md** — the plain-language summary of the API surface (Phase 8 FastAPI layer).
-  (Future sibling: `frontend_short_desc.md`.)
+- **frontend_short_desc.md** — the plain-language summary of the React dashboard (Phase 9).
 - **docs/api_contract.md** — the **locked** `/api/v1/run` request/response schema.

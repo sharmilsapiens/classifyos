@@ -15,11 +15,19 @@
     "noEmit": true,
     "jsx": "react-jsx",
 
+    /* Path alias: "@/..." → "src/..." (mirrors vite.config.ts).
+       With moduleResolution "bundler", paths resolve relative to this file —
+       no baseUrl needed (baseUrl is deprecated in TS 6). */
+    "paths": {
+      "@/*": ["./src/*"]
+    },
+
     /* Linting */
     "noUnusedLocals": true,
     "noUnusedParameters": true,
     "erasableSyntaxOnly": true,
     "noFallthroughCasesInSwitch": true
   },
-  "include": ["src"]
+  "include": ["src"],
+  "exclude": ["src/**/*.test.ts", "src/**/*.test.tsx", "src/test"]
 }

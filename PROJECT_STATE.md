@@ -5,8 +5,9 @@
 > planning/overseer chat stays in sync with the local repo.
 
 **Last updated:** 2026-06-17
-**Updated by:** Claude Code (Phase 8 — FastAPI layer; /api/v1/run schema LOCKED)
-**Repo tag / commit:** b423d49 (Phase 7B LR-space fix) + Phase 8 commit pending
+**Updated by:** Claude Code (Phase 9a — React frontend foundation: design pick + typed API
+client against the LOCKED contract + Upload→Configure→Run round-trip)
+**Repo tag / commit:** 17f3653 (Phase 8 FastAPI) + Phase 9a commit pending
 
 ---
 
@@ -72,7 +73,7 @@ written. Engine complete; ready for Phase 8 (FastAPI layer).
 | 7 | Plots + ModelRunner + CLI (Sections 14–16) | ✅ Done | ModelRunner (deep-copy config isolation, corrected order, robust per-algo failures) + plot_results (plot1/2/3/5) + CLI (load_dotenv, inspect/run modes); 13 tests; real-data run on iris done; engine feature-complete |
 | 7B | Optuna hyperparameter tuning (Section 8B) | ✅ Done | `tuning.py` (`tune_model`) — OFF by default; one uniform mechanism for all 6 models; CV-in-train trial scoring (leakage-safe); per-model isolation + hard 600s/model timeout; ModelRunner + config + CLI (`--tune…`) sanctioned edits; 17 tests; **AutoML pulled v1.5→v1.0** (plan_tweak 24–25) |
 | 8 | FastAPI layer | ✅ Done | 6 endpoints under `/api/v1/`; `/run` schema LOCKED (docs/api_contract.md); `curves.py` helper + plot2 refactor; `save_input` upload support; `/explain` stub; 36 tests (184 total) |
-| 9 | React dashboard (13 pages) | ⬜ Not started | Deviation from scope: React replaces single-file HTML. **Generate against the LOCKED `docs/api_contract.md`** |
+| 9 | React dashboard (13 pages) | 🔄 In progress | **9a done** (foundation: Option A design + Recharts; shadcn/ui design system; typed client vs LOCKED contract; app shell + 13-page nav; Upload→Configure→Run round-trip verified live; 13 FE tests). Next: 9b result pages, 9c remaining + polish |
 | 10 | Unit tests (full pytest suite) | ⬜ Not started | |
 | 11 | Integration: 7 use cases E2E + governance sign-off | ⬜ Not started | |
 
@@ -127,6 +128,10 @@ Status legend: ⬜ Not started · 🔄 In progress · ✅ Done · ⚠️ Blocked
 | 2026-06-17 | **Phase 8**: `/api/v1/run` prefix is `/api/v1/` (mounted via `FastAPI.include_router(prefix=...)`); responses JSON-safe via `api/serialize.safe_jsonify` (numpy→Python, NaN/Inf→None) extending the engine's `_jsonify` | CLAUDE.md mandates `/api/v1/` (supersedes the scope's bare `/api/...` table, plan_tweak 30); NaN/Inf are invalid JSON and would 500 or break the browser parser, so they map to null |
 | 2026-06-17 | **Phase 8**: `/explain` ships option **(B)** — a structured "needs a persisted model (v2.0)" stub for ALL models; no training on request | v1.0 is stateless with no model registry, and `shap` is not installed; the prompt's default (A) (re-fit + TreeExplainer) needs a heavy dep + retraining per call. The response shape is final so v2.0 fills it in without a contract change. Owner-confirmed. plan_tweak 29 |
 | 2026-06-17 | **Phase 8**: added additive `StorageAdapter.save_input(key, fileobj)` (ABC + `LocalFolderStorage`) writing into the INPUT root | `open_write` targets `OUTPUT_DIR` but inspect/loader read from `DATA_DIR`, so an upload saved via the existing API couldn't be read by `/run`. A second sanctioned engine edit beyond the curve helper, honoring "ALL I/O through StorageAdapter" over "no other engine edits". Additive, traversal-guarded. Owner-confirmed. plan_tweak 31 |
+| 2026-06-17 | **Phase 9a**: design direction = **Option A "Clarity"** (light/clean SaaS, indigo `--primary #4f46e5`, Inter + JetBrains Mono) — owner pick from three mockups (`frontend/design-mockups/`) | The dashboard's audience is insurance analysts; a clean, neutral, dense-capable SaaS look reads as professional and keeps strong hierarchy without the contrast risk of the dark option or the lower density of the soft option. A decision, not a deviation |
+| 2026-06-17 | **Phase 9a**: chart library = **Recharts** (pinned `3.8.1`) | Owner pick. The result pages are mostly standard chart types (bars, lines, heatmaps); Recharts' declarative React-component model is faster/cleaner to build and maintain than Chart.js' imperative canvas API for this app. Chart.js would only win for very dense curves on dark surfaces (the un-chosen Option B) |
+| 2026-06-17 | **Phase 9a**: theming via ONE CSS-variable token block in `src/index.css` (Tailwind v4 `@theme inline`); change `--primary`/`--radius` to re-skin the whole app | Single source of truth for the look; no component file needs editing to re-theme. Stack: **Tailwind v4** (`@tailwindcss/vite`), **shadcn/ui** component pattern, **React Router 7** |
+| 2026-06-17 | **Phase 9a**: shadcn/ui Button/Card/Badge/Input/Label are genuine (CVA); **Select/Switch are accessible native HTML** styled to match, not the Radix-based shadcn versions | Avoids a `@radix-ui/*` dependency in 9a; native `<select>`/checkbox are fully accessible and clearest for a frontend-new owner. Token theming is identical; drop-in upgradeable later. plan_tweak 32 |
 
 ---
 
@@ -537,6 +542,68 @@ Status legend: ⬜ Not started · 🔄 In progress · ✅ Done · ⚠️ Blocked
   upload storage gap → additive `save_input`; `/explain` → structured stub (B).
 - Prompt archived to `prompts/api_phases/phase_08_fastapi.md`; plan_tweak rows 27–31 added.
 
+## Completed this session (Phase 9a — 2026-06-17)
+
+> **First frontend slice.** Backend untouched (frozen). Everything is a pure HTTP client of
+> `/api/v1/`. First of three slices: **9a foundation** → 9b result pages → 9c remaining + polish.
+
+- **Design pick (owner):** three full-look mockups of the same Overview screen were generated
+  (`frontend/design-mockups/` — `option-a-clarity` / `option-b-telemetry` / `option-c-atlas`
+  + an `index.html`). Owner chose **Option A "Clarity"** (light/clean SaaS, indigo accent) and
+  **Recharts** as the chart library. Both recorded in the decisions log.
+- **Design system** (`frontend/src/index.css`): one CSS-variable token block (Option A
+  "Clarity") mapped through Tailwind v4's `@theme inline`, so `bg-card`/`text-muted-foreground`/
+  `rounded-lg` etc. and every shadcn component theme from one place — change `--primary` to
+  re-skin. shadcn/ui components added in the shadcn idiom (CVA + `cn`): `button`, `card`,
+  `badge`, `input`, `label`; `select`/`switch` are accessible **native** elements styled to
+  match (no Radix dep in 9a — plan_tweak 32). Fonts: Inter + JetBrains Mono.
+- **Typed API client** generated against the **LOCKED** contract:
+  - `src/api/types.ts` mirrors `docs/api_contract.md` + `backend/api/models.py` **exactly**
+    (RunConfig + nested fe/ix/tuning; envelope with `models` as a LIST, sampled `predictions`
+    with `full_csv`, per-model `confusion_matrix`/`class_report`/`curves`, `feature_impact`,
+    `artifacts`). Each type commented with the page that consumes it. **No invented fields.**
+  - `src/api/client.ts` — one typed fn per endpoint (`health`/`upload`/`run`/`explain`/
+    `listOutputs`/`outputUrl`) with a single `ApiError` distinguishing network-offline / 422
+    (with field detail) / 400 run-error. `src/api/parse.ts` (`parseRunResponse`) structurally
+    validates a `/run` envelope before the UI trusts it. API base from `VITE_API_BASE_URL`
+    (default `/api/v1`). `src/lib/buildPayload.ts` (pure) turns flat form state → RunConfig.
+- **App shell:** `Sidebar` (canonical **13-page** nav, grouped, active highlight, from one
+  `lib/nav.ts`), `Topbar` with the **API health banner** (`checkAPI()` on load → green
+  connected / red "offline — start uvicorn on :8000" + retry) and a "New run" button,
+  `AppLayout` (`<Outlet/>`). Global store `src/store/AppStore.tsx` (React Context) holds
+  serverPath+inspect, the RunConfig form, the last `/run` result, and loading/error flags.
+  First-class empty/loading/error states (`components/common/States.tsx`) — no blank screens.
+- **Upload → Configure → Run round-trip (real screens):** **Upload** (drag-drop → `/upload` →
+  columns/dtypes/missing + class-distribution chips + suggested type; stores `server_path`),
+  **Configure** (form binding every RunConfig field; enum option lists mirror `config.py` so a
+  run never 422s on a bad enum; client-side required-field mirror), **Pipeline** (in-progress
+  state → model scoreboard + artifact downloads + raw envelope; 422 vs 400 shown distinctly),
+  and **Overview** (KPI band + per-model F1 Recharts chart + active config). The other 9 pages
+  are honest stub routes naming what they'll show.
+- **Verified live:** `npm run build` clean (tsc + vite). Backend started (uvicorn :8000) and a
+  **real round-trip exercised**: `/health` ok → `/upload policy_lapse.csv` (server_path
+  `uploads/policy_lapse.csv`) → `/run` (LR+RF, class_weight) returned `status:"ok"` schema 1.0,
+  2/2 models, 11 artifacts, curves for both. The **Vite dev proxy** was confirmed end to end
+  (`http://localhost:5173/api/v1/health` → backend). The captured envelope is committed as the
+  test fixture (`src/test/fixtures/run_envelope.json`).
+- **Tests (13, vitest + Testing Library):** `buildPayload` → contract-valid RunConfig (+ trim +
+  required-field mirror); `parseRunResponse` accepts the **real saved envelope** and rejects
+  malformed/error-with-result/bad-status; `checkAPI()` offline (mocked rejected fetch) doesn't
+  crash + online path. Full page-render + E2E deferred to Phase 10.
+- **Hallucination check ✅** — verified against the INSTALLED versions and pinned in
+  `frontend/package.json`: **react 19.2.6**, **react-router-dom 7.18.0** (BrowserRouter/Routes/
+  Route/NavLink/Outlet/useNavigate), **recharts 3.8.1** (ResponsiveContainer/BarChart/Tooltip),
+  **tailwindcss 4.3.1** + **@tailwindcss/vite 4.3.1** (`@theme inline`), **lucide-react 1.20.0**,
+  **class-variance-authority 0.7.1** / **clsx 2.1.1** / **tailwind-merge 3.6.0**, **vite 8.0.16**,
+  **vitest 4.1.9** / **jsdom 29.1.1** / **@testing-library/react 16.3.2**, **typescript 6.0.x**
+  (verbatimModuleSyntax/erasableSyntaxOnly honored; `baseUrl` dropped — deprecated in TS6,
+  `paths` resolves via `moduleResolution: bundler`). `import.meta.env` typed in `vite-env.d.ts`.
+- **Contract gaps:** **none** — every UI field maps to a contract field. (`PROJECT_WISDOM.md`,
+  named in the prompt's read-list, does not exist; its `.env`/CORS rules live in CLAUDE.md +
+  `docs/api_contract.md`, which were read — noted in plan_tweak 32.)
+- Prompt archived to `prompts/frontend_phases/phase_09a_foundation.md`; plan_tweak row 32 added;
+  `frontend_short_desc.md` created (referenced from backend_/api_short_desc.md).
+
 ## Completed this session (Doc-update enforcement hook — 2026-06-15) — ⚠️ REMOVED 2026-06-16
 
 > This hook was removed in the 2026-06-16 reorg session (see below). Kept here as a record.
@@ -641,10 +708,13 @@ Status legend: ⬜ Not started · 🔄 In progress · ✅ Done · ⚠️ Blocked
 
 ## In progress / partially done
 
-- Nothing in flight. Phase 8 closed — the FastAPI layer (`backend/api/`) wraps the engine over
-  HTTP and the `/api/v1/run` response schema is LOCKED (`docs/api_contract.md`). The ML engine
-  (Sections 1–16 + 8B tuning) is unchanged behind it. Next: Phase 9 (React dashboard, generated
-  against the locked contract).
+- **Phase 9 (React dashboard) — 9a complete, 9b/9c remaining.** The foundation is built and the
+  Upload→Configure→Run round-trip is verified against a live backend. **Real screens:** Overview,
+  Upload, Configuration, Pipeline. **Stub routes (9b/9c):** Feature Impact, Interaction Features,
+  Confusion Matrix, Class Report, ROC/PR Curves, Predictions Table, Explainability, Setup Guide,
+  Risk Register. The backend (engine + API) is unchanged/frozen behind it.
+- `frontend/design-mockups/` holds the three throwaway design-option HTML mockups (Option A
+  chosen) — kept as the provenance of the design pick; not part of the built app.
 
 ## Known issues / bugs
 
@@ -658,18 +728,43 @@ Status legend: ⬜ Not started · 🔄 In progress · ✅ Done · ⚠️ Blocked
 
 ---
 
+## Testing debt / untested paths (target for Week 4 — Phases 10–11)
+
+> The 184-test suite covers the engine + API well, but these categories *cannot* have been
+> tested yet and are the real Phase 10/11 content. Do not treat the green suite as covering them.
+
+- **Frontend tests** — 9a added 13 (vitest): typed-client parsing of a real locked envelope
+  (`parseRunResponse`), `buildPayload()` field capture, `checkAPI()` offline/online. **Still
+  missing:** per-page render tests + E2E (deferred to Phase 10).
+- **True end-to-end** — browser → live uvicorn → engine → rendered chart. Current "integration"
+  hits the engine directly or the API via TestClient; never through a real browser.
+- **Multilabel (Product Recommendation) has NEVER run end-to-end** — all real runs so far are
+  binary/multiclass. Weak spots: resampling→class_weight fallback (plan_tweak 19), per-label
+  thresholds out of scope, multilabel curves/calibration least-tested. **Highest surprise risk.**
+- **Tuning at realistic budgets** (tests use tiny budgets, never SVM) + its interaction with the
+  synchronous `/run` gateway timeout.
+- **Performance baseline** on 10k+ rows (samples are 3k–8k; the "<5 min" target is unverified).
+- **`/explain` real path**; **CORS exercised by an actual browser** (curl/TestClient aren't
+  browsers); **real (non-synthetic) data** revalidation if any arrives (plan_tweak 5).
+- **Governance sign-offs still open**: [RISK]-comment review by team lead, leakage-audit
+  sign-off, per-phase sign-off by Naveen.
+
+---
+
 ## Next steps (priority order)
 
-1. Commit Phase 8 ("Phase 8: FastAPI layer (health/upload/run/explain/outputs) + locked
-   /api/v1/run schema + curves helper + tests").
+1. Commit Phase 9a ("Phase 9a: React foundation — design system + typed API client (locked
+   contract) + Upload/Configure/Run round-trip").
 2. Upload updated PROJECT_STATE.md to the Claude Project knowledge.
-3. **Phase 9 — React dashboard (13 pages), generated against the LOCKED `docs/api_contract.md`.**
-   The frontend talks to `/api/v1/` (already proxied via Vite `/api → :8000`). Build the typed
-   API client from the locked envelope; `models` is a list, `predictions` is sampled (link the
-   full CSV via `/outputs/{name}`), charts (curves) come from `result.curves`, PNGs are fetched
-   from `/outputs/{name}` on demand.
-4. v1.5/v2.0 backlog surfaced this phase: background-job `/run` (submit→poll→fetch) to beat
-   gateway timeouts; real `/explain` once model persistence (MLflow / a model registry) lands.
+3. **Phase 9b — result-rendering pages.** Build the real result screens against the LOCKED
+   contract using the typed client already in place: Feature Impact (`result.feature_impact` +
+   plot4 via `/outputs`), Confusion Matrix heatmaps (`result.confusion_matrix`), Class Report
+   tables (`result.class_report`), **ROC/PR Curves** charts from `result.curves` (Recharts),
+   Predictions Table (`result.predictions` + full-CSV download), Interaction Features. PNGs are
+   fetched on demand via `/outputs/{name}` (never inlined). Then **9c** — Explainability (the
+   `/explain` v1.0 stub), Setup Guide, Risk Register, and polish.
+4. v1.5/v2.0 backlog (unchanged): background-job `/run` (submit→poll→fetch) to beat gateway
+   timeouts; real `/explain` once model persistence (MLflow / a model registry) lands.
 
 ---
 
@@ -712,4 +807,5 @@ Contract doc: `docs/api_contract.md` — frozen; changes must be additive and bu
 | 2026-06-16 | Tooling — added `backend/run_tests.ps1` (venv-Python pytest runner; forwards args, no activation needed) + RUNBOOK note | Convenience only; **no engine code touched, no behaviour change** (so backend_short_desc/plan_tweak deliberately not updated). Commit ad44354 |
 | 2026-06-16 | Phase 7B follow-up — LogisticRegression tuning space → `C` only | Fixed FutureWarning (`penalty` deprecated, sklearn 1.9) + multiclass `liblinear` errors surfaced by a real LR-on-iris tuning run; +1 multiclass regression test (148 total); decisions log + plan_tweak row 26 + backend_short_desc updated |
 | 2026-06-17 | Phase 8 — FastAPI layer (`backend/api/`) + `/api/v1/run` schema LOCKED | 184 tests (36 new); 6 endpoints (health/upload/run/explain/outputs) driving ModelRunner/inspect_file, no ML added; sanctioned `evaluation/curves.py` helper + plot2 refactor; additive `StorageAdapter.save_input` for uploads; `/explain` v1.0 stub; sync `/run` via threadpool (background jobs → v1.5); `docs/api_contract.md` locked; `api_short_desc.md` created; plan_tweak 27–31; prompt archived to `prompts/api_phases/phase_08_fastapi.md` |
+| 2026-06-17 | Phase 9a — React frontend foundation (design pick + typed client + Upload→Configure→Run round-trip) | Owner chose **Option A "Clarity"** + **Recharts** from 3 mockups; Tailwind v4 + shadcn/ui design system (one token block); typed client mirrors the LOCKED contract exactly (no invented fields, no contract gaps); 13-page app shell + health banner + global store; Upload/Configure/Pipeline/Overview real, 9 stubs; **live round-trip + Vite proxy verified**; 13 FE tests (vitest); deps pinned + hallucination-checked; `frontend_short_desc.md` created; plan_tweak 32; prompt archived to `prompts/frontend_phases/phase_09a_foundation.md` |
 | | | |

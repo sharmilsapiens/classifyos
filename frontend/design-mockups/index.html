@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>ClassifyOS · Phase 9a — Design template options</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: "Inter", system-ui, sans-serif; background: #f1f3f7; color: #0f172a; padding: 40px; line-height: 1.5; }
+  .wrap { max-width: 960px; margin: 0 auto; }
+  h1 { font-size: 26px; letter-spacing: -.02em; }
+  p.lead { color: #64748b; margin: 8px 0 28px; max-width: 64ch; }
+  .cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; }
+  .card { background: #fff; border: 1px solid #e2e8f0; border-radius: 14px; overflow: hidden; text-decoration: none; color: inherit; transition: transform .12s, box-shadow .12s; }
+  .card:hover { transform: translateY(-3px); box-shadow: 0 14px 30px -16px rgba(15,23,42,.3); }
+  .swatch { height: 90px; display: flex; }
+  .swatch span { flex: 1; }
+  .body { padding: 16px; }
+  .body h2 { font-size: 16px; }
+  .body .tag { font-size: 11px; font-weight: 600; color: #64748b; text-transform: uppercase; letter-spacing: .06em; }
+  .body p { font-size: 13px; color: #475569; margin-top: 6px; }
+  .body .chart { font-size: 12px; margin-top: 10px; color: #334155; }
+  .body .chart b { color: #4f46e5; }
+  .foot { margin-top: 30px; font-size: 13px; color: #64748b; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>ClassifyOS — Phase 9a · Design template options</h1>
+  <p class="lead">Three full-look directions for the dashboard, each rendering the same Overview screen
+    (stats band · active-config panel · 8-step pipeline) so they’re directly comparable. Open each, then
+    pick a design <em>and</em> a chart library. These are throwaway mockups — the real React app is built after the pick.</p>
+  <div class="cards">
+    <a class="card" href="option-a-clarity.html">
+      <div class="swatch"><span style="background:#ffffff"></span><span style="background:#4f46e5"></span><span style="background:#0ea5e9"></span><span style="background:#10b981"></span></div>
+      <div class="body"><div class="tag">Option A</div><h2>Clarity</h2><p>Light &amp; clean SaaS — white base, indigo accent, crisp hairlines, modern sans.</p><div class="chart">Chart lib: <b>Recharts</b></div></div>
+    </a>
+    <a class="card" href="option-b-telemetry.html">
+      <div class="swatch"><span style="background:#0b0e14"></span><span style="background:#22d3ee"></span><span style="background:#a78bfa"></span><span style="background:#fbbf24"></span></div>
+      <div class="body"><div class="tag">Option B</div><h2>Telemetry</h2><p>Dark data dashboard — near-black canvas, neon data colors, charts-first control room.</p><div class="chart">Chart lib: <b>Chart.js</b></div></div>
+    </a>
+    <a class="card" href="option-c-atlas.html">
+      <div class="swatch"><span style="background:#faf6f2"></span><span style="background:#7c6bf0"></span><span style="background:#fb7185"></span><span style="background:#34d399"></span></div>
+      <div class="body"><div class="tag">Option C</div><h2>Atlas</h2><p>Soft &amp; friendly — warm off-white, pastel cards, generous rounding, gentle shadows.</p><div class="chart">Chart lib: <b>Recharts</b></div></div>
+    </a>
+  </div>
+  <p class="foot">All three theme <strong>shadcn/ui</strong> via a single CSS token block (shown at the top of each file’s
+    <code>&lt;style&gt;</code>). Reply with your pick (e.g. “Option B, Chart.js”) to continue with §4.</p>
+</div>
+</body>
+</html>

@@ -74,4 +74,4 @@ are referenced by filename only; and every number is JSON-safe (undefined values
 - **docs/api_contract.md** — the **locked** `/run` request/response schema (the frozen contract).
 - **backend_short_desc.md** — plain-language summary of the ML engine.
 - **api_short_desc.md** (this file) — plain-language summary of the API surface.
-  (Future sibling: `frontend_short_desc.md`.)
+- **frontend_short_desc.md** — plain-language summary of the React dashboard (Phase 9).
