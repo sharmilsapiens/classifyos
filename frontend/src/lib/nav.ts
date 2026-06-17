@@ -1,7 +1,7 @@
 /* The canonical 13-page navigation, defined in ONE place so the sidebar, the
    router, and any "next step" links never drift. (Locked in Phase 9a.)
-   Only Overview, Upload, and Configuration are real screens in 9a; the rest are
-   stub routes filled in during 9b/9c. */
+   9a built the Workspace screens; 9b built the six Results pages. Only
+   Explainability, Setup Guide, and Risk Register remain stub routes (9c). */
 
 import {
   BarChart3,
@@ -35,12 +35,12 @@ export const NAV_ITEMS: NavItem[] = [
   { path: "/configure", label: "Configuration", icon: Settings2, group: "Workspace" },
   { path: "/pipeline", label: "Pipeline", icon: Workflow, group: "Workspace" },
 
-  { path: "/feature-impact", label: "Feature Impact", icon: BarChart3, group: "Results", stub: true },
-  { path: "/interactions", label: "Interaction Features", icon: Combine, group: "Results", stub: true },
-  { path: "/confusion", label: "Confusion Matrix", icon: Grid3x3, group: "Results", stub: true },
-  { path: "/class-report", label: "Class Report", icon: ClipboardList, group: "Results", stub: true },
-  { path: "/curves", label: "ROC / PR Curves", icon: LineChart, group: "Results", stub: true },
-  { path: "/predictions", label: "Predictions Table", icon: Table2, group: "Results", stub: true },
+  { path: "/feature-impact", label: "Feature Impact", icon: BarChart3, group: "Results" },
+  { path: "/interactions", label: "Interaction Features", icon: Combine, group: "Results" },
+  { path: "/confusion", label: "Confusion Matrix", icon: Grid3x3, group: "Results" },
+  { path: "/class-report", label: "Class Report", icon: ClipboardList, group: "Results" },
+  { path: "/curves", label: "ROC / PR Curves", icon: LineChart, group: "Results" },
+  { path: "/predictions", label: "Predictions Table", icon: Table2, group: "Results" },
   { path: "/explainability", label: "Explainability", icon: Lightbulb, group: "Results", stub: true },
 
   { path: "/setup", label: "Setup Guide", icon: BookOpen, group: "Reference", stub: true },

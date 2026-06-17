@@ -74,8 +74,46 @@ the current run configuration, the last `/run` result, and the loading/error fla
 
 Overview · Upload Data · Configuration · Pipeline · Feature Impact · Interaction Features ·
 Confusion Matrix · Class Report · ROC / PR Curves · Predictions Table · Explainability ·
-Setup Guide · Risk Register. **Real screens in 9a:** Overview, Upload, Configuration, Pipeline.
-The rest are honest stub routes (each naming what it will show) filled in during 9b/9c.
+Setup Guide · Risk Register. **Real screens after 9b:** Overview, Upload, Configuration,
+Pipeline (9a) plus Feature Impact, Interaction Features, Confusion Matrix, Class Report,
+ROC / PR Curves, Predictions Table (9b). **Still stubs (9c):** Explainability, Setup Guide,
+Risk Register.
+
+## The result pages (Phase 9b)
+
+These read the **last `/run` result already in the app store** (no page re-fetches `/run`) and
+turn it into charts and tables. The one new network call any of them makes is fetching a plot
+PNG on demand via `/outputs/{name}`. Each branches on the problem type (binary / multiclass)
+and shows failed-model rows greyed (never dropped), with friendly empty/missing states.
+
+- **Overview** — the run summary: a KPI band (best model by F1-weighted, accuracy, ROC-AUC, MCC,
+  models-trained), a per-model bar across the key metrics, the active configuration, and quick
+  links to the detail pages. Reads `result.run` + `result.models`.
+- **Feature Impact** — a ranked horizontal bar (composite score, or any single metric you pick)
+  + a full per-metric table, with the **`id_like` leakage flag surfaced prominently** as a
+  warning. Reads `result.feature_impact`; shows the plot4 PNG alongside.
+- **Confusion Matrix** — a custom CSS-grid heatmap (sizes/scrolls to the class count) with a
+  raw↔row-normalised toggle (normalisation computed client-side) and a model selector. Reads
+  `result.confusion_matrix`.
+- **Class Report** — the per-class precision/recall/F1/support table (macro/weighted averages
+  split into a footer) + a grouped bar, with the weakest-recall class highlighted. Reads
+  `result.class_report`.
+- **ROC / PR Curves** — interactive Recharts line charts from `result.curves`: ROC (with the
+  no-skill diagonal, AUC per class in the legend) and PR (AP per class); one curve for binary,
+  one-vs-rest per class for multiclass; per-model selector. Shows the plot2 and plot5
+  (calibration, binary-only) PNGs.
+- **Predictions Table** — the sampled `result.predictions.sample_rows` (actual/predicted/
+  per-class probabilities/confidence/correct), filterable by model and correct/incorrect and
+  sortable by confidence, with a clear "showing N of M (sampled)" banner and a full-CSV download.
+- **Interaction Features** — the `result.run.interaction_cols`, each decoded into a readable
+  expression (`_x_`→×, `_div_`→÷, `_minus_`→−), with the plot6 PNG and an empty state when
+  interactions were disabled.
+
+**The interactive-vs-PNG rule:** ROC/PR, the confusion heatmap, the class report, and the
+feature-impact ranking are drawn live from the contract data. The plot PNGs (plot2–plot6) are
+fetched on demand via `outputUrl(name)`, never base64-inlined, and always guarded — a missing
+or placeholder artifact shows a friendly "not generated for this run" panel rather than a broken
+image.
 
 ---
 

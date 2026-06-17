@@ -5,9 +5,10 @@
 > planning/overseer chat stays in sync with the local repo.
 
 **Last updated:** 2026-06-17
-**Updated by:** Claude Code (Phase 9a — React frontend foundation: design pick + typed API
-client against the LOCKED contract + Upload→Configure→Run round-trip)
-**Repo tag / commit:** 17f3653 (Phase 8 FastAPI) + Phase 9a commit pending
+**Updated by:** Claude Code (Phase 9b — React frontend result-rendering pages: Overview,
+Feature Impact, Confusion Matrix, Class Report, ROC/PR Curves, Predictions, Interactions —
+against the LOCKED contract)
+**Repo tag / commit:** 5c9dee8 (docs + Phase 9a) + Phase 9b commit pending
 
 ---
 
@@ -73,7 +74,7 @@ written. Engine complete; ready for Phase 8 (FastAPI layer).
 | 7 | Plots + ModelRunner + CLI (Sections 14–16) | ✅ Done | ModelRunner (deep-copy config isolation, corrected order, robust per-algo failures) + plot_results (plot1/2/3/5) + CLI (load_dotenv, inspect/run modes); 13 tests; real-data run on iris done; engine feature-complete |
 | 7B | Optuna hyperparameter tuning (Section 8B) | ✅ Done | `tuning.py` (`tune_model`) — OFF by default; one uniform mechanism for all 6 models; CV-in-train trial scoring (leakage-safe); per-model isolation + hard 600s/model timeout; ModelRunner + config + CLI (`--tune…`) sanctioned edits; 17 tests; **AutoML pulled v1.5→v1.0** (plan_tweak 24–25) |
 | 8 | FastAPI layer | ✅ Done | 6 endpoints under `/api/v1/`; `/run` schema LOCKED (docs/api_contract.md); `curves.py` helper + plot2 refactor; `save_input` upload support; `/explain` stub; 36 tests (184 total) |
-| 9 | React dashboard (13 pages) | 🔄 In progress | **9a done** (foundation: Option A design + Recharts; shadcn/ui design system; typed client vs LOCKED contract; app shell + 13-page nav; Upload→Configure→Run round-trip verified live; 13 FE tests). Next: 9b result pages, 9c remaining + polish |
+| 9 | React dashboard (13 pages) | 🔄 In progress | **9a done** (foundation: Option A design + Recharts; shadcn/ui; typed client vs LOCKED contract; app shell + 13-page nav; round-trip verified live; 13 FE tests). **9b done** (the 6 result pages + Overview upgrade — Feature Impact, Confusion, Class Report, ROC/PR, Predictions, Interactions — against the LOCKED contract; binary+multiclass verified vs fixtures; 46 FE tests). Next: 9c (Explainability stub page, Setup Guide, Risk Register, polish) |
 | 10 | Unit tests (full pytest suite) | ⬜ Not started | |
 | 11 | Integration: 7 use cases E2E + governance sign-off | ⬜ Not started | |
 
@@ -132,6 +133,11 @@ Status legend: ⬜ Not started · 🔄 In progress · ✅ Done · ⚠️ Blocked
 | 2026-06-17 | **Phase 9a**: chart library = **Recharts** (pinned `3.8.1`) | Owner pick. The result pages are mostly standard chart types (bars, lines, heatmaps); Recharts' declarative React-component model is faster/cleaner to build and maintain than Chart.js' imperative canvas API for this app. Chart.js would only win for very dense curves on dark surfaces (the un-chosen Option B) |
 | 2026-06-17 | **Phase 9a**: theming via ONE CSS-variable token block in `src/index.css` (Tailwind v4 `@theme inline`); change `--primary`/`--radius` to re-skin the whole app | Single source of truth for the look; no component file needs editing to re-theme. Stack: **Tailwind v4** (`@tailwindcss/vite`), **shadcn/ui** component pattern, **React Router 7** |
 | 2026-06-17 | **Phase 9a**: shadcn/ui Button/Card/Badge/Input/Label are genuine (CVA); **Select/Switch are accessible native HTML** styled to match, not the Radix-based shadcn versions | Avoids a `@radix-ui/*` dependency in 9a; native `<select>`/checkbox are fully accessible and clearest for a frontend-new owner. Token theming is identical; drop-in upgradeable later. plan_tweak 32 |
+| 2026-06-17 | **Phase 9b**: ROC/PR curves drawn as **per-`<Line>` data** (each class is a separate Recharts `Line` with its own `{x,y}` array on a numeric `XAxis type="number" dataKey="x"`), the no-skill diagonal via `ReferenceLine segment={[{0,0},{1,1}]}`, and a **custom tooltip via the 3.x `content`-prop** (not the removed 2.x `TooltipProps`) | ROC/PR curves for different classes have different x-grids (different fpr/recall arrays), so a single shared `data` array can't represent them; per-Line data lets the one-vs-rest curves coexist on one chart. Recharts 3.x ≠ 2.x — typing/props deliberately follow 3.8.1 |
+| 2026-06-17 | **Phase 9b**: the multiclass `curves` block **does** carry PR per class (ROC and PR both, one-vs-rest) — verified against a captured live multiclass fixture — so the page renders multiclass PR rather than the prompt's defensive "PR not shown for multiclass" fallback (the fallback is still coded for the genuinely-absent case) | The locked contract (not the prompt's hedge) is the source of truth; `compute_curve_points` emits both curves for multiclass. Honoring the contract over the prompt's cautious wording. No deviation — the fallback path remains for robustness |
+| 2026-06-17 | **Phase 9b**: a captured **multiclass `/run` envelope** (`run_envelope_multiclass.json`, risk_tier LR+RF) was committed as a second test fixture alongside the 9a binary one | The prompt asked for a multiclass fixture "if not present"; produced via the real FastAPI `TestClient` so the JSON is contract-accurate (same serializer the browser sees). Lets render tests prove binary AND multiclass shapes without a live server |
+| 2026-06-17 | **Phase 9b**: plot3 (model feature-importance) placed on **Feature Impact**; plot5 (calibration) placed on **ROC/PR Curves** — both PNG-only artifacts the prompt listed without assigning a page | Topical homes: plot3 is about features, plot5 (probability calibration) sits with the other probability-diagnostic curves. A UX placement decision, not a deviation. PNGs guarded for absence (plot5 is a placeholder for multiclass) |
+| 2026-06-17 | **Phase 9b**: confusion matrix is a **custom CSS-grid heatmap** (not a chart lib); raw↔row-normalised toggle computes the normalisation **client-side** from the raw counts | The contract gives raw integer counts; row-normalisation is pure display math (each cell ÷ its row total), not a second ML pass — doing it in the browser keeps the engine the only place that computes anything ML |
 
 ---
 
@@ -604,6 +610,80 @@ Status legend: ⬜ Not started · 🔄 In progress · ✅ Done · ⚠️ Blocked
 - Prompt archived to `prompts/frontend_phases/phase_09a_foundation.md`; plan_tweak row 32 added;
   `frontend_short_desc.md` created (referenced from backend_/api_short_desc.md).
 
+## Completed this session (Phase 9b — 2026-06-17)
+
+> **Second frontend slice.** Backend untouched (frozen). Pure HTTP client of the LOCKED
+> contract. 9a foundation → **9b result pages** → 9c remaining + polish.
+
+- **The 6 result pages + an Overview upgrade**, each reading the last `/run` result already in
+  the app store (no page re-fetches `/run`); the only new network call is `GET /outputs/{name}`
+  for PNGs/CSVs via the existing `outputUrl` helper. Every page branches on
+  `result.run.problem_type`, renders `status:"failed"` model rows greyed (never dropped), and
+  shows friendly empty/missing states.
+  - **Overview** (`pages/Overview.tsx`, upgraded): KPI band (best model by `f1_weighted`,
+    accuracy, ROC-AUC, MCC, models-trained) + a per-model grouped bar across the key metrics +
+    active-config card (with failed-model error in a tooltip) + quick links to the detail pages.
+    Reads `result.run` + `result.models`.
+  - **Feature Impact** (`pages/FeatureImpact.tsx`): ranked horizontal bar (composite or any
+    single metric, picker) + full per-metric table (anova_f / mutual_info / point_biserial /
+    corr_ratio, null-safe) + the **`id_like` leakage flag surfaced prominently** (warning banner
+    + per-row chip; flagged bars coloured rose) + the **plot4** PNG. Reads `result.feature_impact`.
+  - **Confusion Matrix** (`pages/ConfusionMatrix.tsx`): custom CSS-grid heatmap (auto cell-size +
+    scroll for many classes; diagonal outlined), raw↔row-normalised toggle (client-side math),
+    model selector. Reads `result.confusion_matrix`.
+  - **Class Report** (`pages/ClassReport.tsx`): per-class precision/recall/F1/support table
+    (macro/weighted-avg rows split into a footer) + grouped bar; weakest-recall class highlighted
+    (the imbalance story). Reads `result.class_report`.
+  - **ROC / PR Curves** (`pages/Curves.tsx`): interactive Recharts line charts from
+    `result.curves` — ROC (no-skill `ReferenceLine` diagonal, AUC per class in legend) + PR (AP
+    per class); one curve for binary (positive class), one-vs-rest per class for multiclass;
+    per-model selector; `role="img"` + summary `aria-label` on each chart; custom tooltip via the
+    3.x `content`-prop. Shows the **plot2** + **plot5** (calibration, binary-only) PNGs.
+  - **Predictions Table** (`pages/Predictions.tsx`): sampled `result.predictions.sample_rows`
+    (actual/predicted/per-class probabilities/confidence/correct), filter by model and
+    correct/incorrect, sort by confidence; a clear **"showing {rows_returned} of {rows_total}
+    (sampled)"** banner + full-CSV download (`full_csv` via `/outputs`). Never implies the sample
+    is the whole table.
+  - **Interaction Features** (`pages/Interactions.tsx`): lists `result.run.interaction_cols`, each
+    decoded into a readable expression (`_x_`→×, `_div_`→÷, `_minus_`→−) with op chips; the
+    **plot6** PNG; empty state when interactions were disabled.
+- **Shared building blocks** (`components/results/`): `ResultGate` (the common "no run yet"
+  empty-state wrapper, render-prop over the non-null result), `ModelSelector` (per-model dropdown,
+  hidden for a single model), `PngArtifact` (fetches via `outputUrl`, guards a
+  missing/placeholder artifact → friendly "not generated for this run" panel, never a broken
+  image). Pure helpers in `lib/results.ts` (chart palette, class-report avg-row split, interaction
+  name decoder).
+- **Interactive-vs-PNG rule** (encoded in comments): ROC/PR, the confusion heatmap, the class
+  report and the feature-impact ranking are drawn live from contract data; the plot PNGs
+  (plot2–plot6) are fetched on demand, never inlined, always guarded for absence.
+- **Routing/nav:** `App.tsx` now mounts the 6 result pages as real routes; `lib/nav.ts` cleared
+  their `stub` flags (Explainability/Setup/Risks remain stubs for 9c).
+- **Tests (vitest + Testing Library, render-level):** added a captured **multiclass** fixture
+  (`run_envelope_multiclass.json`) next to the 9a binary one (both via the real FastAPI
+  `TestClient` → contract-accurate). `resultPages.test.tsx` renders all 7 pages with BOTH fixtures
+  + the no-run empty state; asserts the Feature Impact `id_like` warning, the Predictions sampled
+  banner/counts, one ROC curve for binary vs three (per-class) for multiclass (via the chart's
+  `aria-label`), and a `status:"failed"` row rendering greyed without crashing. `PngArtifact`
+  present/absent tests; `lib/results` helper unit tests. **46 FE tests pass** (13 prior + 33 new);
+  `npm run build` clean (tsc + vite). A no-op `ResizeObserver` stub was added to the vitest setup
+  so Recharts' `ResponsiveContainer` renders in jsdom (chart bodies stay 0×0 — tests assert on the
+  surrounding DOM, not chart internals).
+- **Binary + multiclass verified against fixtures. Multilabel is rendered-but-UNVERIFIED** — the
+  Curves page shows a "multilabel view is preliminary" notice for `problem_type:"multilabel"`; no
+  multilabel run has ever executed end-to-end (still a Week-4 / Phase 10–11 target).
+- **Contract gaps flagged: none.** Every rendered field maps to a `docs/api_contract.md` field;
+  the multiclass `curves` block was confirmed to include PR per class (the page renders it rather
+  than the prompt's defensive "PR omitted" fallback, which remains coded for the absent case).
+- **Hallucination check ✅** — verified against the INSTALLED, pinned versions: **recharts 3.8.1**
+  (`LineChart`/`Line` with per-series `data`, `BarChart`/`Bar`/`Cell`, `ResponsiveContainer`,
+  `CartesianGrid`, `XAxis`/`YAxis` `type="number"`, `Legend`, `ReferenceLine` `segment`/
+  `ifOverflow`, custom `Tooltip` via the 3.x `content`-prop — NOT the removed 2.x `TooltipProps`/
+  `activeIndex`), **vitest 4.1.9** + **@testing-library/react 16.3.2** + **jest-dom 6.9.1**,
+  **react-router-dom 7.18.0** (`MemoryRouter`/`Link`), and `import.meta.env`. No new deps.
+- Prompt archived to `prompts/frontend_phases/phase_09b_result_pages.md`; `frontend_short_desc.md`
+  extended with the seven result pages + the interactive-vs-PNG rule. No `plan_tweak` entry — no
+  real deviation (chart/UX choices recorded in the decisions log above).
+
 ## Completed this session (Doc-update enforcement hook — 2026-06-15) — ⚠️ REMOVED 2026-06-16
 
 > This hook was removed in the 2026-06-16 reorg session (see below). Kept here as a record.
@@ -708,11 +788,12 @@ Status legend: ⬜ Not started · 🔄 In progress · ✅ Done · ⚠️ Blocked
 
 ## In progress / partially done
 
-- **Phase 9 (React dashboard) — 9a complete, 9b/9c remaining.** The foundation is built and the
-  Upload→Configure→Run round-trip is verified against a live backend. **Real screens:** Overview,
-  Upload, Configuration, Pipeline. **Stub routes (9b/9c):** Feature Impact, Interaction Features,
-  Confusion Matrix, Class Report, ROC/PR Curves, Predictions Table, Explainability, Setup Guide,
-  Risk Register. The backend (engine + API) is unchanged/frozen behind it.
+- **Phase 9 (React dashboard) — 9a + 9b complete, 9c remaining.** Foundation + the result pages
+  are built. **Real screens:** Overview, Upload, Configuration, Pipeline (9a) + Feature Impact,
+  Interaction Features, Confusion Matrix, Class Report, ROC/PR Curves, Predictions Table (9b).
+  **Stub routes (9c):** Explainability, Setup Guide, Risk Register. The backend (engine + API) is
+  unchanged/frozen behind it. Binary + multiclass result rendering verified against committed
+  fixtures; multilabel rendered-but-unverified.
 - `frontend/design-mockups/` holds the three throwaway design-option HTML mockups (Option A
   chosen) — kept as the provenance of the design pick; not part of the built app.
 
@@ -733,9 +814,12 @@ Status legend: ⬜ Not started · 🔄 In progress · ✅ Done · ⚠️ Blocked
 > The 184-test suite covers the engine + API well, but these categories *cannot* have been
 > tested yet and are the real Phase 10/11 content. Do not treat the green suite as covering them.
 
-- **Frontend tests** — 9a added 13 (vitest): typed-client parsing of a real locked envelope
-  (`parseRunResponse`), `buildPayload()` field capture, `checkAPI()` offline/online. **Still
-  missing:** per-page render tests + E2E (deferred to Phase 10).
+- **Frontend tests** — 9a added 13 (vitest); 9b added 33 more (46 total): per-page **render-level**
+  smoke tests for all 7 result pages against BOTH a binary and a multiclass fixture, the id_like
+  warning, the predictions sampled banner, binary-vs-multiclass curve count, a failed-model row,
+  and PNG-absent handling. **Still missing:** true browser **E2E** (real browser → live uvicorn →
+  rendered chart) — deferred to Phase 10. Render tests run in jsdom where Recharts charts are 0×0,
+  so chart *internals* are not asserted (the data binding is exercised; the pixels are not).
 - **True end-to-end** — browser → live uvicorn → engine → rendered chart. Current "integration"
   hits the engine directly or the API via TestClient; never through a real browser.
 - **Multilabel (Product Recommendation) has NEVER run end-to-end** — all real runs so far are
@@ -753,16 +837,16 @@ Status legend: ⬜ Not started · 🔄 In progress · ✅ Done · ⚠️ Blocked
 
 ## Next steps (priority order)
 
-1. Commit Phase 9a ("Phase 9a: React foundation — design system + typed API client (locked
-   contract) + Upload/Configure/Run round-trip").
+1. Commit Phase 9b ("Phase 9b: result-rendering pages (Overview, Feature Impact, Confusion,
+   Class Report, ROC/PR, Predictions, Interactions) against the locked contract").
 2. Upload updated PROJECT_STATE.md to the Claude Project knowledge.
-3. **Phase 9b — result-rendering pages.** Build the real result screens against the LOCKED
-   contract using the typed client already in place: Feature Impact (`result.feature_impact` +
-   plot4 via `/outputs`), Confusion Matrix heatmaps (`result.confusion_matrix`), Class Report
-   tables (`result.class_report`), **ROC/PR Curves** charts from `result.curves` (Recharts),
-   Predictions Table (`result.predictions` + full-CSV download), Interaction Features. PNGs are
-   fetched on demand via `/outputs/{name}` (never inlined). Then **9c** — Explainability (the
-   `/explain` v1.0 stub), Setup Guide, Risk Register, and polish.
+3. **Phase 9c — remaining pages + polish.** Build the **Explainability** page (the `/explain`
+   v1.0 structured stub — surface the "needs a persisted model (v2.0)" response cleanly), the
+   **Setup Guide** (start the API → upload → configure → run), and the **Risk Register** (the
+   [RISK] points: leakage, imbalance, calibration, threshold sensitivity). Then the
+   responsiveness/polish pass across all 13 pages (mobile/narrow layouts, focus order, final
+   contrast/spacing). Consider capturing a multilabel fixture if a multilabel run becomes
+   runnable, to firm up that path.
 4. v1.5/v2.0 backlog (unchanged): background-job `/run` (submit→poll→fetch) to beat gateway
    timeouts; real `/explain` once model persistence (MLflow / a model registry) lands.
 
@@ -808,4 +892,5 @@ Contract doc: `docs/api_contract.md` — frozen; changes must be additive and bu
 | 2026-06-16 | Phase 7B follow-up — LogisticRegression tuning space → `C` only | Fixed FutureWarning (`penalty` deprecated, sklearn 1.9) + multiclass `liblinear` errors surfaced by a real LR-on-iris tuning run; +1 multiclass regression test (148 total); decisions log + plan_tweak row 26 + backend_short_desc updated |
 | 2026-06-17 | Phase 8 — FastAPI layer (`backend/api/`) + `/api/v1/run` schema LOCKED | 184 tests (36 new); 6 endpoints (health/upload/run/explain/outputs) driving ModelRunner/inspect_file, no ML added; sanctioned `evaluation/curves.py` helper + plot2 refactor; additive `StorageAdapter.save_input` for uploads; `/explain` v1.0 stub; sync `/run` via threadpool (background jobs → v1.5); `docs/api_contract.md` locked; `api_short_desc.md` created; plan_tweak 27–31; prompt archived to `prompts/api_phases/phase_08_fastapi.md` |
 | 2026-06-17 | Phase 9a — React frontend foundation (design pick + typed client + Upload→Configure→Run round-trip) | Owner chose **Option A "Clarity"** + **Recharts** from 3 mockups; Tailwind v4 + shadcn/ui design system (one token block); typed client mirrors the LOCKED contract exactly (no invented fields, no contract gaps); 13-page app shell + health banner + global store; Upload/Configure/Pipeline/Overview real, 9 stubs; **live round-trip + Vite proxy verified**; 13 FE tests (vitest); deps pinned + hallucination-checked; `frontend_short_desc.md` created; plan_tweak 32; prompt archived to `prompts/frontend_phases/phase_09a_foundation.md` |
+| 2026-06-17 | Phase 9b — React result-rendering pages (Overview upgrade + 6 result pages) against the LOCKED contract | Built Feature Impact / Confusion Matrix / Class Report / ROC-PR Curves / Predictions / Interaction Features + upgraded Overview; shared `ResultGate`/`ModelSelector`/`PngArtifact` + `lib/results` helpers; interactive-vs-PNG rule honored (plot PNGs fetched via `/outputs`, guarded for absence); read from the app store, no backend edits; captured a **multiclass** fixture (real TestClient) alongside the binary one; **46 FE tests** (33 new), build clean; binary+multiclass verified vs fixtures, multilabel rendered-but-unverified; no contract gaps; recharts 3.8.1 hallucination-checked; no plan_tweak (chart/UX in decisions log); prompt archived to `prompts/frontend_phases/phase_09b_result_pages.md` |
 | | | |

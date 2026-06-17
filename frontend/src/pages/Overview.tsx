@@ -1,16 +1,20 @@
-/* Overview — the dashboard landing page.
+/* Overview — the dashboard landing page and the run summary.
 
    Reads the LAST /run result from the global store and summarizes it: a KPI
-   stats band, a per-model F1 comparison (Recharts — validates the chart lib),
-   and the active configuration. Before any run it shows an invitation to start
-   the Upload → Configure → Run flow (never a blank screen). */
+   stats band, a per-model comparison across the key metrics (Recharts grouped
+   bars), the active configuration, and quick links to the detail pages. Before
+   any run it shows an invitation to start the Upload → Configure → Run flow
+   (never a blank screen).
+
+   Failed models are never dropped: they appear as greyed chips with the error in
+   a tooltip (the contract includes failed rows by design). */
 
 import { Link } from "react-router-dom"
 import {
   Bar,
   BarChart,
   CartesianGrid,
-  Cell,
+  Legend,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -25,14 +29,22 @@ import { Badge } from "@/components/ui/badge"
 import { buttonVariants } from "@/components/ui/button"
 import { EmptyState, PageHeader } from "@/components/common/States"
 
-const CHART_COLORS = ["#4f46e5", "#0ea5e9", "#10b981", "#f59e0b", "#a855f7"]
-
 /** Pick the model with the highest F1-weighted among those that trained ok. */
 function bestModel(models: ModelMetrics[]): ModelMetrics | null {
   const ok = models.filter((m) => m.status === "ok")
   if (!ok.length) return null
   return ok.reduce((best, m) => ((m.f1_weighted ?? -1) > (best.f1_weighted ?? -1) ? m : best))
 }
+
+// The result pages a successful run unlocks (quick links at the bottom).
+const DETAIL_LINKS = [
+  { to: "/feature-impact", label: "Feature Impact" },
+  { to: "/confusion", label: "Confusion Matrix" },
+  { to: "/class-report", label: "Class Report" },
+  { to: "/curves", label: "ROC / PR Curves" },
+  { to: "/predictions", label: "Predictions" },
+  { to: "/interactions", label: "Interactions" },
+]
 
 function StatCard({
   label,
@@ -79,10 +91,7 @@ export default function Overview() {
               : "Upload a dataset, configure a run, and the results will be summarized here."
           }
           action={
-            <Link
-              to={serverPath ? "/configure" : "/upload"}
-              className={buttonVariants({ size: "sm" })}
-            >
+            <Link to={serverPath ? "/configure" : "/upload"} className={buttonVariants({ size: "sm" })}>
               {serverPath ? "Configure a run" : "Upload data"}
             </Link>
           }
@@ -92,15 +101,24 @@ export default function Overview() {
   }
 
   const best = bestModel(run.models)
+  // Per-model comparison across the key metrics (successful models only — failed
+  // ones have null metrics and are shown as chips below instead).
   const chartData = run.models
     .filter((m) => m.status === "ok")
-    .map((m) => ({ name: m.name, f1: m.f1_weighted ?? 0 }))
+    .map((m) => ({
+      name: m.name,
+      accuracy: m.accuracy ?? 0,
+      f1: m.f1_weighted ?? 0,
+      roc_auc: m.roc_auc ?? 0,
+      mcc: m.mcc ?? 0,
+    }))
 
   return (
     <div>
       <PageHeader
         title="Overview"
         subtitle={`Last run · ${run.run.target} · ${run.run.problem_type}`}
+        actions={<Badge variant="success">schema {result?.schema_version}</Badge>}
       />
 
       {/* KPI stats band */}
@@ -128,7 +146,7 @@ export default function Overview() {
             <CardTitle>Active configuration</CardTitle>
           </CardHeader>
           <CardContent className="space-y-2.5 text-sm">
-            <Row k="Dataset" v={run.run.features.length ? serverPath ?? "—" : "—"} mono />
+            <Row k="Dataset" v={serverPath ?? "—"} mono />
             <Row k="Rows · features" v={`${fmtInt(run.run.n_rows)} · ${run.run.features.length}`} mono />
             <Row k="Target" v={`${run.run.target} · ${run.run.problem_type}`} />
             <Row k="Class balance" v={run.run.class_balance ?? "—"} />
@@ -138,8 +156,13 @@ export default function Overview() {
               <div className="mb-1.5 text-xs text-muted-foreground">Algorithms</div>
               <div className="flex flex-wrap gap-1.5">
                 {run.models.map((m) => (
-                  <Badge key={m.name} variant={m.status === "ok" ? "default" : "destructive"}>
+                  <Badge
+                    key={m.name}
+                    variant={m.status === "ok" ? "default" : "destructive"}
+                    title={m.status === "failed" && m.error ? m.error : undefined}
+                  >
                     {m.name}
+                    {m.status === "failed" && " (failed)"}
                   </Badge>
                 ))}
               </div>
@@ -147,10 +170,10 @@ export default function Overview() {
           </CardContent>
         </Card>
 
-        {/* Per-model F1 comparison — validates the Recharts wiring. */}
+        {/* Per-model comparison across key metrics. */}
         <Card>
           <CardHeader>
-            <CardTitle>Model comparison · F1-weighted</CardTitle>
+            <CardTitle>Model comparison · key metrics</CardTitle>
           </CardHeader>
           <CardContent>
             {chartData.length === 0 ? (
@@ -158,26 +181,40 @@ export default function Overview() {
                 No successful models to chart.
               </p>
             ) : (
-              <ResponsiveContainer width="100%" height={260}>
+              <ResponsiveContainer width="100%" height={280}>
                 <BarChart data={chartData} margin={{ top: 8, right: 8, bottom: 8, left: -16 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" vertical={false} />
                   <XAxis dataKey="name" tick={{ fontSize: 12, fill: "#64748b" }} />
                   <YAxis domain={[0, 1]} tick={{ fontSize: 12, fill: "#64748b" }} />
                   <Tooltip
-                    formatter={(value) => fmtMetric(Number(value))}
+                    formatter={(value, name) => [fmtMetric(Number(value)), String(name)]}
                     contentStyle={{ fontSize: 12, borderRadius: 8, border: "1px solid #e2e8f0" }}
                   />
-                  <Bar dataKey="f1" radius={[6, 6, 0, 0]}>
-                    {chartData.map((_, i) => (
-                      <Cell key={i} fill={CHART_COLORS[i % CHART_COLORS.length]} />
-                    ))}
-                  </Bar>
+                  <Legend wrapperStyle={{ fontSize: 12 }} />
+                  <Bar dataKey="accuracy" fill="#4f46e5" radius={[4, 4, 0, 0]} />
+                  <Bar dataKey="f1" fill="#0ea5e9" radius={[4, 4, 0, 0]} />
+                  <Bar dataKey="roc_auc" fill="#10b981" radius={[4, 4, 0, 0]} />
+                  <Bar dataKey="mcc" fill="#f59e0b" radius={[4, 4, 0, 0]} />
                 </BarChart>
               </ResponsiveContainer>
             )}
           </CardContent>
         </Card>
       </div>
+
+      {/* Quick links to the detail pages. */}
+      <Card className="mt-5">
+        <CardHeader>
+          <CardTitle>Explore the results</CardTitle>
+        </CardHeader>
+        <CardContent className="flex flex-wrap gap-2">
+          {DETAIL_LINKS.map((l) => (
+            <Link key={l.to} to={l.to} className={buttonVariants({ variant: "outline", size: "sm" })}>
+              {l.label}
+            </Link>
+          ))}
+        </CardContent>
+      </Card>
     </div>
   )
 }
@@ -185,9 +222,9 @@ export default function Overview() {
 /** A simple key/value row used in the config card. */
 function Row({ k, v, mono }: { k: string; v: string; mono?: boolean }) {
   return (
-    <div className="flex items-baseline justify-between border-b border-dashed border-border pb-2 last:border-0">
-      <span className="text-muted-foreground">{k}</span>
-      <span className={mono ? "font-mono font-semibold" : "font-semibold"}>{v}</span>
+    <div className="flex items-baseline justify-between gap-4 border-b border-dashed border-border pb-2 last:border-0">
+      <span className="shrink-0 text-muted-foreground">{k}</span>
+      <span className={`truncate text-right ${mono ? "font-mono font-semibold" : "font-semibold"}`}>{v}</span>
     </div>
   )
 }

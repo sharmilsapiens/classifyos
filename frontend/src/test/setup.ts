@@ -10,3 +10,15 @@ import { cleanup } from "@testing-library/react"
 // React Testing Library's automatic DOM cleanup isn't auto-registered. Register
 // it here so each test starts with a fresh DOM (no leaked renders between tests).
 afterEach(() => cleanup())
+
+// jsdom has no ResizeObserver, which Recharts' ResponsiveContainer needs. Provide
+// a no-op stub so chart-bearing pages render in tests (the chart body stays empty
+// at 0×0 — our render tests assert on the surrounding DOM, not chart internals).
+if (!("ResizeObserver" in globalThis)) {
+  class ResizeObserverStub {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  }
+  ;(globalThis as unknown as { ResizeObserver: unknown }).ResizeObserver = ResizeObserverStub
+}
