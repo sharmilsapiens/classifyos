@@ -81,6 +81,12 @@ def risk_csv() -> str:
     return "risk_tier.csv"
 
 
+@pytest.fixture(scope="session")
+def product_csv() -> str:
+    """Logical key for the product-recommendation sample (multilabel, delimited target)."""
+    return "product_reco.csv"
+
+
 # --- Phase 6 shared fixtures: fully-engineered train/test matrices ----------------
 #
 # The model/metrics/classify tests all need real train/test matrices produced by the
@@ -125,6 +131,19 @@ FRAUD_FEATURES = [
     "has_police_report",
     "has_witness",
     "claimant_age",
+    "region",
+]
+
+# Product Recommendation (multilabel — "|"-delimited target column). Phase 11.
+PRODUCT_FEATURES = [
+    "age",
+    "annual_income",
+    "family_size",
+    "num_dependents",
+    "owns_home",
+    "owns_vehicle",
+    "risk_appetite",
+    "existing_life_policy",
     "region",
 ]
 
@@ -296,6 +315,24 @@ def multiclass_run_response(api_client) -> Any:
         "risk_tier",
         RISK_FEATURES,
         problem_type="multiclass",
+        algorithms=["LogisticRegression", "RandomForest"],
+    )
+    return api_client.post("/api/v1/run", json=payload)
+
+
+@pytest.fixture(scope="session")
+def multilabel_run_response(api_client) -> Any:
+    """Run the multilabel product-recommendation pipeline once over HTTP (Phase 11).
+
+    ``class_balance="smote"`` exercises the documented multilabel fallback to ``class_weight``
+    (resampling is not defined for a multi-hot target) without crashing.
+    """
+    payload = _run_payload(
+        "product_reco.csv",
+        "recommended_products",
+        PRODUCT_FEATURES,
+        problem_type="multilabel",
+        class_balance="smote",
         algorithms=["LogisticRegression", "RandomForest"],
     )
     return api_client.post("/api/v1/run", json=payload)

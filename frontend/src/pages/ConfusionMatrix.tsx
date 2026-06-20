@@ -24,24 +24,41 @@ import { EmptyState, PageHeader } from "@/components/common/States"
 export default function ConfusionMatrix() {
   return (
     <ResultGate title="Confusion Matrix" subtitle="Predicted vs. true classes on the test set.">
-      {(run) => <ConfusionBody matrices={run.confusion_matrix} />}
+      {(run) => (
+        <ConfusionBody
+          matrices={run.confusion_matrix}
+          problemType={run.run.problem_type}
+        />
+      )}
     </ResultGate>
   )
 }
 
-function ConfusionBody({ matrices }: { matrices: Record<string, ConfusionMatrixEntry> }) {
+function ConfusionBody({
+  matrices,
+  problemType,
+}: {
+  matrices: Record<string, ConfusionMatrixEntry>
+  problemType: string
+}) {
   const modelNames = Object.keys(matrices)
   const [model, setModel] = useState(modelNames[0] ?? "")
   const [normalise, setNormalise] = useState(false)
 
   // Only successful models appear in confusion_matrix; if a run had none, say so.
+  // For multilabel there is no single confusion matrix by design (each label is its own
+  // one-vs-rest problem) — show the honest reason, not a misleading "no models" message.
   if (modelNames.length === 0) {
     return (
       <div>
         <PageHeader title="Confusion Matrix" />
         <EmptyState
-          title="No confusion matrices"
-          description="No model trained successfully on this run, so there is nothing to chart."
+          title="No confusion matrix"
+          description={
+            problemType === "multilabel"
+              ? "A single confusion matrix is not defined for multilabel runs — each label is a separate one-vs-rest problem. See the per-label Class Report and ROC/PR Curves instead."
+              : "No model trained successfully on this run, so there is nothing to chart."
+          }
         />
       </div>
     )

@@ -9,10 +9,11 @@
    to live uvicorn, which runs the engine, and we assert the charts/tables/PNGs
    actually RENDER.
 
-   Parametrized over USE_CASES so Phase 11 can extend it to all seven insurance
-   use cases. Phase 10 runs ONLY the binary + multiclass entries (multilabel, the
-   7-use-case sweep, perf, tuning-at-budget, real data, and governance are Phase
-   11 — deliberately out of scope here).
+   Parametrized over USE_CASES — Phase 11 drives ALL SEVEN insurance use cases
+   (binary ×3, multiclass ×3, multilabel ×1) through this one spec. The multilabel
+   case (Product Recommendation) asserts the HONEST states: per-label one-vs-rest
+   curves, and the "no single confusion matrix for multilabel" notice instead of a
+   heatmap (a single confusion matrix is undefined for a multi-hot target).
    ════════════════════════════════════════════════════════════════════════ */
 
 import { expect, test, type Page } from "@playwright/test"
@@ -93,12 +94,19 @@ for (const uc of USE_CASES) {
       })
       .toBeGreaterThan(0)
 
-    // ── Confusion matrix: a heatmap with one cell per (true,predicted) pair. ─
+    // ── Confusion matrix. ───────────────────────────────────────────────────
     await gotoResultViaLink(page, /Confusion Matrix/i)
-    const cells = page.locator('[role="cell"]')
-    await expect(cells.first()).toBeVisible()
-    // n classes → n×n cells (binary 2×2 = 4; multiclass 3×3 = 9).
-    await expect(cells).toHaveCount(uc.expectedClasses.length ** 2)
+    if (uc.problem_type === "multilabel") {
+      // Multilabel has no single confusion matrix (each label is a one-vs-rest
+      // problem) — the page shows the honest reason, not a heatmap.
+      await expect(page.getByText(/not defined for multilabel runs/i)).toBeVisible()
+      await expect(page.locator('[role="cell"]')).toHaveCount(0)
+    } else {
+      // n classes → n×n cells (binary 2×2 = 4; multiclass 3×3 = 9; 4-class = 16).
+      const cells = page.locator('[role="cell"]')
+      await expect(cells.first()).toBeVisible()
+      await expect(cells).toHaveCount(uc.expectedClasses.length ** 2)
+    }
 
     // ── Predictions table: the sampled banner + real rows. ──────────────────
     await gotoResultViaLink(page, /Predictions Table/i)

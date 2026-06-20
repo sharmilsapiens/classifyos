@@ -14,6 +14,7 @@ import type { ReactElement } from "react"
 
 import binaryEnvelope from "@/test/fixtures/run_envelope.json"
 import multiclassEnvelope from "@/test/fixtures/run_envelope_multiclass.json"
+import multilabelEnvelope from "@/test/fixtures/run_envelope_multilabel.json"
 import type { RunResponse } from "@/api/types"
 
 // Mock the store so each page sees a chosen result. (Vitest requires the name to
@@ -37,6 +38,7 @@ import Interactions from "./Interactions"
 
 const binary = binaryEnvelope as unknown as RunResponse
 const multiclass = multiclassEnvelope as unknown as RunResponse
+const multilabel = multilabelEnvelope as unknown as RunResponse
 
 function renderPage(ui: ReactElement, result: RunResponse | null) {
   mockApp = { result, serverPath: "policy_lapse.csv" }
@@ -69,9 +71,39 @@ describe("result pages render against fixtures", () => {
     expect(screen.getAllByRole("heading").length).toBeGreaterThan(0)
   })
 
+  it.each(PAGES)("%s renders with the multilabel fixture", (_name, ui) => {
+    renderPage(ui, multilabel)
+    expect(screen.getAllByRole("heading").length).toBeGreaterThan(0)
+  })
+
   it.each(PAGES)("%s shows a friendly empty state when there is no run", (_name, ui) => {
     renderPage(ui, null)
     expect(screen.getByText(/No run yet|No run/i)).toBeInTheDocument()
+  })
+})
+
+describe("multilabel (Product Recommendation) renders honestly", () => {
+  it("Curves shows per-label one-vs-rest ROC + the preliminary notice", () => {
+    renderPage(<Curves />, multilabel)
+    // Six product labels → six AUC entries in the ROC aria-label (true multilabel,
+    // not a single binary curve / not the 63-combo degenerate).
+    const roc = screen.getByLabelText(/^ROC curve for/i)
+    const label = roc.getAttribute("aria-label")!
+    expect((label.match(/AUC/g) ?? []).length).toBe(6)
+    expect(screen.getByText(/Multilabel view is preliminary/i)).toBeInTheDocument()
+  })
+
+  it("Confusion Matrix shows the honest 'not defined for multilabel' state", () => {
+    renderPage(<ConfusionMatrix />, multilabel)
+    expect(screen.getByText(/not defined for multilabel runs/i)).toBeInTheDocument()
+  })
+
+  it("Class Report renders one row per product label", () => {
+    renderPage(<ClassReport />, multilabel)
+    // The per-label report carries each of the six products.
+    for (const product of ["Auto", "Home", "Life", "Health", "Travel", "Investment"]) {
+      expect(screen.getAllByText(product).length).toBeGreaterThan(0)
+    }
   })
 })
 

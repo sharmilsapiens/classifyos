@@ -136,16 +136,18 @@ function CurvesBody({
   )
 
   const isMulticlass = problemType === "multiclass"
+  const isMultilabel = problemType === "multilabel"
+
+  let subtitle: string
+  if (isMultilabel) subtitle = `${rocClasses.length} labels · one-vs-rest · ${model}`
+  else if (isMulticlass) subtitle = `${rocClasses.length} classes · one-vs-rest · ${model}`
+  else subtitle = `binary · positive class "${rocClasses[0] ?? "?"}" · ${model}`
 
   return (
     <div>
       <PageHeader
         title="ROC / PR Curves"
-        subtitle={
-          isMulticlass
-            ? `${rocClasses.length} classes · one-vs-rest · ${model}`
-            : `binary · positive class "${rocClasses[0] ?? "?"}" · ${model}`
-        }
+        subtitle={subtitle}
         actions={<ModelSelector models={modelNames} value={model} onChange={setModel} />}
       />
 

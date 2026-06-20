@@ -52,6 +52,7 @@ from .config import build_config
 from .evaluation.metrics import evaluate_model
 from .io.storage import StorageAdapter
 from .models.registry import build_model
+from .multilabel import parse_label_sets
 from .predict import classify
 from .preprocessing.balance import handle_class_imbalance
 from .preprocessing.features import FeatureBuilder
@@ -112,6 +113,12 @@ class ModelRunner:
         self.tuned_params_: dict[str, dict[str, Any]] = {}
         self.X_test_: pd.DataFrame | None = None
         self.y_test_: pd.Series | None = None
+        #: For multilabel runs only: the test target as a binary indicator matrix
+        #: ``(n_test, n_labels)`` (built by the fitted MultiLabelBinarizer). ``None`` for
+        #: binary/multiclass. The curve helper consumes this; binary/multiclass use y_test_.
+        self.y_test_indicator_: np.ndarray | None = None
+        #: For multilabel runs only: the fitted MultiLabelBinarizer (TRAIN label vocabulary).
+        self._mlb: Any = None
         self.classes_: list[Any] = []
         self.problem_type_: str = "binary"
         self.run_profile_: dict[str, Any] | None = None
@@ -147,6 +154,17 @@ class ModelRunner:
         self.X_test_, self.y_test_ = test_X, test_y
         self.active_features_ = list(train_X.columns)
 
+        # -- 6b. multilabel: build the indicator matrix (TRAIN-fitted vocabulary) --
+        # The single delimited target column (e.g. "Auto|Home") must become a binary
+        # indicator matrix (n, n_labels) for the OneVsRest wrappers + the multilabel metrics.
+        # [RISK] leakage — the MultiLabelBinarizer learns its label vocabulary from the TRAIN
+        # split only; a label appearing only in test is ignored (mirrors the encoder rule).
+        if problem_type == "multilabel":
+            from sklearn.preprocessing import MultiLabelBinarizer
+
+            self._mlb = MultiLabelBinarizer().fit(parse_label_sets(train_y))
+            self.y_test_indicator_ = self._mlb.transform(parse_label_sets(test_y))
+
         # -- 7. class imbalance (TRAIN ONLY) -----------------------------------
         logger.info("ModelRunner: handling class imbalance (%s)", cfg.get("class_balance"))
         X_bal, y_bal, class_weight = handle_class_imbalance(train_X, train_y, cfg)
@@ -158,7 +176,12 @@ class ModelRunner:
         self.tuned_params_ = self._tune(cfg, algorithms, train_X, train_y, class_weight)
 
         # -- 8. per-algorithm train → classify → evaluate ----------------------
-        self.classes_ = sorted(pd.Series(y_bal).astype(str).unique())
+        # For multilabel the "classes" are the label names (the indicator columns); for
+        # binary/multiclass they are the distinct label values in the balanced train set.
+        if problem_type == "multilabel":
+            self.classes_ = list(self._mlb.classes_)
+        else:
+            self.classes_ = sorted(pd.Series(y_bal).astype(str).unique())
         metrics_rows: list[dict[str, Any]] = []
         prediction_frames: list[pd.DataFrame] = []
         for name in algorithms:
@@ -308,12 +331,27 @@ class ModelRunner:
                 random_state=random_state,
                 **params,
             )
-            model.fit(X_train, y_train)
-            classes = np.asarray(model.classes_)
 
-            y_proba = model.predict_proba(X_test)
-            y_pred = model.predict(X_test)
-            metrics = evaluate_model(y_test, y_pred, y_proba, problem_type, classes)
+            if problem_type == "multilabel":
+                # Fit on the binary indicator matrix (OneVsRest, one estimator per label);
+                # evaluate against the indicator truth. y_train/y_test stay the delimited
+                # strings (classify() re-joins them for the predictions table).
+                Y_train = self._mlb.transform(parse_label_sets(y_train))
+                model.fit(X_train, Y_train)
+                # OvR on an indicator matrix learns integer column classes; restore the real
+                # label names so metrics/curves/classify read the products, not 0..n-1.
+                model.classes_ = np.asarray(self._mlb.classes_)
+                classes = np.asarray(self._mlb.classes_)
+                Y_test = self._mlb.transform(parse_label_sets(y_test))
+                y_proba = model.predict_proba(X_test)
+                y_pred = model.predict(X_test)
+                metrics = evaluate_model(Y_test, y_pred, y_proba, problem_type, classes)
+            else:
+                model.fit(X_train, y_train)
+                classes = np.asarray(model.classes_)
+                y_proba = model.predict_proba(X_test)
+                y_pred = model.predict(X_test)
+                metrics = evaluate_model(y_test, y_pred, y_proba, problem_type, classes)
 
             preds = classify(model, X_test, y_test, classes)
             preds.insert(0, "model", model.name)
@@ -432,10 +470,22 @@ class ModelRunner:
     ) -> dict[str, Any]:
         """Assemble the JSON-serializable ``run_profile.json`` payload."""
         target = cfg["target"]
+        problem_type = cfg.get("problem_type", "binary")
         class_distribution: dict[str, int] = {}
         if self.raw_df_ is not None:
-            counts = self.raw_df_[target].astype(str).value_counts()
-            class_distribution = {str(k): int(v) for k, v in counts.items()}
+            if problem_type == "multilabel":
+                # Per-label prevalence (how many rows carry each label), not per-combo —
+                # the honest distribution for a multilabel target. Counts use the same
+                # delimited-set parsing the binarizer does.
+                from collections import Counter
+
+                counter: Counter = Counter()
+                for labels in parse_label_sets(self.raw_df_[target].tolist()):
+                    counter.update(set(labels))
+                class_distribution = {str(k): int(v) for k, v in counter.most_common()}
+            else:
+                counts = self.raw_df_[target].astype(str).value_counts()
+                class_distribution = {str(k): int(v) for k, v in counts.items()}
 
         tuning_cfg = cfg.get("tuning", {}) or {}
         tuning_profile = {

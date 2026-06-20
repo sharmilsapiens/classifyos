@@ -139,6 +139,8 @@ def _plot_roc_pr(runner: "ModelRunner", storage: StorageAdapter) -> None:
 
     if runner.problem_type_ == "binary":
         _plot_roc_pr_binary(runner, storage)
+    elif runner.problem_type_ == "multilabel":
+        _plot_roc_ovr_multilabel(runner, storage)
     else:
         _plot_roc_ovr_multiclass(runner, storage)
 
@@ -209,6 +211,42 @@ def _plot_roc_ovr_multiclass(runner: "ModelRunner", storage: StorageAdapter) -> 
         ax.set_xlabel("false positive rate", color=_DARK)
         ax.set_ylabel("true positive rate", color=_DARK)
         ax.set_title(f"{name} — one-vs-rest ROC", color=_DARK)
+        ax.legend(fontsize=8)
+        ax.tick_params(colors=_DARK)
+
+    _save(fig, PLOT2_KEY, storage)
+
+
+def _plot_roc_ovr_multilabel(runner: "ModelRunner", storage: StorageAdapter) -> None:
+    """One subplot per algorithm with one-vs-rest ROC curves per label (multilabel).
+
+    Reads the test indicator matrix (``runner.y_test_indicator_``) as each label's binary
+    truth, via the same :func:`compute_curve_points` helper the API uses — so the PNG and
+    the interactive chart agree. PR is omitted (mirrors the multiclass view).
+    """
+    X_test = runner.X_test_
+    y_ind = runner.y_test_indicator_
+    if y_ind is None:
+        _placeholder(PLOT2_KEY, "no multilabel indicator available", storage)
+        return
+    models = list(runner.models_.items())
+    n = len(models)
+    fig, axes = plt.subplots(1, n, figsize=(6 * n, 5.5), facecolor="white", squeeze=False)
+
+    for col, (name, model) in enumerate(models):
+        ax = axes[0][col]
+        classes = np.asarray(model.classes_).astype(str)
+        proba = np.asarray(model.predict_proba(X_test))
+        roc = compute_curve_points(y_ind, proba, classes, "multilabel")["roc"]
+        for cls in classes:
+            pt = roc.get(str(cls))
+            if pt is None:
+                continue
+            ax.plot(pt["fpr"], pt["tpr"], label=f"{cls} (AUC={pt['auc']:.3f})")
+        ax.plot([0, 1], [0, 1], "--", color="#999999")
+        ax.set_xlabel("false positive rate", color=_DARK)
+        ax.set_ylabel("true positive rate", color=_DARK)
+        ax.set_title(f"{name} — one-vs-rest ROC (per label)", color=_DARK)
         ax.legend(fontsize=8)
         ax.tick_params(colors=_DARK)
 

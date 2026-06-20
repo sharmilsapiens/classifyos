@@ -92,6 +92,27 @@ anyone returning after a break who wants the gist without reading code.
 **In one line:** RUNBOOK.md added — a plain, command-first guide to running the ML engine from the terminal and reading the results, written against the real CLI and verified with live runs.
 - Covers setup (venv + `.env`, the relative-default fallback caveat), `--inspect`, every CLI flag with its default, worked binary/multiclass examples, what each of the 11 output files means, the re-run overwrite limitation (fixed filenames → use `--output-dir` to keep runs), and a troubleshooting table.
 
+## Phase 11 — Multilabel end-to-end + performance baseline (✅ Done, 2026-06-20)
+**In one line:** Made the multilabel use case (Product Recommendation) actually run end-to-end
+for the first time, and measured the engine's speed on a 10k+ row dataset.
+- **Multilabel was wired up.** A multilabel target is a single column holding a `|`-separated SET
+  of labels per row (e.g. `Auto|Home`). A new small bridge (`classifyos/multilabel.py`) turns
+  that into the yes/no-per-label table the models need (using a tool fitted on the **training rows
+  only**, so it never peeks at the test set). The conductor (ModelRunner) now builds that table,
+  trains a true multilabel model (one classifier per product), and reports **per-label** scores, a
+  **per-label** ROC/PR curve, a **per-label** precision/recall report, and a predictions table that
+  shows the predicted product SET.
+- **Honest about limits.** A single confusion matrix and MCC aren't defined for a multilabel
+  target, so those are reported as "not applicable" rather than faked. Rebalancing (SMOTE) isn't
+  defined for a multi-label row, so it falls back to class-weight with a warning (documented).
+  These are additive changes keyed to the multilabel path — binary and multiclass behaviour is
+  untouched and all prior tests stay green.
+- **All seven use cases** (3 binary, 3 multiclass, 1 multilabel) now run through the engine and
+  API in one sweep (`tests/test_use_case_sweep.py`), each producing the full 11-artifact set.
+- **Performance baseline:** timed `ModelRunner.run()` on a 12,000-row synthetic dataset (4
+  algorithms, tuning off) and a realistic tuning sanity run (one model, 25 trials) to confirm the
+  hard per-model time cap bounds it. See PROJECT_STATE.md for the measured numbers.
+
 ---
 
 ## How to read this project

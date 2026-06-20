@@ -163,15 +163,27 @@ The dashboard now has two test layers:
   the **FastAPI backend** (uvicorn :8000) and the **Vite frontend** (:5173, whose proxy forwards
   `/api → :8000`). The backend is launched with a test-only env (sample CSVs in, a throwaway
   output folder out — never your real data). Two specs:
-  - `e2e/happy-path.spec.ts` — drives the full **Upload → Configure → Run** flow on the **binary**
-    and **multiclass** sample datasets and checks the rendered Overview KPIs, the ROC/PR curves
-    (one line for binary, N for multiclass), the confusion heatmap, the predictions sampled banner,
-    a downloaded plot PNG, and the live `/explain` stub. It is parametrized so **Phase 11** can add
-    all seven use cases (incl. multilabel) by extending one list.
+  - `e2e/happy-path.spec.ts` — drives the full **Upload → Configure → Run** flow and checks the
+    rendered Overview KPIs, the ROC/PR curves (one line for binary, N for multiclass/multilabel),
+    the confusion heatmap, the predictions sampled banner, a downloaded plot PNG, and the live
+    `/explain` stub. **Phase 11 extended it to all seven insurance use cases** (3 binary, 3
+    multiclass, 1 multilabel) via the one parametrized `USE_CASES` list. The **multilabel** case
+    (Product Recommendation) asserts the honest states: per-label one-vs-rest curves, and the "no
+    single confusion matrix for multilabel" notice instead of a heatmap.
   - `e2e/cors.spec.ts` — the **real CORS** test. In dev the Vite proxy makes API calls look
     same-origin, so it hides CORS; this spec has the browser call the API **directly cross-origin**
     (bypassing the proxy) to prove the env-driven allowlist actually works, including a preflight
     (OPTIONS) for a non-simple request.
+
+### Multilabel rendering (Phase 11)
+
+The result pages now render a **multilabel** run honestly (the first end-to-end multilabel runs
+happened in Phase 11). The ROC/PR Curves page shows one-vs-rest curves **per label** with a
+"multilabel view is preliminary" notice; the Confusion Matrix page shows an honest "a single
+confusion matrix is not defined for multilabel runs — see the per-label Class Report / Curves"
+message instead of a blank or broken heatmap; the Class Report and Predictions pages render the
+per-label rows and the predicted product SET. A captured multilabel `/run` envelope
+(`run_envelope_multilabel.json`) backs the render tests, so future work needs no live multilabel run.
 
 (See `RUN_FULL_SYSTEM.md` for starting the two servers by hand.)
 

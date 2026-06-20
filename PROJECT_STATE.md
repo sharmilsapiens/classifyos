@@ -4,20 +4,31 @@
 > A copy is uploaded to the ClassifyOS Claude Project knowledge after each update so the
 > planning/overseer chat stays in sync with the local repo.
 
-**Last updated:** 2026-06-20
-**Updated by:** Claude Code (Phase 10 — browser E2E testing: Playwright two-server setup,
-happy-path E2E on binary+multiclass, real cross-origin CORS test, render-gap coverage,
-`/explain` live-path test, suite audit + gap fill — **Phase 10 complete**)
-**Repo tag / commit:** 6a2772d (Phase 9c) + Phase 10 commit pending
+**Last updated:** 2026-06-21
+**Updated by:** Claude Code (Phase 11 — FINAL: multilabel wired end-to-end (Product
+Recommendation), 7-use-case E2E sweep (engine+API+browser), 12k-row performance baseline,
+tuning sanity, governance dossier — **Phase 11 engineering complete; v1.0 ready for
+sign-off/demo**)
+**Repo tag / commit:** 4ef560b (Phase 10) + Phase 11 commit pending. **v1.0 tag pending the
+human sign-offs/demo.**
 
 ---
 
 ## Current status
 
-**Active phase:** Phase 8 complete — **FastAPI layer** (`backend/api/`) wraps the engine over
-HTTP for the Phase 9 frontend, and the **`/api/v1/run` response schema is now LOCKED**
-(`docs/api_contract.md`). **The engine is reachable from a browser; the contract is frozen.**
-**Sprint day:** Phase 8 done
+**🎯 v1.0 READY FOR SIGN-OFF/DEMO (not yet released).** All eleven engineering phases (0–11) are
+complete. **Phase 11 (FINAL)** wired the **multilabel** use case (Product Recommendation)
+end-to-end for the first time, drove **all 7 insurance use cases** through the engine + API +
+browser, measured a **12k-row performance baseline (13.0s, target < 5 min)**, ran a tuning sanity
+check, and produced the **governance dossier** (`docs/governance_signoff_v1.0.md`). Suites:
+**202 backend pytest · 72 frontend vitest · 9 Playwright E2E — all green.** What remains before
+release is purely **human**: Naveen's per-phase sign-off, the `[RISK]` + leakage-audit review, the
+stakeholder demo, signatures, and the `v1.0` git tag (see the dossier + "Testing debt" below).
+
+**Active phase (historical context below):** Phase 8 complete — **FastAPI layer** (`backend/api/`)
+wraps the engine over HTTP for the Phase 9 frontend, and the **`/api/v1/run` response schema is
+LOCKED** (`docs/api_contract.md`). **The engine is reachable from a browser; the contract is frozen.**
+**Sprint day:** Phase 11 done (sprint complete)
 **Overall:** 🟢 Six endpoints under `/api/v1/` (`health`, `upload`, `run`, `explain`,
 `outputs`, `outputs/{name}`) drive the existing `ModelRunner` / `inspect_file` — no ML logic
 added. The synchronous `/run` runs the pipeline on a threadpool and returns the locked
@@ -76,7 +87,7 @@ written. Engine complete; ready for Phase 8 (FastAPI layer).
 | 8 | FastAPI layer | ✅ Done | 6 endpoints under `/api/v1/`; `/run` schema LOCKED (docs/api_contract.md); `curves.py` helper + plot2 refactor; `save_input` upload support; `/explain` stub; 36 tests (184 total) |
 | 9 | React dashboard (12 pages) | ✅ Done | **9a** (foundation: Option A design + Recharts; shadcn/ui; typed client vs LOCKED contract; app shell + nav; live round-trip; 13 FE tests). **9b** (6 result pages + Overview upgrade; binary+multiclass vs fixtures; 46 FE tests). **9c** (Explainability v2.0-ready stub wired to `/explain`; Setup Guide + Risk Register authored from the real docs; **Overview/Pipeline merged → 12 nav items**, `/pipeline` redirects to `/`; polish pass; 55 FE tests). Build clean. |
 | 10 | Testing: browser E2E + real CORS + render gaps + suite audit | ✅ Done | Playwright (1.61.0) two-server webServer; happy-path E2E parametrized (binary+multiclass run live → rendered charts/heatmap/PNG); real cross-origin CORS test (GET + preflight OPTIONS); `/explain` live-path; +7 vitest gap tests. Suites green: **184 backend pytest + 62 frontend vitest + 4 Playwright E2E**. Tests only — no behaviour change, no deviation |
-| 11 | Integration: 7 use cases E2E + governance sign-off (LAST phase) | ⬜ Not started | Drives all 7 use cases (incl. multilabel) through the Phase 10 E2E machinery; perf baseline (10k+); tuning-at-budget; real-data; governance sign-offs + demo |
+| 11 | Integration: 7-use-case E2E + multilabel + perf + governance (LAST phase) | ✅ Done (engineering) | **Multilabel wired end-to-end** (delimited target → `MultiLabelBinarizer` → OvR; per-label metrics/curves/report/predictions; honest null for confusion/MCC; additive, binary/multiclass untouched). **All 7 use cases** driven through engine+API (`test_use_case_sweep`, 8 tests) AND browser (Playwright 7-case sweep). **Perf baseline 13.0s** on 12k rows/4 algos (target < 5 min). Tuning sanity (XGB, 25 trials) 65.7s, timeout-bounded. **Governance dossier** `docs/governance_signoff_v1.0.md`. Suites: **202 pytest + 72 vitest + 9 E2E**. plan_tweak 34–37. **Human sign-offs/demo + `v1.0` tag remain.** |
 
 Status legend: ⬜ Not started · 🔄 In progress · ✅ Done · ⚠️ Blocked
 
@@ -142,6 +153,8 @@ Status legend: ⬜ Not started · 🔄 In progress · ✅ Done · ⚠️ Blocked
 | 2026-06-17 | **Phase 9c**: the merged Overview "while running" state shows the **canonical pipeline stages as a static checklist** + a spinner, NOT a fake streaming "live log" | `/run` is synchronous — the engine returns everything in one response, so there is no incremental log to stream. Listing the real stages (RUNBOOK order) is honest; a faked live feed would imply streaming the API does not do |
 | 2026-06-17 | **Phase 9c**: Explainability is built as a **v2.0-ready stub** — a model + test-row picker that calls the real `/explain` endpoint, then renders the structured `unavailable` response (surfacing the server's own `reason`/`message`) with a clearly-stubbed "SHAP waterfall reserved for v2.0" region | Honours the frozen `/explain` stub (plan_tweak 29) without faking SHAP over null data. Exercising the real client→`/explain` path means v2.0 only fills `shap_values`/`base_value` into an already-designed layout, not rebuilds the page |
 | 2026-06-17 | **Phase 9c**: Setup Guide and Risk Register are **static pages authored from the real docs** (RUNBOOK/API_RUNBOOK/api_contract for setup; CLAUDE.md constraints + engine `[RISK]` themes + scope §12 governance for risks) — not from any API response | The setup steps and `[RISK]` notes live in engine source + markdown, not in any endpoint; exposing them as data would be a frozen-backend change. Authoring from the docs is accurate and decoupled. A future live `[RISK]`/setup endpoint is a clean additive v1.1 path (noted, not built) |
+| 2026-06-21 | **Phase 11**: a multilabel target is **one `\|`-delimited column** (e.g. `Auto\|Home`), parsed into a multi-hot indicator matrix by a `MultiLabelBinarizer` **fitted on TRAIN only**; the runner restores the real label NAMES as `model.classes_` after fitting OvR-on-indicator | The LOCKED contract has a single `target` field, so the delimited-column representation keeps the contract unchanged; OvR-on-indicator otherwise exposes integer column classes (0..n), losing the product names needed for metrics/curves/report. Train-only fit = the leakage boundary (a test-only label is ignored). New module `classifyos/multilabel.py` |
+| 2026-06-21 | **Phase 11**: multilabel renders through the **unchanged locked envelope** — per-label metrics/curves/class-report populate; the single confusion matrix, MCC and log-loss are `null` (undefined for a multi-hot target), and curves carry per-label one-vs-rest entries | The contract is general enough to express multilabel honestly without a new field — `null`/empty for the genuinely-undefined pieces beats a fabricated number or a contract bump. Scope conclusion: ship "runs + renders honestly with documented limits", not full parity (per-label thresholds + imbalance weighting → v1.x). plan_tweak 34–35 |
 
 ---
 
@@ -819,6 +832,79 @@ frontend application code was changed; no bug found; no deviation (plan_tweak un
   `TestClient` / **pytest** stack (184 still green). No new runtime deps.
 - Prompt archived to `prompts/testing_phases/phase_10_e2e_testing.md` (new subfolder, verbatim).
 
+## Completed this session (Phase 11 — 2026-06-20/21) — FINAL PHASE, v1.0 ready for sign-off
+
+> **Sanctioned editable surface: multilabel ONLY** (per the phase prompt §2). Every multilabel
+> change is additive and keyed on `problem_type == "multilabel"`; **binary & multiclass behaviour
+> is byte-for-byte unchanged** — the 184 pre-existing pytest stay green throughout. Synthetic data
+> only; throwaway OUTPUT_DIR; contract unchanged.
+
+- **Workstream 2 — multilabel end-to-end (the highest-risk item, done first).** Root cause found
+  by running it: the leaf-level multilabel branches existed (wrappers' `OneVsRestClassifier`,
+  `_evaluate_multilabel`) but **nothing in the orchestrator built the indicator matrix**, so a
+  multilabel run silently degenerated into "multiclass over the 63 delimited combos" (classes were
+  combo strings, subset-accuracy 0.078). Fixed additively:
+  - **New module `classifyos/multilabel.py`** — the delimited-set ↔ indicator bridge
+    (`parse_label_sets`, `join_labels`, `MULTILABEL_DELIMITER = "|"`). A multilabel target is ONE
+    `|`-delimited column (e.g. `Auto|Home`).
+  - **`runner.py`** — fits a `MultiLabelBinarizer` on the TRAIN label sets only ([RISK] leakage
+    boundary), builds the `(n, n_labels)` indicator, trains OvR on it, restores the real label
+    NAMES as `model.classes_` (OvR-on-indicator otherwise yields integer columns), stores
+    `y_test_indicator_`, and reports per-LABEL `class_distribution`.
+  - **`predict.py`** — a multilabel `classify` branch: actual/predicted are the delimited label
+    SETS, one `probability_<label>` per label, confidence = row-max, `correct_flag` = exact-set
+    match (subset accuracy). Same column layout → API/CSV unchanged.
+  - **`curves.py`** — multilabel now computes per-label one-vs-rest ROC/PR from the indicator (was
+    a no-op stub). **`plots.py`** — plot2 gains a per-label OvR branch; plot1 (confusion) + plot5
+    (calibration) already fall back to honest placeholders for multilabel.
+  - **`api/routes/run.py`** — passes the indicator to the curve helper for multilabel; everything
+    else flows through the **unchanged locked envelope** (confusion `{}`, MCC/log-loss `null`).
+  - **Frontend (defensive multilabel rendering):** Curves page subtitle + per-label curves +
+    "preliminary" notice; Confusion Matrix shows an honest "not defined for multilabel — see the
+    per-label Class Report / Curves" state instead of a blank heatmap.
+  - **Outcome:** true multilabel runs — classes are the 6 product names; per-label F1 ≈ 0.58
+    (real signal); roc_auc/pr_auc populated; the documented `smote`→`class_weight` fallback warning
+    fires; all 11 artifacts written. **Scope conclusion (the §2 judgment call):** shipped as "runs
+    + renders honestly with documented limits", NOT full parity — per-label thresholds stay v1.x
+    and multilabel imbalance is effectively unhandled (resampling N/A; the OvR wrapper does not
+    apply `class_weight`). plan_tweak 34–35.
+- **Workstream 1 — 7-use-case sweep.** Extended `scripts/generate_sample_data.py` with the four
+  missing datasets (claim_likelihood, customer_segment, claim_severity, product_reco) + a 12k perf
+  set. Use-case CSVs are **committed to `backend/data/samples/`** (the portable E2E seed, like the
+  existing 3 — a deliberate deviation from the prompt's "out of git", needed for reproducible E2E;
+  the perf set is kept out of git). All 7 use cases now run through **engine+API** (new
+  `tests/test_use_case_sweep.py`, 8 tests, each → contract-valid envelope + 11 artifacts) AND the
+  **browser** (Playwright `happy-path.spec.ts` extended via the one `USE_CASES` list to all 7;
+  multilabel asserts the honest states). plan_tweak 36.
+- **Workstream 3 — performance baseline.** `ModelRunner.run()` on **12,000 rows × 4 algorithms
+  (LR/RF/XGB/LGBM), tuning OFF = 13.0s** (target < 5 min — comfortably within; all 4 models
+  succeeded). **Tuning sanity:** XGBoost, 25 trials, cv_folds=3 = 65.7s, bounded by `n_trials`
+  before the 600s/model ceiling. The sync-`/run` gateway-timeout risk does not bite at 13s; it
+  remains a v1.5 background-job concern for much larger data / tuning-on. plan_tweak 37.
+- **Workstream 4 — governance dossier.** Produced `docs/governance_signoff_v1.0.md`: the scope §12
+  checklist with status+evidence, the full **`[RISK]` inventory** (35 comments, file + one-line, for
+  the lead to walk), **leakage-audit pointers** to the specific tests, the prompt-archive inventory,
+  the hallucination-check record, a **repeatable demo script**, the **honest v1.0 limitations list**,
+  and the explicit **unticked human action items** (Naveen per-phase sign-off, `[RISK]` + leakage
+  review, stakeholder demo, signatures, `v1.0` tag).
+- **Tests added (+18 pytest → 202; +10 vitest → 72; +5 E2E → 9):** `test_multilabel.py` (9 —
+  delimited-set bridge, true-multilabel-not-combos, per-label metrics, smote→class_weight fallback,
+  train-only binarizer, label-set predictions, per-label curves, per-label distribution),
+  `test_api_run.py::test_multilabel_run_schema` (1), `test_use_case_sweep.py` (8). Frontend: the
+  multilabel `/run` fixture (`run_envelope_multilabel.json`, via the real TestClient) + multilabel
+  render tests. Playwright: the 7-use-case sweep (was binary+multiclass only).
+- **Final counts (all green): 202 backend pytest · 72 frontend vitest · 9 Playwright E2E.** Frontend
+  `npm run build` clean.
+- **Hallucination check ✅** — no new runtime deps. Verified vs installed/pinned versions:
+  **scikit-learn 1.9.0** (`MultiLabelBinarizer.fit/transform` — train-only vocabulary, unknown test
+  labels ignored with `UserWarning`; `OneVsRestClassifier` on an indicator matrix; `roc_auc_score`/
+  `average_precision_score` multilabel averaging; `classification_report` on indicator inputs),
+  re-confirmed **@playwright/test 1.61.0**, **vitest 4.1.9**, **recharts 3.8.1**.
+- **What remains is HUMAN, not code** — see the dossier §7: Naveen per-phase sign-off; `[RISK]`-comment
+  review; leakage-audit sign-off; stakeholder demo (Amit Shah, DharaniKiran Kavuri, Matat Rotbaum);
+  signatures; repo tag **`v1.0`**.
+- Prompt archived to `prompts/testing_phases/phase_11_integration_signoff.md` (verbatim).
+
 ## Completed this session (Doc-update enforcement hook — 2026-06-15) — ⚠️ REMOVED 2026-06-16
 
 > This hook was removed in the 2026-06-16 reorg session (see below). Kept here as a record.
@@ -967,41 +1053,55 @@ frontend application code was changed; no bug found; no deviation (plan_tweak un
   network/422/400/ok) + `errorStates.test.tsx` (Overview 400 run-error, Upload error surface);
   parser-on-malformed already covered by `parse.test.ts`.
 
-**⬜ Still open — PHASE 11 (the final phase):**
+**✅ Closed in Phase 11 (struck through):**
 
-- **Multilabel (Product Recommendation) has NEVER run end-to-end** — all real runs so far are
-  binary/multiclass. Weak spots: resampling→class_weight fallback (plan_tweak 19), per-label
-  thresholds out of scope, multilabel curves/calibration least-tested. **Highest surprise risk.**
-  (The E2E `USE_CASES` list + parametrized spec are built so Phase 11 just adds the multilabel +
-  remaining use-case entries — the machinery is ready.)
-- **7-use-case E2E sweep** — Phase 10 ran only binary + multiclass through the new machinery;
-  Phase 11 drives all seven insurance use cases through the same parametrized spec.
-- **Tuning at realistic budgets** (tests use tiny budgets, never SVM) + its interaction with the
-  synchronous `/run` gateway timeout.
-- **Performance baseline** on 10k+ rows (samples are 3k–8k; the "<5 min" target is unverified).
-- **Real (non-synthetic) data** revalidation if any arrives (plan_tweak 5).
-- **Governance sign-offs still open**: [RISK]-comment review by team lead, leakage-audit
-  sign-off, per-phase sign-off by Naveen.
+- ~~**Multilabel (Product Recommendation) has NEVER run end-to-end**~~ ✅ Done — wired
+  end-to-end via a delimited target + `MultiLabelBinarizer` (train-only) → OvR; per-label
+  metrics/curves/report/predictions; the `smote`→`class_weight` fallback verified; honest null for
+  the single confusion matrix / MCC. Engine, API and browser all exercised. Regression tests:
+  `test_multilabel.py` + the API + sweep + frontend fixture. **Documented limits** (per-label
+  thresholds + imbalance weighting → v1.x): plan_tweak 34–35, dossier §9.
+- ~~**7-use-case E2E sweep**~~ ✅ Done — all 7 use cases run through engine+API
+  (`test_use_case_sweep.py`) AND the browser (Playwright `happy-path.spec.ts`, all 7 via the one
+  `USE_CASES` list). New datasets generated + committed as the E2E seed (plan_tweak 36).
+- ~~**Tuning at realistic budgets**~~ ✅ Done (sanity) — XGBoost, 25 trials, cv=3 = 65.7s,
+  bounded by `n_trials` before the 600s/model ceiling. (A full tuning *sweep* was explicitly out of
+  scope; SVM tuning remains the slow, rarely-run path.)
+- ~~**Performance baseline on 10k+ rows**~~ ✅ Done — 12k rows × 4 algos, tuning off = **13.0s**
+  (target < 5 min). plan_tweak 37.
+
+**⬜ Still open — HUMAN sign-off actions (NOT code; see `docs/governance_signoff_v1.0.md`):**
+
+- **Per-phase sign-off by Naveen.**
+- **`[RISK]`-comment review by the team lead** (the full inventory is tabulated in the dossier §4).
+- **Leakage-audit sign-off** (the proving tests are pointed to in the dossier §5).
+- **Stakeholder demo + acceptance** (Amit Shah, DharaniKiran Kavuri, Matat Rotbaum) — demo script
+  in the dossier §8.
+- **Signatures + repo tag `v1.0`.**
+
+**⬜ Still open — documented post-v1.0 items (not blockers):**
+
+- **Real (non-synthetic) data** revalidation when it arrives (plan_tweak 5) — all metrics to date
+  are on synthetic data.
+- **Background-job `/run`** (submit→poll→fetch) to beat gateway timeouts on very large data /
+  tuning-on (v1.5, plan_tweak 28). **Real `/explain`/SHAP** once model persistence lands (v2.0,
+  plan_tweak 29).
 
 ---
 
 ## Next steps (priority order)
 
-1. Commit Phase 10 ("Phase 10: browser E2E (Playwright, 2-server) + real CORS test + render-gap
-   coverage + suite audit").
+1. Commit Phase 11 ("Phase 11: 7-use-case E2E sweep + multilabel end-to-end + 10k perf baseline +
+   governance dossier — v1.0 ready for sign-off").
 2. Upload updated PROJECT_STATE.md to the Claude Project knowledge.
-3. **Phase 11 — 7-use-case integration + governance sign-off (the LAST phase of the sprint).**
-   Drive all seven insurance use cases through the **Phase 10 E2E machinery** (extend the
-   parametrized `e2e/flows.ts` `USE_CASES` list — the spec is already built for this), **including
-   the unverified multilabel (Product Recommendation) path** (resampling→class_weight fallback,
-   multilabel curves/calibration — highest surprise risk); establish a **performance baseline** on
-   10k+ rows (the "<5 min" target is unverified); exercise **tuning at realistic budgets**;
-   revalidate on **real (non-synthetic) data** if any arrives; and close the open governance items
-   ([RISK]-comment review, leakage-audit sign-off, per-phase sign-off by Naveen) + the demo.
-   Consider capturing a multilabel `/run` fixture once a multilabel run is runnable.
-4. v1.5/v2.0 backlog (unchanged): background-job `/run` (submit→poll→fetch) to beat gateway
-   timeouts; real `/explain` once model persistence (MLflow / a model registry) lands (the
-   Explainability page is already wired and shaped for it).
+3. **HUMAN sign-off + release (engineering is done).** Per `docs/governance_signoff_v1.0.md`:
+   Naveen's per-phase sign-off → the team-lead `[RISK]`-comment review (dossier §4) → leakage-audit
+   sign-off (dossier §5) → the stakeholder demo (dossier §8; Amit Shah, DharaniKiran Kavuri, Matat
+   Rotbaum) → signatures → **tag the repo `v1.0`**. Only then is v1.0 "released".
+4. v1.x backlog: real-data revalidation (plan_tweak 5); per-label thresholds + imbalance weighting
+   for multilabel (plan_tweak 35); background-job `/run` (submit→poll→fetch) to beat gateway
+   timeouts on very large data / tuning-on (v1.5); real `/explain`/SHAP once model persistence
+   (MLflow / a registry) lands (v2.0 — the Explainability page is already wired and shaped for it).
 
 ---
 
@@ -1013,12 +1113,16 @@ Contract doc: `docs/api_contract.md` — frozen; changes must be additive and bu
 ## Governance checklist (from scope §12)
 
 - [x] Prompt version control — prompts/ populated per section (phase_01…phase_07B archived under `prompts/backend_phases/`; Phase 8 archived to `prompts/api_phases/phase_08_fastapi.md`)
-- [x] Section-level unit tests passing on real data (184 backend pytest: 22 Phase 1 + 5 Phase 2 + 14 Phase 3 + 19 Phase 4 + 10 Phase 5 + 47 Phase 6 + 13 Phase 7 + 18 Phase 7B + 36 Phase 8 API/curves). **Phase 9/10 frontend: 62 vitest** (render + typed-client + error/empty states). **Phase 10 browser E2E: 4 Playwright** (2 happy-path binary+multiclass + 2 real-CORS) — true browser → live uvicorn → engine → rendered charts/heatmap/PNG, asserting the LOCKED contract
-- [ ] [RISK] comments reviewed by team lead (3 Phase 1 + 2 Phase 2 + 4 Phase 3 + Phase 4 poly-cap/ratio-denominator/auto-discovery-pool/re-discovery-leakage + 4 Phase 5 train-only/tiny-minority/undersample-discards/multilabel + Phase 6 proba-shape-order/accuracy-misleads/SVM-no-importance + Phase 7B tuning-CV-leakage/per-fold-balancing-deferred/runaway-timeout-cap/per-model-isolation, pending review)
-- [ ] Leakage audit (encoder/scaler/SMOTE train-only) confirmed — encoder/scaler/imputer (Phase 3), feature-engineering/interaction stats (Phase 4) and balancing (Phase 5) all train-only, enforced by design + dedicated leakage tests (binning edges, MI auto-discovery, test-set-untouched). SMOTE/undersample are train-only by construction (the balancer takes no test argument). Phase 6 models fit on the balanced TRAIN matrices only; evaluate_model/classify only ever read the untouched test set. Phase 7B tuning scores every trial with CV *inside the train split only* (the test set is never passed to `tune_model`), and balancing is applied only to the final fit, not inside the CV folds
+- [x] Section-level unit tests passing on real data — **202 backend pytest** (22 Phase 1 + 5 Phase 2 + 14 Phase 3 + 19 Phase 4 + 10 Phase 5 + 47 Phase 6 + 13 Phase 7 + 18 Phase 7B + 36 Phase 8 API/curves + **18 Phase 11: 9 multilabel + 1 API-multilabel + 8 7-use-case sweep**). **Frontend: 72 vitest** (render incl. binary+multiclass+**multilabel** fixtures + typed-client + error/empty states). **Browser E2E: 9 Playwright** (**7-use-case happy-path sweep incl. multilabel** + 2 real-CORS) — true browser → live uvicorn → engine → rendered charts/heatmap/PNG, asserting the LOCKED contract
+- [ ] [RISK] comments reviewed by team lead — **full inventory (35 comments) tabulated in `docs/governance_signoff_v1.0.md` §4** (file + one-line summary) for the lead to walk and tick off. (3 Phase 1 + 2 Phase 2 + 4 Phase 3 + Phase 4 poly-cap/ratio-denominator/auto-discovery-pool/re-discovery-leakage + 4 Phase 5 + Phase 6 proba-shape-order/accuracy-misleads/SVM-no-importance + Phase 7B tuning-CV-leakage/per-fold-balancing-deferred/runaway-timeout-cap/per-model-isolation + **Phase 11 multilabel-delimiter + MLB-train-only**, pending review)
+- [ ] Leakage audit (encoder/scaler/SMOTE train-only) confirmed — encoder/scaler/imputer (Phase 3), feature-engineering/interaction stats (Phase 4) and balancing (Phase 5) all train-only, enforced by design + dedicated leakage tests (binning edges, MI auto-discovery, test-set-untouched). SMOTE/undersample are train-only by construction (the balancer takes no test argument). Phase 6 models fit on the balanced TRAIN matrices only; evaluate_model/classify only ever read the untouched test set. Phase 7B tuning scores every trial with CV *inside the train split only* (the test set is never passed to `tune_model`), and balancing is applied only to the final fit, not inside the CV folds. **Phase 11: the multilabel `MultiLabelBinarizer` learns its vocabulary from the TRAIN split only** (a test-only label is ignored — `test_multilabel.py::test_multilabel_binarizer_is_train_fitted`); proving tests are listed in `docs/governance_signoff_v1.0.md` §5
 - [x] Output schema contract locked — `/api/v1/run` response **LOCKED at Phase 8** (`docs/api_contract.md`, schema_version 1.0). The API contract is frozen; the Phase 9 frontend is generated against it (CLAUDE.md hard rule)
-- [x] Hallucination check — library calls verified against installed versions (Phase 1: pandas 2.3.3 / sklearn 1.9.0; Phase 2: scipy 1.17.1 / sklearn 1.9.0 / matplotlib 3.11.0; Phase 3: sklearn 1.9.0 encoders/scalers; Phase 4: mutual_info_classif / scipy.stats.skew / pandas.qcut; Phase 5: imbalanced-learn 0.14.2 SMOTE/RandomUnderSampler/RandomOverSampler, sklearn 1.9.0 compute_class_weight; Phase 6: sklearn 1.9.0 CalibratedClassifierCV/GaussianNB sample_weight/OvR/roc_auc/log_loss/calibration_curve, xgboost 3.2.0 string-label rejection + sample_weight, lightgbm 4.6.0; Phase 7B: optuna 4.9.0 create_study/TPESampler/Study.optimize/Trial.suggest_*/best_trial.user_attrs/TrialPruned/logging.set_verbosity; Phase 8: FastAPI 0.136.3 lifespan/CORSMiddleware/UploadFile/run_in_threadpool/FileResponse, Starlette 1.3.0 TestClient, Pydantic 2.13.4 BaseModel/field_validator/ConfigDict, httpx 0.28.1, sklearn 1.9.0 roc_curve/precision_recall_curve/auc/average_precision_score — no new deps added) — all versions pinned in backend/requirements.lock
-- [ ] Team lead sign-off per phase (Naveen)
+- [x] Hallucination check — library calls verified against installed versions (Phase 1: pandas 2.3.3 / sklearn 1.9.0; Phase 2: scipy 1.17.1 / sklearn 1.9.0 / matplotlib 3.11.0; Phase 3: sklearn 1.9.0 encoders/scalers; Phase 4: mutual_info_classif / scipy.stats.skew / pandas.qcut; Phase 5: imbalanced-learn 0.14.2 SMOTE/RandomUnderSampler/RandomOverSampler, sklearn 1.9.0 compute_class_weight; Phase 6: sklearn 1.9.0 CalibratedClassifierCV/GaussianNB sample_weight/OvR/roc_auc/log_loss/calibration_curve, xgboost 3.2.0 string-label rejection + sample_weight, lightgbm 4.6.0; Phase 7B: optuna 4.9.0 create_study/TPESampler/Study.optimize/Trial.suggest_*/best_trial.user_attrs/TrialPruned/logging.set_verbosity; Phase 8: FastAPI 0.136.3 lifespan/CORSMiddleware/UploadFile/run_in_threadpool/FileResponse, Starlette 1.3.0 TestClient, Pydantic 2.13.4 BaseModel/field_validator/ConfigDict, httpx 0.28.1, sklearn 1.9.0 roc_curve/precision_recall_curve/auc/average_precision_score; **Phase 11: sklearn 1.9.0 MultiLabelBinarizer.fit/transform (train-only vocabulary; unknown test labels ignored with UserWarning), OneVsRestClassifier on an indicator matrix, roc_auc/average_precision multilabel averaging, classification_report on indicator inputs; re-confirmed @playwright/test 1.61.0 / vitest 4.1.9 / recharts 3.8.1 — no new deps**) — all versions pinned in backend/requirements.lock
+- [ ] [RISK]-comment review by team lead (HUMAN) — inventory in `docs/governance_signoff_v1.0.md` §4
+- [ ] Leakage-audit sign-off (HUMAN) — proving tests in `docs/governance_signoff_v1.0.md` §5
+- [ ] Team lead (Naveen) sign-off per phase (HUMAN)
+- [ ] Final stakeholder demo + acceptance (HUMAN) — Amit Shah, DharaniKiran Kavuri, Matat Rotbaum; demo script in `docs/governance_signoff_v1.0.md` §8
+- [ ] Signatures collected + repo tagged `v1.0` (HUMAN)
 
 ---
 
@@ -1048,4 +1152,5 @@ Contract doc: `docs/api_contract.md` — frozen; changes must be additive and bu
 | 2026-06-17 | Phase 9b — React result-rendering pages (Overview upgrade + 6 result pages) against the LOCKED contract | Built Feature Impact / Confusion Matrix / Class Report / ROC-PR Curves / Predictions / Interaction Features + upgraded Overview; shared `ResultGate`/`ModelSelector`/`PngArtifact` + `lib/results` helpers; interactive-vs-PNG rule honored (plot PNGs fetched via `/outputs`, guarded for absence); read from the app store, no backend edits; captured a **multiclass** fixture (real TestClient) alongside the binary one; **46 FE tests** (33 new), build clean; binary+multiclass verified vs fixtures, multilabel rendered-but-unverified; no contract gaps; recharts 3.8.1 hallucination-checked; no plan_tweak (chart/UX in decisions log); prompt archived to `prompts/frontend_phases/phase_09b_result_pages.md` |
 | 2026-06-17 | Phase 9c — React remaining pages + polish (Explainability stub, Setup Guide, Risk Register, Overview/Pipeline merge) — **Phase 9 complete** | Built Explainability (v2.0-ready stub wired to the frozen `/explain`), Setup Guide + Risk Register (static, authored from RUNBOOK/API_RUNBOOK/api_contract + CLAUDE.md constraints + engine `[RISK]` themes); **merged Overview + Pipeline → 12 nav items**, `/pipeline` redirects to `/`, deleted `Pipeline.tsx`/`StubPage.tsx`; polish pass (sticky/shrink-0 sidebar, chart `aria-label`, contrast bump, shared empty/loading/error states); **55 FE tests** (9 new), build clean; no contract gaps; react-router-dom 7.18.0 `Navigate` + recharts 3.8.1 + vitest/Testing Library hallucination-checked; plan_tweak row 33 (13→12 page/nav); prompt archived to `prompts/frontend_phases/phase_09c_remaining_polish.md` |
 | 2026-06-20 | Phase 10 — browser E2E (Playwright, 2-server) + real CORS + render-gap coverage + suite audit | **Phase 10 complete.** Playwright 1.61.0 (pinned) + Chromium; `playwright.config.ts` two-server `webServer` (venv uvicorn + Vite), test-only env (DATA_DIR→samples, throwaway OUTPUT_DIR `backend/.e2e_output`, CORS allowlist); `e2e/happy-path.spec.ts` parametrized (binary+multiclass run **live** → asserts real SVG geometry, curve count 1/N, n×n heatmap cells, loaded PNG, predictions banner, + `/explain` live path); `e2e/cors.spec.ts` (cross-origin GET + preflight OPTIONS, allowlist real never `*`); +7 vitest gap tests (`client.test.ts` ApiError mapping, `errorStates.test.tsx` 400/upload). **Suites green: 184 pytest · 62 vitest · 4 E2E**; build clean. Tests only — **no app/engine code changed, no bug found, no deviation** (one tooling touch: `vite.config.ts` `test.include` to scope vitest off `e2e/`). Hallucination-checked vs installed versions. Prompt archived to `prompts/testing_phases/phase_10_e2e_testing.md` |
+| 2026-06-20/21 | Phase 11 (FINAL) — multilabel end-to-end + 7-use-case sweep + 12k perf baseline + governance dossier | **Engineering complete; v1.0 ready for sign-off/demo.** Multilabel (Product Recommendation) wired end-to-end for the first time — new `classifyos/multilabel.py` (delimited-set ↔ indicator bridge) + additive multilabel branches in runner/predict/curves/plots/api (`MultiLabelBinarizer` train-only → OvR; per-label metrics/curves/report/predictions; honest `null` for confusion/MCC); binary+multiclass untouched. **All 7 use cases** driven through engine+API (`test_use_case_sweep.py`, 8 tests) AND browser (Playwright 7-case sweep, multilabel asserts honest states). 4 new datasets + 12k perf set generated (`generate_sample_data.py`); use-case CSVs committed as the E2E seed. **Perf: 12k×4 algos = 13.0s** (target < 5 min); tuning sanity (XGB, 25 trials) = 65.7s. **Governance dossier** `docs/governance_signoff_v1.0.md` (scope §12 checklist + 35-row [RISK] table + leakage proof + demo script + v1.0 limitations + human action items). **Suites: 202 pytest · 72 vitest · 9 E2E (all green)**; build clean. plan_tweak 34–37. Scope conclusion: multilabel ships "runs+renders honestly with documented limits" (per-label thresholds + imbalance weighting → v1.x). **Human sign-offs/demo + `v1.0` tag remain.** Prompt archived to `prompts/testing_phases/phase_11_integration_signoff.md` |
 | | | |

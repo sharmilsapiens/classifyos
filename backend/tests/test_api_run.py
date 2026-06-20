@@ -180,6 +180,55 @@ def test_multiclass_run_schema(multiclass_run_response) -> None:
 
 
 # --------------------------------------------------------------------------- #
+# locked schema (multilabel — Phase 11)                                        #
+# --------------------------------------------------------------------------- #
+
+
+def test_multilabel_run_schema(multilabel_run_response) -> None:
+    """The multilabel envelope is honest within the LOCKED contract (no contract change).
+
+    Per-label metrics/curves/report are populated; the fields that are undefined for a
+    multi-hot target (a single confusion matrix, MCC, log-loss) are empty/None — never a
+    crash and never a silently-wrong number.
+    """
+    assert multilabel_run_response.status_code == 200
+    body = multilabel_run_response.json()
+    assert body["status"] == "ok"
+    result = body["result"]
+    assert RESULT_KEYS == set(result.keys())
+    assert result["run"]["problem_type"] == "multilabel"
+
+    # models: per-label-weighted f1/roc/pr present; mcc None (undefined for multilabel).
+    ok_models = [m for m in result["models"] if m["status"] == "ok"]
+    assert len(ok_models) >= 2
+    assert all(m["f1_weighted"] is not None for m in ok_models)
+    assert all(m["roc_auc"] is not None for m in ok_models)
+    assert all(m["mcc"] is None for m in ok_models)
+
+    # curves: one-vs-rest entry per LABEL (≥2 labels), with ROC + PR sub-structures.
+    curves = result["curves"]
+    any_model = next(iter(curves))
+    assert len(curves[any_model]["roc"]) >= 2
+    assert len(curves[any_model]["pr"]) >= 2
+
+    # confusion_matrix is empty (a single matrix is undefined for multilabel) — the honest
+    # "not applicable" state, not a fabricated matrix.
+    assert result["confusion_matrix"] == {}
+
+    # class_report: per-label rows render (precision/recall/f1/support per product).
+    report = result["class_report"][any_model]
+    assert report and {"class", "precision", "recall", "f1", "support"} <= set(report[0].keys())
+
+    # predictions: a per-label probability map + label-SET strings for actual/predicted.
+    row = result["predictions"]["sample_rows"][0]
+    assert isinstance(row["actual"], str) and isinstance(row["predicted"], str)
+    assert len(row["probabilities"]) >= 2
+
+    # strict-JSON round-trip (no NaN/Inf leaked).
+    assert json.dumps(body, allow_nan=False)
+
+
+# --------------------------------------------------------------------------- #
 # JSON-safety unit test                                                        #
 # --------------------------------------------------------------------------- #
 

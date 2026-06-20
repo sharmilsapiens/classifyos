@@ -48,8 +48,10 @@ def compute_curve_points(
     """Compute ROC and PR curve points (one-vs-rest per class) from test predictions.
 
     Args:
-        y_true: True test labels (1-D array of class labels, as strings). NOT training
-            data — see the module-level [RISK] note.
+        y_true: True test labels. For binary/multiclass a 1-D array of class labels (as
+            strings); for **multilabel** a 2-D ``(n_samples, n_labels)`` binary indicator
+            matrix (columns aligned to ``classes``). NOT training data — see the
+            module-level [RISK] note.
         y_proba: Predicted probabilities of shape ``(n_samples, n_classes)`` with columns
             ordered to match ``classes`` (a model wrapper's ``predict_proba`` output).
         classes: Class labels in ``y_proba`` column order (a wrapper's ``classes_``).
@@ -60,21 +62,29 @@ def compute_curve_points(
         ``fpr``/``tpr``/``thresholds`` lists and a scalar ``auc``, and each PR entry holds
         ``precision``/``recall``/``thresholds`` lists and a scalar ``ap``. For **binary**
         there is a single entry keyed by the positive class (the lexicographically-last
-        label, matching ``evaluate_model``/``plot_results``). For **multiclass** there is
-        one one-vs-rest entry per class. A class with fewer than two distinct truth values
-        present (so ROC/PR is undefined) is omitted. ``multilabel`` is not supported here
-        and returns empty dicts.
+        label, matching ``evaluate_model``/``plot_results``). For **multiclass** and
+        **multilabel** there is one one-vs-rest entry per class/label (multilabel reads the
+        indicator column as that label's binary truth). A class with fewer than two distinct
+        truth values present (so ROC/PR is undefined) is omitted.
     """
     roc: dict[str, dict[str, Any]] = {}
     pr: dict[str, dict[str, Any]] = {}
 
+    proba = np.asarray(y_proba, dtype=float)
+    class_labels = [str(c) for c in np.asarray(classes).tolist()]
+
     if problem_type == "multilabel":
-        # Multilabel curve export is out of scope for v1.0 (mirrors classify()/plots).
+        # One-vs-rest per label, reading the indicator column as that label's binary truth.
+        y_ind = np.asarray(y_true)
+        for i, label in enumerate(class_labels):
+            y_bin = y_ind[:, i].astype(int)
+            if len(np.unique(y_bin)) < 2:
+                continue  # a label always (or never) present → ROC/PR undefined; skip.
+            roc[label] = _roc_points(y_bin, proba[:, i])
+            pr[label] = _pr_points(y_bin, proba[:, i])
         return {"roc": roc, "pr": pr}
 
     y_true_arr = np.asarray(y_true).astype(str)
-    proba = np.asarray(y_proba, dtype=float)
-    class_labels = [str(c) for c in np.asarray(classes).tolist()]
 
     if problem_type == "binary":
         # Positive class = last column / lexicographically-last label, matching the

@@ -69,6 +69,12 @@ are referenced by filename only; and every number is JSON-safe (undefined values
   exercise CORS because they aren't browsers). One operational note the test surfaced: because
   `main.py` calls `load_dotenv()` with the default `override=False`, environment variables already
   set in the process (e.g. by a test harness or a container) take precedence over `backend/.env`.
+- **Multilabel over the same contract (Phase 11)** — the multilabel use case (Product
+  Recommendation) now returns through the **unchanged, locked** `/run` envelope. Per-label metrics,
+  per-label one-vs-rest ROC/PR curves, and a per-label class report populate normally; the fields
+  that have no meaning for a multi-hot target (a single confusion matrix, MCC, log-loss) come back
+  empty/`null` rather than wrong — so the contract did not need a new field. The 7-use-case sweep
+  test drives all seven cases (binary, multiclass, multilabel) through this endpoint.
 
 ---
 

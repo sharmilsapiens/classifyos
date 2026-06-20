@@ -251,9 +251,18 @@ def _curves(runner: ModelRunner) -> dict[str, Any]:
     out: dict[str, Any] = {}
     if runner.X_test_ is None or runner.y_test_ is None:
         return out
+    # Multilabel curves read the binary indicator matrix as each label's truth; binary /
+    # multiclass read the 1-D label vector. Both flow through the same helper.
+    y_for_curves = (
+        runner.y_test_indicator_
+        if runner.problem_type_ == "multilabel"
+        else runner.y_test_
+    )
+    if y_for_curves is None:
+        return out
     for name, model in runner.models_.items():
         proba = model.predict_proba(runner.X_test_)
         out[name] = compute_curve_points(
-            runner.y_test_, proba, model.classes_, runner.problem_type_
+            y_for_curves, proba, model.classes_, runner.problem_type_
         )
     return out

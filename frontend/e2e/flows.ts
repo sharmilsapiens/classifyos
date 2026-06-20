@@ -45,19 +45,41 @@ export interface UseCase {
   expectedClasses: string[]
 }
 
-// The 12 known-good features used by the backend test suite (conftest LAPSE_FEATURES).
+// Curated feature lists per use case (exclude id/date columns). These mirror the backend
+// conftest feature constants where one exists. expectedClasses are SORTED (the engine sorts
+// classes, and the confusion-matrix labels / curve order follow that).
 const LAPSE_FEATURES = [
   "age", "occupation", "region", "policy_type", "channel", "payment_frequency",
   "policy_tenure_years", "annual_premium", "sum_assured", "num_late_payments",
   "claims_count", "has_agent",
 ]
-// conftest RISK_FEATURES (multiclass risk_tier).
+const CLAIM_LIKELIHOOD_FEATURES = [
+  "age", "gender", "region", "vehicle_type", "vehicle_age", "annual_mileage",
+  "prior_claims", "policy_tenure_years", "coverage_level", "credit_score", "has_telematics",
+]
+const FRAUD_FEATURES = [
+  "claim_amount", "policy_age_months", "report_delay_days", "num_prior_claims",
+  "incident_type", "has_police_report", "has_witness", "claimant_age", "region",
+]
 const RISK_FEATURES = [
   "age", "bmi", "is_smoker", "annual_income", "credit_score", "prior_violations",
   "occupation_class", "vehicle_age", "region",
 ]
+const SEGMENT_FEATURES = [
+  "age", "annual_income", "total_premium", "num_policies", "tenure_years",
+  "region", "digital_engagement", "claims_ratio", "occupation",
+]
+const SEVERITY_FEATURES = [
+  "claim_amount", "incident_type", "region", "policy_age_months", "claimant_age",
+  "injuries", "vehicle_damage_score", "num_parties",
+]
+// Product Recommendation (multilabel — "|"-delimited target). expectedClasses are the labels.
+const PRODUCT_FEATURES = [
+  "age", "annual_income", "family_size", "num_dependents", "owns_home",
+  "owns_vehicle", "risk_appetite", "existing_life_policy", "region",
+]
 
-/** Phase 10 use cases: binary + multiclass only (Phase 11 adds the other five). */
+/** Phase 11: ALL SEVEN insurance use cases (binary ×3, multiclass ×3, multilabel ×1). */
 export const USE_CASES: UseCase[] = [
   {
     file: "policy_lapse.csv",
@@ -68,12 +90,53 @@ export const USE_CASES: UseCase[] = [
     expectedClasses: ["0", "1"],
   },
   {
+    file: "claim_likelihood.csv",
+    target: "will_claim",
+    problem_type: "binary",
+    algorithms: ["LogisticRegression", "RandomForest"],
+    features: CLAIM_LIKELIHOOD_FEATURES,
+    expectedClasses: ["0", "1"],
+  },
+  {
+    file: "fraud_claims.csv",
+    target: "is_fraud",
+    problem_type: "binary",
+    algorithms: ["LogisticRegression", "RandomForest"],
+    features: FRAUD_FEATURES,
+    expectedClasses: ["0", "1"],
+  },
+  {
     file: "risk_tier.csv",
     target: "risk_tier",
     problem_type: "multiclass",
     algorithms: ["LogisticRegression", "RandomForest"],
     features: RISK_FEATURES,
     expectedClasses: ["High", "Low", "Medium"],
+  },
+  {
+    file: "customer_segment.csv",
+    target: "segment",
+    problem_type: "multiclass",
+    algorithms: ["LogisticRegression", "RandomForest"],
+    features: SEGMENT_FEATURES,
+    expectedClasses: ["Affluent", "Budget", "HighNetWorth", "Mainstream"],
+  },
+  {
+    file: "claim_severity.csv",
+    target: "severity",
+    problem_type: "multiclass",
+    algorithms: ["LogisticRegression", "RandomForest"],
+    features: SEVERITY_FEATURES,
+    expectedClasses: ["Minor", "Moderate", "Severe"],
+  },
+  {
+    file: "product_reco.csv",
+    target: "recommended_products",
+    problem_type: "multilabel",
+    algorithms: ["LogisticRegression", "RandomForest"],
+    features: PRODUCT_FEATURES,
+    // For multilabel these are the LABELS (one-vs-rest), not mutually-exclusive classes.
+    expectedClasses: ["Auto", "Health", "Home", "Investment", "Life", "Travel"],
   },
 ]
 

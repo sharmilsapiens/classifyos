@@ -19,6 +19,7 @@ import numpy as np
 import pandas as pd
 
 from .models.base import ModelWrapper
+from .multilabel import join_labels, parse_label_sets
 
 
 def classify(
@@ -32,7 +33,8 @@ def classify(
     Args:
         model: A fitted :class:`~classifyos.models.base.ModelWrapper`.
         X_test: Test feature matrix (the model's ``predict``/``predict_proba`` input).
-        y_test: True test labels, aligned to ``X_test`` rows.
+        y_test: True test labels, aligned to ``X_test`` rows. For multilabel this is the
+            delimited target column (e.g. ``"Auto|Home"``).
         classes: Class labels in ``predict_proba`` column order (the model's
             ``classes_``). Determines the ``probability_<class>`` column order.
 
@@ -42,11 +44,14 @@ def classify(
         and ``correct_flag`` (``actual == predicted``). For binary/multiclass the
         per-row probabilities sum to ~1.
 
-    Note:
-        This single-label layout (scalar ``actual``/``predicted``) does not cover
-        multilabel problems, where each row carries several labels; multilabel
-        prediction export is out of scope for v1.0.
+        For **multilabel** problems ``actual``/``predicted`` are the delimited label SETS
+        (sorted, e.g. ``"Auto|Home"``), one ``probability_<label>`` per label, ``confidence``
+        is the row-max per-label probability, and ``correct_flag`` is the exact-set match
+        (subset accuracy). The columns are identical so the API/CSV layout is unchanged.
     """
+    if getattr(model, "problem_type", None) == "multilabel":
+        return _classify_multilabel(model, X_test, y_test, classes)
+
     proba = np.asarray(model.predict_proba(X_test))
     pred = np.asarray(model.predict(X_test))
     class_labels = [str(c) for c in np.asarray(classes).tolist()]
@@ -61,4 +66,39 @@ def classify(
         df[f"probability_{label}"] = proba[:, col_idx]
     df["confidence"] = proba.max(axis=1)
     df["correct_flag"] = df["actual"].astype(str) == df["predicted"].astype(str)
+    return df
+
+
+def _classify_multilabel(
+    model: ModelWrapper,
+    X_test: pd.DataFrame,
+    y_test: Any,
+    classes: Any,
+) -> pd.DataFrame:
+    """Per-sample predictions table for a multilabel run (indicator → delimited sets).
+
+    The model returns a ``(n, n_labels)`` indicator prediction and ``(n, n_labels)``
+    per-label probabilities; we render both the true and predicted label SETS as the same
+    delimited strings the single-label table uses, so the contract layout is unchanged.
+    ``correct_flag`` is the exact-set match (subset accuracy), ``confidence`` the row-max
+    per-label probability.
+    """
+    proba = np.asarray(model.predict_proba(X_test), dtype=float)
+    pred_ind = np.asarray(model.predict(X_test))
+    labels = [str(c) for c in np.asarray(classes).tolist()]
+
+    index = X_test.index if isinstance(X_test, pd.DataFrame) else pd.RangeIndex(len(pred_ind))
+    true_sets = [set(s) for s in parse_label_sets(np.asarray(y_test).tolist())]
+    pred_sets = [
+        {labels[j] for j in range(len(labels)) if pred_ind[i, j]}
+        for i in range(pred_ind.shape[0])
+    ]
+
+    df = pd.DataFrame(index=index)
+    df["actual"] = [join_labels(s) for s in true_sets]
+    df["predicted"] = [join_labels(s) for s in pred_sets]
+    for col_idx, label in enumerate(labels):
+        df[f"probability_{label}"] = proba[:, col_idx]
+    df["confidence"] = proba.max(axis=1) if proba.size else 0.0
+    df["correct_flag"] = [t == p for t, p in zip(true_sets, pred_sets)]
     return df
