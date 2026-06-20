@@ -12,6 +12,7 @@ was generated.
 | `backend_phases/`  | ML engine phase prompts — `phase_01_skeleton.md` … `phase_NN_*.md` (Sections 1–16). |
 | `api_phases/`      | FastAPI layer (Phase 8) prompts. Empty until that work starts. |
 | `frontend_phases/` | React dashboard (Phase 9) prompts. Empty until that work starts. |
+| `testing_phases/`  | Testing-phase prompts (Phase 10 browser E2E; Phase 11 integration). |
 | `tooling/`         | Dev/tooling prompts not tied to a pipeline section (e.g. `tool_dev_run.md`, the prompt-reorg prompt). |
 | `docs/`            | Documentation-generation prompts (e.g. `doc_runbook.md`). |
 
@@ -22,6 +23,7 @@ visible before the first prompt lands.
 
 - Engine section/phase → `backend_phases/` as `phase_NN_<short_name>.md`.
 - API or frontend work → `api_phases/` or `frontend_phases/`.
+- A testing phase (E2E, integration, suite work) → `testing_phases/`.
 - A documentation deliverable (RUNBOOK-style) → `docs/`.
 - A dev tool, hook, or repo-housekeeping task → `tooling/`.
 

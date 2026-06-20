@@ -62,7 +62,13 @@ are referenced by filename only; and every number is JSON-safe (undefined values
   own validation so the rules can't drift between the two layers.
 - **CORS & startup** — the API only allows browser origins from an approved list (never a
   blanket wildcard in production), and on startup it loads its environment settings and logs
-  exactly which data/output folders it's using.
+  exactly which data/output folders it's using. **Phase 10 verified this with a real browser:** a
+  cross-origin request from the frontend origin succeeds (it is in `CORS_ORIGINS`), and a
+  non-simple request (a JSON `POST`) triggers a browser **preflight `OPTIONS`** which the API
+  answers correctly — confirming the allowlist is genuinely enforced (curl/TestClient never
+  exercise CORS because they aren't browsers). One operational note the test surfaced: because
+  `main.py` calls `load_dotenv()` with the default `override=False`, environment variables already
+  set in the process (e.g. by a test harness or a container) take precedence over `backend/.env`.
 
 ---
 

@@ -25,6 +25,16 @@ frontend/dist/
 frontend/node_modules/
 *.local
 
+# --- E2E (Playwright) test artifacts (Phase 10) ---
+# (gitignore has no inline comments — keep patterns and notes on separate lines)
+# throwaway OUTPUT_DIR the E2E backend writes to (outside Vite's watch):
+backend/.e2e_output/
+frontend/test-results/
+frontend/playwright-report/
+frontend/blob-report/
+# E2E uploads land in DATA_DIR/uploads — not real data:
+backend/data/samples/uploads/
+
 # --- Editors / OS ---
 .vscode/
 .idea/

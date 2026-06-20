@@ -148,6 +148,33 @@ The final slice finished the dashboard and merged two pages into one.
   up within the palette; and every page reuses the shared empty/loading/error states so none ever
   shows a blank screen. Keyboard focus rings and reduced-motion (from 9a) are intact.
 
+## Testing the frontend (Phase 10 — browser E2E)
+
+The dashboard now has two test layers:
+
+- **Unit / render tests (vitest, jsdom)** — `npm test` in `frontend/`. **62 tests** covering the
+  typed API client's error mapping, the `/run` envelope parser, per-page render against captured
+  fixtures, and the empty/error states. These run in jsdom, where Recharts charts render 0×0 — so
+  they verify the *data binding* around a chart, not the painted pixels.
+- **Browser E2E (Playwright)** — `npm run e2e` in `frontend/`. **The layer jsdom can't reach:** a
+  real Chromium loads the live app, which talks to live uvicorn, which runs the real engine, and
+  we assert the charts/tables actually RENDER (real SVG geometry, the confusion heatmap cells, a
+  loaded PNG). It needs **both servers up** — Playwright's `webServer` config starts them for you:
+  the **FastAPI backend** (uvicorn :8000) and the **Vite frontend** (:5173, whose proxy forwards
+  `/api → :8000`). The backend is launched with a test-only env (sample CSVs in, a throwaway
+  output folder out — never your real data). Two specs:
+  - `e2e/happy-path.spec.ts` — drives the full **Upload → Configure → Run** flow on the **binary**
+    and **multiclass** sample datasets and checks the rendered Overview KPIs, the ROC/PR curves
+    (one line for binary, N for multiclass), the confusion heatmap, the predictions sampled banner,
+    a downloaded plot PNG, and the live `/explain` stub. It is parametrized so **Phase 11** can add
+    all seven use cases (incl. multilabel) by extending one list.
+  - `e2e/cors.spec.ts` — the **real CORS** test. In dev the Vite proxy makes API calls look
+    same-origin, so it hides CORS; this spec has the browser call the API **directly cross-origin**
+    (bypassing the proxy) to prove the env-driven allowlist actually works, including a preflight
+    (OPTIONS) for a non-simple request.
+
+(See `RUN_FULL_SYSTEM.md` for starting the two servers by hand.)
+
 ---
 
 ## How to read this project

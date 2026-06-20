@@ -4,10 +4,11 @@
 > A copy is uploaded to the ClassifyOS Claude Project knowledge after each update so the
 > planning/overseer chat stays in sync with the local repo.
 
-**Last updated:** 2026-06-17
-**Updated by:** Claude Code (Phase 9c — React frontend remaining pages + polish: Explainability
-stub, Setup Guide, Risk Register, Overview/Pipeline merge, polish pass — **Phase 9 complete**)
-**Repo tag / commit:** 15eb709 (Phase 9b) + Phase 9c commit pending
+**Last updated:** 2026-06-20
+**Updated by:** Claude Code (Phase 10 — browser E2E testing: Playwright two-server setup,
+happy-path E2E on binary+multiclass, real cross-origin CORS test, render-gap coverage,
+`/explain` live-path test, suite audit + gap fill — **Phase 10 complete**)
+**Repo tag / commit:** 6a2772d (Phase 9c) + Phase 10 commit pending
 
 ---
 
@@ -74,8 +75,8 @@ written. Engine complete; ready for Phase 8 (FastAPI layer).
 | 7B | Optuna hyperparameter tuning (Section 8B) | ✅ Done | `tuning.py` (`tune_model`) — OFF by default; one uniform mechanism for all 6 models; CV-in-train trial scoring (leakage-safe); per-model isolation + hard 600s/model timeout; ModelRunner + config + CLI (`--tune…`) sanctioned edits; 17 tests; **AutoML pulled v1.5→v1.0** (plan_tweak 24–25) |
 | 8 | FastAPI layer | ✅ Done | 6 endpoints under `/api/v1/`; `/run` schema LOCKED (docs/api_contract.md); `curves.py` helper + plot2 refactor; `save_input` upload support; `/explain` stub; 36 tests (184 total) |
 | 9 | React dashboard (12 pages) | ✅ Done | **9a** (foundation: Option A design + Recharts; shadcn/ui; typed client vs LOCKED contract; app shell + nav; live round-trip; 13 FE tests). **9b** (6 result pages + Overview upgrade; binary+multiclass vs fixtures; 46 FE tests). **9c** (Explainability v2.0-ready stub wired to `/explain`; Setup Guide + Risk Register authored from the real docs; **Overview/Pipeline merged → 12 nav items**, `/pipeline` redirects to `/`; polish pass; 55 FE tests). Build clean. |
-| 10 | Unit tests (full pytest suite) | ⬜ Not started | |
-| 11 | Integration: 7 use cases E2E + governance sign-off | ⬜ Not started | |
+| 10 | Testing: browser E2E + real CORS + render gaps + suite audit | ✅ Done | Playwright (1.61.0) two-server webServer; happy-path E2E parametrized (binary+multiclass run live → rendered charts/heatmap/PNG); real cross-origin CORS test (GET + preflight OPTIONS); `/explain` live-path; +7 vitest gap tests. Suites green: **184 backend pytest + 62 frontend vitest + 4 Playwright E2E**. Tests only — no behaviour change, no deviation |
+| 11 | Integration: 7 use cases E2E + governance sign-off (LAST phase) | ⬜ Not started | Drives all 7 use cases (incl. multilabel) through the Phase 10 E2E machinery; perf baseline (10k+); tuning-at-budget; real-data; governance sign-offs + demo |
 
 Status legend: ⬜ Not started · 🔄 In progress · ✅ Done · ⚠️ Blocked
 
@@ -749,6 +750,75 @@ Status legend: ⬜ Not started · 🔄 In progress · ✅ Done · ⚠️ Blocked
 - Prompt archived to `prompts/frontend_phases/phase_09c_remaining_polish.md`; `frontend_short_desc.md`
   updated; `plan_tweak.md` row 33 added (the 13→12 page/nav merge).
 
+## Completed this session (Phase 10 — 2026-06-20)
+
+**Browser E2E + real CORS + render-gap coverage + suite audit. Tests ONLY — no backend or
+frontend application code was changed; no bug found; no deviation (plan_tweak untouched).**
+
+- **Playwright installed + pinned:** `@playwright/test` **1.61.0** (exact, no caret) in
+  `frontend/package.json`; Chromium browser (Chrome for Testing 149) installed. New scripts:
+  `npm run e2e` / `e2e:report`. Specs live in `frontend/e2e/`; `frontend/playwright.config.ts`.
+- **The two-server webServer (the key machinery).** `playwright.config.ts` declares a `webServer`
+  ARRAY: (1) the FastAPI backend via the venv Python (`python -m uvicorn api.main:app --port
+  8000`, cwd `backend/`, readiness `…/api/v1/health`, 120s boot budget) and (2) the Vite dev
+  server (`npm run dev`, :5173, whose proxy forwards `/api → :8000`). `baseURL` = the Vite URL;
+  `reuseExistingServer: !CI`. **Data hygiene:** the backend process gets test-only env —
+  `DATA_DIR` → the committed `backend/data/samples`, `OUTPUT_DIR` → a **throwaway**
+  `backend/.e2e_output` (gitignored), `CORS_ORIGINS` → the localhost allowlist. These win over
+  `backend/.env` because `main.py`'s `load_dotenv()` does not override already-set env vars
+  (override=False). No E2E run touches the real output folder.
+- **Happy-path E2E (`e2e/happy-path.spec.ts`), parametrized** over a `{file, target,
+  problem_type, algorithms, features, expectedClasses}` list (`e2e/flows.ts` `USE_CASES`) so
+  **Phase 11 can extend it to all 7 use cases** — Phase 10 runs only the **binary**
+  (`policy_lapse` → `will_lapse`) and **multiclass** (`risk_tier`) entries. Each test drives the
+  REAL UI: health banner green → upload CSV (file `<input>`) → pick target → Configure (curated
+  features, problem type, 2 algorithms, `class_balance=class_weight`, interactions off for speed)
+  → Run → wait for results. Then it asserts the **render gaps jsdom can't reach**: the Overview
+  KPI band populates; the comparison **bar chart drew real SVG `<path>` geometry** (longest path
+  `d` > 30 chars — impossible in a 0×0 jsdom render); the scoreboard lists each trained model; the
+  ROC chart drew geometry and has the right curve count (**1 line for binary, N one-vs-rest for
+  multiclass** — `path.recharts-curve`); a **PNG artifact** (`plot2`, via `/outputs/{name}`)
+  actually loaded (`naturalWidth > 0`); the **confusion heatmap** has n×n `role="cell"` cells; the
+  **predictions** sampled banner + rows render. Asserted against the LOCKED contract; honest
+  role/label selectors (no brittle CSS).
+- **`/explain` live path:** the binary happy-path also navigates to Explainability (in-app nav,
+  preserving the store), clicks Explain, and asserts the **structured `unavailable` stub** renders
+  cleanly against the **live** endpoint (status + `no_persisted_model` reason + reserved v2.0
+  waterfall region). (The existing vitest test mocks the client; this exercises the real
+  client → `/explain` → render path in a browser.)
+- **Real CORS (`e2e/cors.spec.ts`) — the part the dev proxy normally MASKS.** Two run-free tests:
+  the page (origin `:5173`) does a browser `fetch` to the **absolute** cross-origin
+  `http://localhost:8000/api/v1/health`, bypassing the proxy → succeeds (proves the env-driven
+  allowlist permits the origin); and a cross-origin `POST` to `/explain` with
+  `Content-Type: application/json` succeeds — a **non-simple request, so the browser sends an
+  OPTIONS preflight first** (server logs confirmed `OPTIONS … 200` then `POST … 200`), proving
+  preflight handling. Documented (not automated) that a non-allowlisted origin would be blocked;
+  `main.py` guarantees the list is never `["*"]` outside the explicit `CLASSIFYOS_CORS_DEV` marker.
+- **Suite audit + gap fill (vitest).** Ran the full suites: **184 backend pytest passed**, **55
+  frontend vitest passed** (the pre-Phase-10 baseline, all green). Audited coverage and filled
+  genuine gaps (no padding): `src/api/client.test.ts` (5) — the typed client's `ApiError` mapping
+  (network → kind `network`/status 0; 422 list + string `detail` → kind `validation` with field
+  messages; 400 run-error envelope → kind `http`; ok passthrough), the one error layer the suite
+  hadn't touched; `src/pages/errorStates.test.tsx` (2) — Overview's **400 run-error** state
+  ("Run failed", distinct from the 422 path) and Upload's **error surface** (a failed `/upload`
+  renders the `ApiError` message, no blank screen). The malformed-envelope parser was already
+  covered by `parse.test.ts` (noted, not duplicated). Frontend vitest now **62 passed**.
+- **One non-app config touch (tooling, not a deviation):** `vite.config.ts` gained a
+  `test.include: ['src/**/*.{test,spec}.{ts,tsx}']` so vitest scopes to `src/` and never tries to
+  collect a Playwright `*.spec.ts` from `e2e/`. This affects only the vitest runner — zero impact
+  on the built app or dev server, so it is test infrastructure, not application behaviour (hence
+  no plan_tweak row). `.gitignore` gained the E2E throwaway-artifact paths.
+- **Final counts (all green):** **184 backend pytest · 62 frontend vitest · 4 Playwright E2E**
+  (2 happy-path + 2 CORS). Frontend `npm run build` clean.
+- **Hallucination check ✅** — verified against the INSTALLED versions in `frontend/node_modules`:
+  **@playwright/test 1.61.0** (`defineConfig`, `devices`, `webServer` array with `cwd`/`env`/`url`,
+  `baseURL`, `expect`/`expect.poll`, `page`/`locator`, `setInputFiles`, `evaluate`,
+  `setChecked`/`uncheck({force})` — all exercised by passing tests); re-confirmed **vitest 4.1.9**
+  (`vi.mock`/`vi.stubGlobal`), **recharts 3.8.1** (real `<path class="recharts-curve">` / bar
+  paths in a browser), **@testing-library/react 16.3.2**, and the backend **FastAPI 0.136.3**
+  `TestClient` / **pytest** stack (184 still green). No new runtime deps.
+- Prompt archived to `prompts/testing_phases/phase_10_e2e_testing.md` (new subfolder, verbatim).
+
 ## Completed this session (Doc-update enforcement hook — 2026-06-15) — ⚠️ REMOVED 2026-06-16
 
 > This hook was removed in the 2026-06-16 reorg session (see below). Kept here as a record.
@@ -875,27 +945,41 @@ Status legend: ⬜ Not started · 🔄 In progress · ✅ Done · ⚠️ Blocked
 
 ---
 
-## Testing debt / untested paths (target for Week 4 — Phases 10–11)
+## Testing debt / untested paths
 
-> The 184-test suite covers the engine + API well, but these categories *cannot* have been
-> tested yet and are the real Phase 10/11 content. Do not treat the green suite as covering them.
+> **Phase 10 (2026-06-20) closed the browser/render/CORS layer.** ~~Struck~~ items are now
+> covered; the remaining bullets are the **Phase 11** agenda (the last phase of the sprint). Do
+> not treat the green suites as covering the open items below.
 
-- **Frontend tests** — 9a added 13 (vitest); 9b added 33 more (46 total): per-page **render-level**
-  smoke tests for all 7 result pages against BOTH a binary and a multiclass fixture, the id_like
-  warning, the predictions sampled banner, binary-vs-multiclass curve count, a failed-model row,
-  and PNG-absent handling. **Still missing:** true browser **E2E** (real browser → live uvicorn →
-  rendered chart) — deferred to Phase 10. Render tests run in jsdom where Recharts charts are 0×0,
-  so chart *internals* are not asserted (the data binding is exercised; the pixels are not).
-- **True end-to-end** — browser → live uvicorn → engine → rendered chart. Current "integration"
-  hits the engine directly or the API via TestClient; never through a real browser.
+**✅ Closed in Phase 10 (struck through):**
+
+- ~~**Frontend E2E** — true browser → live uvicorn → engine → **rendered** chart.~~ ✅ Done —
+  Playwright two-server `webServer`; `e2e/happy-path.spec.ts` drives the real UI through
+  upload→configure→run on **binary + multiclass** and asserts the render gaps jsdom could not:
+  real SVG `<path>` geometry (Recharts no longer 0×0), the correct curve count (1 binary / N
+  multiclass), the confusion heatmap cells, a loaded PNG artifact, the predictions sampled banner.
+- ~~**CORS exercised by an actual browser**~~ ✅ Done — `e2e/cors.spec.ts` makes a real
+  cross-origin `fetch` (GET) bypassing the Vite proxy and a preflight-triggering cross-origin POST
+  (OPTIONS handled); proves the env-driven allowlist is real and never `["*"]`.
+- ~~**`/explain` real path**~~ ✅ Done — exercised live in the browser (binary happy-path); the
+  structured `unavailable` stub renders cleanly.
+- ~~**Error/empty-state + typed-client gaps**~~ ✅ Done — `client.test.ts` (ApiError mapping:
+  network/422/400/ok) + `errorStates.test.tsx` (Overview 400 run-error, Upload error surface);
+  parser-on-malformed already covered by `parse.test.ts`.
+
+**⬜ Still open — PHASE 11 (the final phase):**
+
 - **Multilabel (Product Recommendation) has NEVER run end-to-end** — all real runs so far are
   binary/multiclass. Weak spots: resampling→class_weight fallback (plan_tweak 19), per-label
   thresholds out of scope, multilabel curves/calibration least-tested. **Highest surprise risk.**
+  (The E2E `USE_CASES` list + parametrized spec are built so Phase 11 just adds the multilabel +
+  remaining use-case entries — the machinery is ready.)
+- **7-use-case E2E sweep** — Phase 10 ran only binary + multiclass through the new machinery;
+  Phase 11 drives all seven insurance use cases through the same parametrized spec.
 - **Tuning at realistic budgets** (tests use tiny budgets, never SVM) + its interaction with the
   synchronous `/run` gateway timeout.
 - **Performance baseline** on 10k+ rows (samples are 3k–8k; the "<5 min" target is unverified).
-- **`/explain` real path**; **CORS exercised by an actual browser** (curl/TestClient aren't
-  browsers); **real (non-synthetic) data** revalidation if any arrives (plan_tweak 5).
+- **Real (non-synthetic) data** revalidation if any arrives (plan_tweak 5).
 - **Governance sign-offs still open**: [RISK]-comment review by team lead, leakage-audit
   sign-off, per-phase sign-off by Naveen.
 
@@ -903,22 +987,19 @@ Status legend: ⬜ Not started · 🔄 In progress · ✅ Done · ⚠️ Blocked
 
 ## Next steps (priority order)
 
-1. Commit Phase 9c ("Phase 9c: Explainability stub + Setup Guide + Risk Register +
-   Overview/Pipeline merge + polish — Phase 9 complete").
+1. Commit Phase 10 ("Phase 10: browser E2E (Playwright, 2-server) + real CORS test + render-gap
+   coverage + suite audit").
 2. Upload updated PROJECT_STATE.md to the Claude Project knowledge.
-3. **Phase 10 — full test suite.** Run the whole pytest suite + the frontend vitest suite, then
-   add the missing layer: **true browser E2E** (real browser → live uvicorn → engine → rendered
-   chart), which neither TestClient nor jsdom covers. See the **"Testing debt / untested paths"**
-   section above — that is the Phase 10 agenda (frontend E2E, render-internals, CORS by a real
-   browser).
-4. **Phase 11 — 7-use-case integration + governance sign-off.** Exercise all seven insurance use
-   cases end-to-end **including the unverified multilabel (Product Recommendation) path**
-   (resampling→class_weight fallback, multilabel curves/calibration — highest surprise risk),
-   establish a **performance baseline** on 10k+ rows (the "<5 min" target is unverified), revalidate
-   on **real (non-synthetic) data** if any arrives, and close the open governance items ([RISK]-comment
-   review, leakage-audit sign-off, per-phase sign-off by Naveen). Consider capturing a multilabel
-   `/run` fixture once a multilabel run is runnable, to firm up that frontend path.
-5. v1.5/v2.0 backlog (unchanged): background-job `/run` (submit→poll→fetch) to beat gateway
+3. **Phase 11 — 7-use-case integration + governance sign-off (the LAST phase of the sprint).**
+   Drive all seven insurance use cases through the **Phase 10 E2E machinery** (extend the
+   parametrized `e2e/flows.ts` `USE_CASES` list — the spec is already built for this), **including
+   the unverified multilabel (Product Recommendation) path** (resampling→class_weight fallback,
+   multilabel curves/calibration — highest surprise risk); establish a **performance baseline** on
+   10k+ rows (the "<5 min" target is unverified); exercise **tuning at realistic budgets**;
+   revalidate on **real (non-synthetic) data** if any arrives; and close the open governance items
+   ([RISK]-comment review, leakage-audit sign-off, per-phase sign-off by Naveen) + the demo.
+   Consider capturing a multilabel `/run` fixture once a multilabel run is runnable.
+4. v1.5/v2.0 backlog (unchanged): background-job `/run` (submit→poll→fetch) to beat gateway
    timeouts; real `/explain` once model persistence (MLflow / a model registry) lands (the
    Explainability page is already wired and shaped for it).
 
@@ -932,7 +1013,7 @@ Contract doc: `docs/api_contract.md` — frozen; changes must be additive and bu
 ## Governance checklist (from scope §12)
 
 - [x] Prompt version control — prompts/ populated per section (phase_01…phase_07B archived under `prompts/backend_phases/`; Phase 8 archived to `prompts/api_phases/phase_08_fastapi.md`)
-- [x] Section-level unit tests passing on real data (184 passing: 22 Phase 1 + 5 Phase 2 + 14 Phase 3 + 19 Phase 4 + 10 Phase 5 + 47 Phase 6 + 13 Phase 7 + 18 Phase 7B + 36 Phase 8 API/curves)
+- [x] Section-level unit tests passing on real data (184 backend pytest: 22 Phase 1 + 5 Phase 2 + 14 Phase 3 + 19 Phase 4 + 10 Phase 5 + 47 Phase 6 + 13 Phase 7 + 18 Phase 7B + 36 Phase 8 API/curves). **Phase 9/10 frontend: 62 vitest** (render + typed-client + error/empty states). **Phase 10 browser E2E: 4 Playwright** (2 happy-path binary+multiclass + 2 real-CORS) — true browser → live uvicorn → engine → rendered charts/heatmap/PNG, asserting the LOCKED contract
 - [ ] [RISK] comments reviewed by team lead (3 Phase 1 + 2 Phase 2 + 4 Phase 3 + Phase 4 poly-cap/ratio-denominator/auto-discovery-pool/re-discovery-leakage + 4 Phase 5 train-only/tiny-minority/undersample-discards/multilabel + Phase 6 proba-shape-order/accuracy-misleads/SVM-no-importance + Phase 7B tuning-CV-leakage/per-fold-balancing-deferred/runaway-timeout-cap/per-model-isolation, pending review)
 - [ ] Leakage audit (encoder/scaler/SMOTE train-only) confirmed — encoder/scaler/imputer (Phase 3), feature-engineering/interaction stats (Phase 4) and balancing (Phase 5) all train-only, enforced by design + dedicated leakage tests (binning edges, MI auto-discovery, test-set-untouched). SMOTE/undersample are train-only by construction (the balancer takes no test argument). Phase 6 models fit on the balanced TRAIN matrices only; evaluate_model/classify only ever read the untouched test set. Phase 7B tuning scores every trial with CV *inside the train split only* (the test set is never passed to `tune_model`), and balancing is applied only to the final fit, not inside the CV folds
 - [x] Output schema contract locked — `/api/v1/run` response **LOCKED at Phase 8** (`docs/api_contract.md`, schema_version 1.0). The API contract is frozen; the Phase 9 frontend is generated against it (CLAUDE.md hard rule)
@@ -966,4 +1047,5 @@ Contract doc: `docs/api_contract.md` — frozen; changes must be additive and bu
 | 2026-06-17 | Phase 9a — React frontend foundation (design pick + typed client + Upload→Configure→Run round-trip) | Owner chose **Option A "Clarity"** + **Recharts** from 3 mockups; Tailwind v4 + shadcn/ui design system (one token block); typed client mirrors the LOCKED contract exactly (no invented fields, no contract gaps); 13-page app shell + health banner + global store; Upload/Configure/Pipeline/Overview real, 9 stubs; **live round-trip + Vite proxy verified**; 13 FE tests (vitest); deps pinned + hallucination-checked; `frontend_short_desc.md` created; plan_tweak 32; prompt archived to `prompts/frontend_phases/phase_09a_foundation.md` |
 | 2026-06-17 | Phase 9b — React result-rendering pages (Overview upgrade + 6 result pages) against the LOCKED contract | Built Feature Impact / Confusion Matrix / Class Report / ROC-PR Curves / Predictions / Interaction Features + upgraded Overview; shared `ResultGate`/`ModelSelector`/`PngArtifact` + `lib/results` helpers; interactive-vs-PNG rule honored (plot PNGs fetched via `/outputs`, guarded for absence); read from the app store, no backend edits; captured a **multiclass** fixture (real TestClient) alongside the binary one; **46 FE tests** (33 new), build clean; binary+multiclass verified vs fixtures, multilabel rendered-but-unverified; no contract gaps; recharts 3.8.1 hallucination-checked; no plan_tweak (chart/UX in decisions log); prompt archived to `prompts/frontend_phases/phase_09b_result_pages.md` |
 | 2026-06-17 | Phase 9c — React remaining pages + polish (Explainability stub, Setup Guide, Risk Register, Overview/Pipeline merge) — **Phase 9 complete** | Built Explainability (v2.0-ready stub wired to the frozen `/explain`), Setup Guide + Risk Register (static, authored from RUNBOOK/API_RUNBOOK/api_contract + CLAUDE.md constraints + engine `[RISK]` themes); **merged Overview + Pipeline → 12 nav items**, `/pipeline` redirects to `/`, deleted `Pipeline.tsx`/`StubPage.tsx`; polish pass (sticky/shrink-0 sidebar, chart `aria-label`, contrast bump, shared empty/loading/error states); **55 FE tests** (9 new), build clean; no contract gaps; react-router-dom 7.18.0 `Navigate` + recharts 3.8.1 + vitest/Testing Library hallucination-checked; plan_tweak row 33 (13→12 page/nav); prompt archived to `prompts/frontend_phases/phase_09c_remaining_polish.md` |
+| 2026-06-20 | Phase 10 — browser E2E (Playwright, 2-server) + real CORS + render-gap coverage + suite audit | **Phase 10 complete.** Playwright 1.61.0 (pinned) + Chromium; `playwright.config.ts` two-server `webServer` (venv uvicorn + Vite), test-only env (DATA_DIR→samples, throwaway OUTPUT_DIR `backend/.e2e_output`, CORS allowlist); `e2e/happy-path.spec.ts` parametrized (binary+multiclass run **live** → asserts real SVG geometry, curve count 1/N, n×n heatmap cells, loaded PNG, predictions banner, + `/explain` live path); `e2e/cors.spec.ts` (cross-origin GET + preflight OPTIONS, allowlist real never `*`); +7 vitest gap tests (`client.test.ts` ApiError mapping, `errorStates.test.tsx` 400/upload). **Suites green: 184 pytest · 62 vitest · 4 E2E**; build clean. Tests only — **no app/engine code changed, no bug found, no deviation** (one tooling touch: `vite.config.ts` `test.include` to scope vitest off `e2e/`). Hallucination-checked vs installed versions. Prompt archived to `prompts/testing_phases/phase_10_e2e_testing.md` |
 | | | |

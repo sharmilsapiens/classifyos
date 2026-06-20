@@ -33,5 +33,9 @@ export default defineConfig({
     globals: false, // we import describe/it/expect explicitly — clearer for newcomers
     environment: 'jsdom',
     setupFiles: ['./src/test/setup.ts'],
+    // Vitest unit/render tests live under src/. The Playwright browser E2E specs
+    // live in ./e2e and are run by `npx playwright test`, NOT vitest — scope the
+    // include to src/ so vitest never tries to collect a *.spec.ts E2E file.
+    include: ['src/**/*.{test,spec}.{ts,tsx}'],
   },
 })
