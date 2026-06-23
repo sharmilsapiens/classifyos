@@ -24,6 +24,7 @@ import { Select } from "@/components/ui/select"
 import { Switch } from "@/components/ui/switch"
 import { Button, buttonVariants } from "@/components/ui/button"
 import { EmptyState, PageHeader } from "@/components/common/States"
+import FeatureBuilderPanel from "@/components/config/FeatureBuilderPanel"
 
 // Allowed values — mirror config.py's tuples exactly.
 const PROBLEM_TYPES = ["binary", "multiclass", "multilabel"] as const
@@ -310,6 +311,13 @@ export default function Configure() {
             </div>
           </CardContent>
         </Card>
+
+        {/* User-defined features */}
+        <FeatureBuilderPanel
+          inspect={inspect}
+          userFeatures={form.user_features}
+          onChange={(next) => updateForm({ user_features: next })}
+        />
 
         {/* Tuning */}
         <Card className="lg:col-span-2">

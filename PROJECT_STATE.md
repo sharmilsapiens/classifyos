@@ -5,7 +5,19 @@
 > planning/overseer chat stays in sync with the local repo.
 
 **Last updated:** 2026-06-23
-**Updated by:** Claude Code (Phase 15 — **API-only, request-side**: exposed `user_features` on the
+**Updated by:** Claude Code (Phase 16 — **UI-only**: a **feature-builder panel** on the
+Configuration page where analysts build the `user_features` specs the API accepted in Phase 15 —
+entirely from **dropdowns**, never a free-text formula (the engine's no-eval safety contract carried
+to the UI). New `UserFeatureSpec`/`UserFeatureType` types + `user_features` on `RunConfig` (mirror the
+contract exactly); `user_features` added to `ConfigFormState`/`DEFAULT_FORM_STATE` (`[]`) +
+`buildPayload`; new controlled `components/config/FeatureBuilderPanel.tsx` (type selector → numeric
+`[col_a][op][col_b]` / single `[transform][col]` / datetime_diff `[end][start][unit]`; typed column
+dropdowns filtered by inspect; client-side name validation: non-empty + unique vs existing columns
+and added features; removable rows with a readable, formula-free label) wired into
+`pages/Configure.tsx`. An invalid spec's **422** surfaces via the existing `ApiError`→Overview path
+(no crash). +9 vitest (**91 total**); `npm run build` clean. No plan_tweak deviation — realises the
+request field added in Phase 15.)
+**Prior update (same day):** Phase 15 — **API-only, request-side**: exposed `user_features` on the
 `/api/v1/run` REQUEST so the dashboard can send user-defined feature specs. New `UserFeatureSpec`
 Pydantic sub-model + optional `RunConfig.user_features` (default `[]`); a fast-fail 422 allowlist
 check (unknown `type`/`op`, or a two-column type missing `col_b`) mirrors the engine's
@@ -129,6 +141,7 @@ written. Engine complete; ready for Phase 8 (FastAPI layer).
 | 12 | API: expose tuned hyperparameters on `/run` (additive, schema 1.0→1.1) | ✅ Done | New optional `result.tuning` block (per-model `best_params` + tuning settings); first contract version bump, done additively; **zero engine change**; `tuning` null on a non-tuning run. +2 tuning tests; `/explain` keeps its own 1.0. plan_tweak 39. UI panel = separate session |
 | 14 | Engine: USER-DEFINED structured features (`UserFeatureBuilder`) | ✅ Done | **Engine-only.** New leakage-safe `preprocessing/user_features.py` + sanctioned `user_features` config key (default `[]`, OFF → run byte-identical) + sanctioned ModelRunner edit. STRUCTURED specs only (no free-text formula; no `eval`/`exec`, [RISK]-marked): numeric `add/subtract/multiply/divide/ratio`, `datetime_diff` (duration), single `log/abs/bin` + date-parts. Train-only fit/transform (bin edges, divide-fill); invalid specs skipped+logged; name collisions refused; reads RAW post-split frame (so `datetime_diff` works) and injects after FeatureBuilder, before interactions. +24 tests (**232 total**). plan_tweak 40. API/UI separate |
 | 15 | API: accept `user_features` on the `/run` REQUEST | ✅ Done | **API-only, request-side.** New `UserFeatureSpec` Pydantic sub-model + optional `RunConfig.user_features` (default `[]`). Fast-fail 422 allowlist check (unknown `type`/`op`, two-column type missing `col_b`) mirrors the engine's `USER_FEATURE_*` constants (imported). `to_engine_config` dumps each spec with `exclude_none` → `build_config` (authoritative validator). **No response change / no version bump** — created columns surface in `result.run.active_features` (verified). +5 tests (**237 total**). plan_tweak 41. UI follow-up separate |
+| 16 | UI: feature-builder panel for user-defined structured features | ✅ Done | **UI-only.** New `UserFeatureSpec`/`UserFeatureType` types + `user_features` on `RunConfig` (mirror the contract exactly); `user_features` on `ConfigFormState`/`DEFAULT_FORM_STATE` (`[]`) + `buildPayload`. New controlled `components/config/FeatureBuilderPanel.tsx` (added to Configuration): a `type` selector (numeric `[col_a][op][col_b]` / single `[transform][col]` / datetime_diff `[end][start][unit]`) + a name input — **STRUCTURED specs only, no free-text formula** (the engine's no-eval rule carried to the UI). Column dropdowns populated + filtered from the inspect profile (numeric/datetime cols; single-transform col filtered by op; empty typed list → all cols, API 422 guides). Client-side name validation (non-empty + unique vs existing columns AND added features); added features shown as removable rows with a readable label (`name = a ÷ b`). Invalid-spec **422** surfaces via the existing `ApiError`→Overview path (no crash). +9 vitest (**91 total**); build clean. No plan_tweak deviation — realises the Phase 15 request field |
 | 13 | UI: dedicated **Tuning Results** page (consumes schema 1.1) | ✅ Done | **UI-only.** New `RunTuning` type + optional `tuning` on `RunResult` (mirrors the 1.1 contract exactly); `pages/TuningResults.tsx` reads `result.tuning` from the store (no new network call, no `run_profile.json` scrape) with three states — no-run / tuning-OFF (`null`/`enabled:false` → "not enabled" + Configuration hint) / tuning-ON (settings header strip + one card per tuned model's `best_params` key→value table; untuned run models shown "ran on defaults"; `unknown` values stringified defensively, empty `{}` → "no params returned"). Route `/tuning` + sidebar entry (nav 12 → **13**). Zero engine/API change. +10 vitest (**82 total**); build clean. No plan_tweak deviation |
 
 Status legend: ⬜ Not started · 🔄 In progress · ✅ Done · ⚠️ Blocked

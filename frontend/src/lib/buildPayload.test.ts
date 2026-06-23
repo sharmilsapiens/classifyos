@@ -47,6 +47,19 @@ describe("buildPayload", () => {
       expect(payload).toHaveProperty(key)
     }
   })
+
+  it("defaults user_features to an empty list (a non-user-feature run is unchanged)", () => {
+    expect(buildPayload(form).user_features).toEqual([])
+  })
+
+  it("carries user-defined feature specs through to the payload verbatim", () => {
+    const specs = [
+      { name: "premium_per_sum", type: "numeric" as const, op: "divide", col_a: "premium", col_b: "sum_assured" },
+      { name: "start_year", type: "single" as const, op: "year", col_a: "start_date" },
+    ]
+    const payload = buildPayload({ ...form, user_features: specs })
+    expect(payload.user_features).toEqual(specs)
+  })
 })
 
 describe("validateRequired", () => {

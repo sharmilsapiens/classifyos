@@ -7,7 +7,7 @@
    (no React, no fetch) is what lets us unit-test it directly.
    ════════════════════════════════════════════════════════════════════════ */
 
-import type { ClassBalance, ProblemType, RunConfig } from "@/api/types"
+import type { ClassBalance, ProblemType, RunConfig, UserFeatureSpec } from "@/api/types"
 
 /** Flat, form-friendly mirror of RunConfig (nested groups flattened with fe_ / ix_ / tune_ prefixes). */
 export interface ConfigFormState {
@@ -46,6 +46,8 @@ export interface ConfigFormState {
   tune_cv_folds: number
   tune_n_trials: number
   tune_timeout_seconds: number | null
+  // user-defined structured features (built via the feature-builder panel)
+  user_features: UserFeatureSpec[]
 }
 
 /** Defaults mirror backend/api/models.py RunConfig (so an untouched form is valid). */
@@ -82,6 +84,7 @@ export const DEFAULT_FORM_STATE: ConfigFormState = {
   tune_cv_folds: 3,
   tune_n_trials: 30,
   tune_timeout_seconds: 600,
+  user_features: [],
 }
 
 /** The three fields the contract requires; everything else has a default. */
@@ -147,5 +150,7 @@ export function buildPayload(form: ConfigFormState): RunConfig {
       timeout_seconds: form.tune_timeout_seconds,
       search_space_overrides: {},
     },
+    // Structured specs only — assembled from dropdowns; never a free-text formula.
+    user_features: form.user_features,
   }
 }

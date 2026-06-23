@@ -63,8 +63,9 @@ the current run configuration, the last `/run` result, and the loading/error fla
   chosen) its class distribution. The returned `server_path` is stored for the run.
 - **Configure** — a form binding **every** field the `RunConfig` contract accepts (target +
   feature pickers, problem type, algorithms, balancing, encoding/scaling/missing, test size,
-  threshold, calibration, feature-engineering, interactions, and the Optuna tuning dials). It
-  mirrors the three required fields client-side so you see a problem before the server's 422.
+  threshold, calibration, feature-engineering, interactions, the Optuna tuning dials, and the
+  **user-defined feature builder** below). It mirrors the three required fields client-side so you
+  see a problem before the server's 422.
 - **Run** — posts the config to `/run` (which is **synchronous** — long/tuning runs can take a
   while), shows an in-progress state on the **Pipeline** page, then a model scoreboard, the
   artifact downloads, and the raw result envelope. (Rich charts/tables are 9b.) A real
@@ -109,6 +110,31 @@ and shows failed-model rows greyed (never dropped), with friendly empty/missing 
 - **Interaction Features** — the `result.run.interaction_cols`, each decoded into a readable
   expression (`_x_`→×, `_div_`→÷, `_minus_`→−), with the plot6 PNG and an empty state when
   interactions were disabled.
+
+## The feature-builder panel (Phase 16 — user-defined features)
+
+The Configuration page has a **User-defined features** panel where an analyst builds new columns
+from existing ones — entirely from **dropdowns**. There is deliberately **no formula box**: the
+engine never evaluates code, and that safety contract is carried to the UI, so a user picks a known
+operation on known column(s) rather than typing an expression. You add one feature at a time:
+
+- a **type** selector — *numeric* (`[col_a] [op: add/subtract/multiply/divide/ratio] [col_b]`),
+  *single-column transform* (`[transform: log/abs/bin | year/month/day/dayofweek/hour] [column]`), or
+  *datetime difference* (`[end column] [start column] [unit: days/hours/minutes/seconds]`);
+- the column dropdowns are populated from the uploaded file's inspect profile and **filtered by
+  type** where it helps (numeric ops list numeric columns; datetime-diff lists datetime columns; a
+  single transform lists numeric *or* date columns depending on the chosen op). If a typed list is
+  empty it falls back to all columns and lets the API's 422 guide;
+- a **name** input for the new column, validated client-side (non-empty, and unique among the
+  existing columns *and* the already-added features) with a clear inline message on a collision.
+
+Added features appear as **removable rows** with a readable, formula-free label (e.g.
+`duration_days = end_date − start_date`). The assembled specs ride along in the `/run` request as
+`user_features` (the same `buildPayload` that assembles the rest of the config). If the server
+rejects an invalid spec it returns a precise **422**, which surfaces through the existing error
+path on Overview — the page never crashes. This is **request-side only** (Phase 15 added the API
+field; the response schema is unchanged): the created columns simply show up in the run's
+`active_features`.
 
 ## The Tuning Results page (Phase 13 — consumes schema 1.1)
 

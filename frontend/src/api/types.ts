@@ -50,6 +50,31 @@ export interface TuningConfig {
 export type ProblemType = "binary" | "multiclass" | "multilabel"
 export type ClassBalance = "smote" | "undersample" | "class_weight" | "none"
 
+/**
+ * One user-defined STRUCTURED feature spec (mirrors backend/api/models.py
+ * `UserFeatureSpec` and the engine's `USER_FEATURE_*` allowlists EXACTLY).
+ *
+ * A new column built by applying a KNOWN `op` (from a fixed allowlist) to KNOWN
+ * existing column(s) — NEVER a free-text formula, nothing is ever eval()'d.
+ *  • type="numeric"       — two numeric cols + op add|subtract|multiply|divide|ratio (col_b required).
+ *  • type="datetime_diff" — two datetime cols, op="subtract" → a duration in `unit` (col_b required).
+ *  • type="single"        — one column + op log|abs|bin | year|month|day|dayofweek|hour (col_b omitted).
+ *
+ * The API rejects an unknown type/op (or a two-column type missing col_b) with a 422;
+ * column existence/type are validated by the engine at fit time.
+ */
+export type UserFeatureType = "numeric" | "datetime_diff" | "single"
+export interface UserFeatureSpec {
+  name: string
+  type: UserFeatureType
+  op: string
+  col_a: string
+  /** required for two-column types (numeric, datetime_diff); omitted for single. */
+  col_b?: string
+  /** datetime_diff only: seconds|minutes|hours|days (default days). */
+  unit?: string
+}
+
 /** The full run request body (POST /api/v1/run). Consumed by: Configuration. */
 export interface RunConfig {
   // required
@@ -76,6 +101,8 @@ export interface RunConfig {
   feature_engineering: FeatureEngineeringConfig
   interaction_features: InteractionFeaturesConfig
   tuning: TuningConfig
+  /** OPTIONAL; [] / omitted → no user-defined features (request unchanged). */
+  user_features: UserFeatureSpec[]
 }
 
 /* ─────────────────────── RESPONSE: locked /run envelope ─────────────────── */
