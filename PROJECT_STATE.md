@@ -5,10 +5,16 @@
 > planning/overseer chat stays in sync with the local repo.
 
 **Last updated:** 2026-06-23
-**Updated by:** Claude Code (Phase 12 — additive API change: surfaced the per-model tuned
+**Updated by:** Claude Code (Phase 13 — **UI-only**: dedicated **Tuning Results** page consuming
+the schema-1.1 `result.tuning` block. New `RunTuning` type + optional `tuning` on `RunResult`
+(mirrors the contract exactly), `pages/TuningResults.tsx` (no-run / tuning-OFF / tuning-ON
+states, one card per tuned model + "ran on defaults" note + defensive `unknown`-value rendering),
+route `/tuning` + sidebar entry (nav 12 → **13**). Zero engine/API change; reads the store, no
+new network call. +10 vitest (**82 total**); build clean. No plan_tweak deviation — this realises
+the 1.1 field added in Phase 12.)
+**Prior update (same day):** Phase 12 — additive API change: surfaced the per-model tuned
 hyperparameters on the `/api/v1/run` response as a new optional `result.tuning` block; first
-version bump of the locked contract `1.0` → `1.1`, done additively. Zero engine change; the UI
-panel that consumes it is a separate session. plan_tweak 39)
+version bump of the locked contract `1.0` → `1.1`, done additively. Zero engine change. plan_tweak 39
 **Prior update (same day):** Phase 7B.2 — expanded three Optuna search spaces from the
 read-only tuning audit: LightGBM `max_depth`, XGBoost `gamma`, SVM real+conditional `kernel`.
 Engine refinement of the existing tuning layer; no scope deviation. 206 backend pytest green
@@ -100,6 +106,7 @@ written. Engine complete; ready for Phase 8 (FastAPI layer).
 | 10 | Testing: browser E2E + real CORS + render gaps + suite audit | ✅ Done | Playwright (1.61.0) two-server webServer; happy-path E2E parametrized (binary+multiclass run live → rendered charts/heatmap/PNG); real cross-origin CORS test (GET + preflight OPTIONS); `/explain` live-path; +7 vitest gap tests. Suites green: **184 backend pytest + 62 frontend vitest + 4 Playwright E2E**. Tests only — no behaviour change, no deviation |
 | 11 | Integration: 7-use-case E2E + multilabel + perf + governance (LAST phase) | ✅ Done (engineering) | **Multilabel wired end-to-end** (delimited target → `MultiLabelBinarizer` → OvR; per-label metrics/curves/report/predictions; honest null for confusion/MCC; additive, binary/multiclass untouched). **All 7 use cases** driven through engine+API (`test_use_case_sweep`, 8 tests) AND browser (Playwright 7-case sweep). **Perf baseline 13.0s** on 12k rows/4 algos (target < 5 min). Tuning sanity (XGB, 25 trials) 65.7s, timeout-bounded. **Governance dossier** `docs/governance_signoff_v1.0.md`. Suites: **202 pytest + 72 vitest + 9 E2E**. plan_tweak 34–37. **Human sign-offs/demo + `v1.0` tag remain.** |
 | 12 | API: expose tuned hyperparameters on `/run` (additive, schema 1.0→1.1) | ✅ Done | New optional `result.tuning` block (per-model `best_params` + tuning settings); first contract version bump, done additively; **zero engine change**; `tuning` null on a non-tuning run. +2 tuning tests; `/explain` keeps its own 1.0. plan_tweak 39. UI panel = separate session |
+| 13 | UI: dedicated **Tuning Results** page (consumes schema 1.1) | ✅ Done | **UI-only.** New `RunTuning` type + optional `tuning` on `RunResult` (mirrors the 1.1 contract exactly); `pages/TuningResults.tsx` reads `result.tuning` from the store (no new network call, no `run_profile.json` scrape) with three states — no-run / tuning-OFF (`null`/`enabled:false` → "not enabled" + Configuration hint) / tuning-ON (settings header strip + one card per tuned model's `best_params` key→value table; untuned run models shown "ran on defaults"; `unknown` values stringified defensively, empty `{}` → "no params returned"). Route `/tuning` + sidebar entry (nav 12 → **13**). Zero engine/API change. +10 vitest (**82 total**); build clean. No plan_tweak deviation |
 
 Status legend: ⬜ Not started · 🔄 In progress · ✅ Done · ⚠️ Blocked
 

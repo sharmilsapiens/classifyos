@@ -195,6 +195,27 @@ export interface ArtifactEntry {
   size_bytes: number
 }
 
+/**
+ * result.tuning — per-model tuned hyperparameters (schema 1.1, additive, optional).
+ * Mirrors the api_contract.md 1.1 block one-for-one; `null`/absent when Optuna tuning
+ * was OFF (or every study produced nothing), so a non-tuning run is byte-identical to
+ * 1.0. `best_params` values are heterogeneous (number / string / bool), hence `unknown`
+ * — the UI stringifies them defensively. Consumed by: Tuning Results.
+ */
+export interface RunTuning {
+  enabled: boolean
+  metric: string
+  cv: boolean
+  cv_folds: number
+  n_trials: number
+  /** hard per-model wall-clock cap (seconds); null when the cap was opted out. */
+  timeout_seconds: number | null
+  /** models that produced tuned params. */
+  tuned_models: string[]
+  /** {model: {param: value}} — values are heterogeneous, never assume a type. */
+  best_params: Record<string, Record<string, unknown>>
+}
+
 /** result — the whole reshaped run output. */
 export interface RunResult {
   run: RunMeta
@@ -205,6 +226,8 @@ export interface RunResult {
   feature_impact: FeatureImpactRow[]
   curves: Record<string, ModelCurves>
   artifacts: ArtifactEntry[]
+  /** schema 1.1 (additive): per-model tuned hyperparameters; null/absent when tuning was OFF. */
+  tuning?: RunTuning | null
 }
 
 /** Top-level envelope for POST /api/v1/run (the forward-compat seam). */

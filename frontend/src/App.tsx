@@ -16,6 +16,7 @@ import ConfusionMatrix from "@/pages/ConfusionMatrix"
 import ClassReport from "@/pages/ClassReport"
 import Curves from "@/pages/Curves"
 import Predictions from "@/pages/Predictions"
+import TuningResults from "@/pages/TuningResults"
 import Explainability from "@/pages/Explainability"
 import SetupGuide from "@/pages/SetupGuide"
 import RiskRegister from "@/pages/RiskRegister"
@@ -39,6 +40,7 @@ function App() {
         <Route path="/class-report" element={<ClassReport />} />
         <Route path="/curves" element={<Curves />} />
         <Route path="/predictions" element={<Predictions />} />
+        <Route path="/tuning" element={<TuningResults />} />
         <Route path="/explainability" element={<Explainability />} />
 
         {/* Reference pages (9c) */}

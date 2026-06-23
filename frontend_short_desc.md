@@ -70,14 +70,15 @@ the current run configuration, the last `/run` result, and the loading/error fla
   artifact downloads, and the raw result envelope. (Rich charts/tables are 9b.) A real
   Upload→Configure→Run round-trip was verified against a live backend.
 
-## The 12 canonical pages (Phase 9 complete)
+## The 13 canonical pages
 
 Overview · Upload Data · Configuration · Feature Impact · Interaction Features · Confusion
-Matrix · Class Report · ROC / PR Curves · Predictions Table · Explainability · Setup Guide ·
-Risk Register. **All 12 are real screens.** 9a built Overview/Upload/Configuration; 9b built the
-six result pages; 9c built the last three (Explainability, Setup Guide, Risk Register). The
-**separate "Pipeline" page was merged into Overview in 9c** — so the nav went from 13 → 12 items
-and `/pipeline` now redirects to `/` (old links keep working).
+Matrix · Class Report · ROC / PR Curves · Predictions Table · **Tuning Results** · Explainability ·
+Setup Guide · Risk Register. **All 13 are real screens.** 9a built Overview/Upload/Configuration;
+9b built the six result pages; 9c built the last three (Explainability, Setup Guide, Risk
+Register). The **separate "Pipeline" page was merged into Overview in 9c** — so the nav went 13 →
+12 and `/pipeline` now redirects to `/` (old links keep working). **Phase 13** then added the
+**Tuning Results** page (below), bringing the nav back to **13 items**.
 
 ## The result pages (Phase 9b)
 
@@ -108,6 +109,22 @@ and shows failed-model rows greyed (never dropped), with friendly empty/missing 
 - **Interaction Features** — the `result.run.interaction_cols`, each decoded into a readable
   expression (`_x_`→×, `_div_`→÷, `_minus_`→−), with the plot6 PNG and an empty state when
   interactions were disabled.
+
+## The Tuning Results page (Phase 13 — consumes schema 1.1)
+
+A dedicated **Tuning Results** page (Results group) shows which models the Optuna tuner picked
+hyperparameters for, and the exact values it chose. It reads the **`result.tuning`** block that
+the API added in **schema 1.1** (additive) — straight from the last `/run` result already in the
+store, with **no extra network call** and without scraping the `run_profile.json` artifact. Three
+honest states: **no run yet** (an invitation to run), **tuning was OFF** (`tuning` null or
+`enabled:false` → a clear "tuning was not enabled for this run" message pointing at Configuration,
+since tuning is off by default), and **tuning ON** (a settings header strip — metric, CV folds,
+trials/model, timeout — then one card per tuned model listing its chosen hyperparameters as a
+key → value table, values in the mono font like the other metric displays). Models that were in
+the run but **not** tuned are listed as "ran on defaults" so the picture is complete, and each
+`best_params` value is rendered defensively (numbers/bools/strings stringified; an empty
+`best_params` shows "no params returned — used defaults") because the contract types them as
+`unknown`.
 
 **The interactive-vs-PNG rule:** ROC/PR, the confusion heatmap, the class report, and the
 feature-impact ranking are drawn live from the contract data. The plot PNGs (plot2–plot6) are
@@ -152,9 +169,10 @@ The final slice finished the dashboard and merged two pages into one.
 
 The dashboard now has two test layers:
 
-- **Unit / render tests (vitest, jsdom)** — `npm test` in `frontend/`. **62 tests** covering the
+- **Unit / render tests (vitest, jsdom)** — `npm test` in `frontend/`. **82 tests** covering the
   typed API client's error mapping, the `/run` envelope parser, per-page render against captured
-  fixtures, and the empty/error states. These run in jsdom, where Recharts charts render 0×0 — so
+  fixtures (including the Phase 13 Tuning Results page's on/off/no-run states), and the
+  empty/error states. These run in jsdom, where Recharts charts render 0×0 — so
   they verify the *data binding* around a chart, not the painted pixels.
 - **Browser E2E (Playwright)** — `npm run e2e` in `frontend/`. **The layer jsdom can't reach:** a
   real Chromium loads the live app, which talks to live uvicorn, which runs the real engine, and

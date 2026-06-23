@@ -87,8 +87,9 @@ function renderPage(ui: ReactElement) {
 }
 
 describe("Navigation (post-merge)", () => {
-  it("has exactly 12 items and no Pipeline entry", () => {
-    expect(NAV_ITEMS).toHaveLength(12)
+  it("has exactly 13 items and no Pipeline entry", () => {
+    // 12 after the 9c merge + the Phase 12 "Tuning Results" page = 13.
+    expect(NAV_ITEMS).toHaveLength(13)
     expect(NAV_ITEMS.some((i) => i.path === "/pipeline")).toBe(false)
     expect(NAV_ITEMS.some((i) => i.label === "Pipeline")).toBe(false)
   })
