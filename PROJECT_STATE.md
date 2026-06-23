@@ -5,7 +5,19 @@
 > planning/overseer chat stays in sync with the local repo.
 
 **Last updated:** 2026-06-23
-**Updated by:** Claude Code (Phase 13 — **UI-only**: dedicated **Tuning Results** page consuming
+**Updated by:** Claude Code (Phase 14 — **engine-only**: USER-DEFINED structured features.
+New leakage-safe `UserFeatureBuilder` (`preprocessing/user_features.py`) + sanctioned
+`user_features` config key (default `[]`, OFF) + sanctioned ModelRunner edit. Users specify
+new columns as STRUCTURED specs — `[col_a] + [op from a fixed allowlist] + [col_b]` or a
+single-column transform — **NEVER a free-text formula** (no `eval`/`exec`; [RISK]-marked). Ops:
+numeric `add/subtract/multiply/divide/ratio`, `datetime_diff` (duration in s/min/h/days), and
+single `log/abs/bin` + date-parts `year/month/day/dayofweek/hour`. Same train-only fit/transform
+leakage discipline as FeatureBuilder; invalid specs skipped+logged (run never aborts); name
+collisions refused. **Design call:** the builder reads source columns from the RAW post-split
+frame (outputs still inject after FeatureBuilder, before interactions) because the Preprocessor
+scales numerics and encodes/drops datetime columns — so post-preprocessing `datetime_diff` is
+impossible. +24 tests (**232 backend pytest**). plan_tweak 40. API/UI = separate follow-ups.)
+**Prior update (same day):** Phase 13 — **UI-only**: dedicated **Tuning Results** page consuming
 the schema-1.1 `result.tuning` block. New `RunTuning` type + optional `tuning` on `RunResult`
 (mirrors the contract exactly), `pages/TuningResults.tsx` (no-run / tuning-OFF / tuning-ON
 states, one card per tuned model + "ran on defaults" note + defensive `unknown`-value rendering),
@@ -106,6 +118,7 @@ written. Engine complete; ready for Phase 8 (FastAPI layer).
 | 10 | Testing: browser E2E + real CORS + render gaps + suite audit | ✅ Done | Playwright (1.61.0) two-server webServer; happy-path E2E parametrized (binary+multiclass run live → rendered charts/heatmap/PNG); real cross-origin CORS test (GET + preflight OPTIONS); `/explain` live-path; +7 vitest gap tests. Suites green: **184 backend pytest + 62 frontend vitest + 4 Playwright E2E**. Tests only — no behaviour change, no deviation |
 | 11 | Integration: 7-use-case E2E + multilabel + perf + governance (LAST phase) | ✅ Done (engineering) | **Multilabel wired end-to-end** (delimited target → `MultiLabelBinarizer` → OvR; per-label metrics/curves/report/predictions; honest null for confusion/MCC; additive, binary/multiclass untouched). **All 7 use cases** driven through engine+API (`test_use_case_sweep`, 8 tests) AND browser (Playwright 7-case sweep). **Perf baseline 13.0s** on 12k rows/4 algos (target < 5 min). Tuning sanity (XGB, 25 trials) 65.7s, timeout-bounded. **Governance dossier** `docs/governance_signoff_v1.0.md`. Suites: **202 pytest + 72 vitest + 9 E2E**. plan_tweak 34–37. **Human sign-offs/demo + `v1.0` tag remain.** |
 | 12 | API: expose tuned hyperparameters on `/run` (additive, schema 1.0→1.1) | ✅ Done | New optional `result.tuning` block (per-model `best_params` + tuning settings); first contract version bump, done additively; **zero engine change**; `tuning` null on a non-tuning run. +2 tuning tests; `/explain` keeps its own 1.0. plan_tweak 39. UI panel = separate session |
+| 14 | Engine: USER-DEFINED structured features (`UserFeatureBuilder`) | ✅ Done | **Engine-only.** New leakage-safe `preprocessing/user_features.py` + sanctioned `user_features` config key (default `[]`, OFF → run byte-identical) + sanctioned ModelRunner edit. STRUCTURED specs only (no free-text formula; no `eval`/`exec`, [RISK]-marked): numeric `add/subtract/multiply/divide/ratio`, `datetime_diff` (duration), single `log/abs/bin` + date-parts. Train-only fit/transform (bin edges, divide-fill); invalid specs skipped+logged; name collisions refused; reads RAW post-split frame (so `datetime_diff` works) and injects after FeatureBuilder, before interactions. +24 tests (**232 total**). plan_tweak 40. API/UI separate |
 | 13 | UI: dedicated **Tuning Results** page (consumes schema 1.1) | ✅ Done | **UI-only.** New `RunTuning` type + optional `tuning` on `RunResult` (mirrors the 1.1 contract exactly); `pages/TuningResults.tsx` reads `result.tuning` from the store (no new network call, no `run_profile.json` scrape) with three states — no-run / tuning-OFF (`null`/`enabled:false` → "not enabled" + Configuration hint) / tuning-ON (settings header strip + one card per tuned model's `best_params` key→value table; untuned run models shown "ran on defaults"; `unknown` values stringified defensively, empty `{}` → "no params returned"). Route `/tuning` + sidebar entry (nav 12 → **13**). Zero engine/API change. +10 vitest (**82 total**); build clean. No plan_tweak deviation |
 
 Status legend: ⬜ Not started · 🔄 In progress · ✅ Done · ⚠️ Blocked
@@ -173,6 +186,8 @@ Status legend: ⬜ Not started · 🔄 In progress · ✅ Done · ⚠️ Blocked
 | 2026-06-17 | **Phase 9c**: Explainability is built as a **v2.0-ready stub** — a model + test-row picker that calls the real `/explain` endpoint, then renders the structured `unavailable` response (surfacing the server's own `reason`/`message`) with a clearly-stubbed "SHAP waterfall reserved for v2.0" region | Honours the frozen `/explain` stub (plan_tweak 29) without faking SHAP over null data. Exercising the real client→`/explain` path means v2.0 only fills `shap_values`/`base_value` into an already-designed layout, not rebuilds the page |
 | 2026-06-17 | **Phase 9c**: Setup Guide and Risk Register are **static pages authored from the real docs** (RUNBOOK/API_RUNBOOK/api_contract for setup; CLAUDE.md constraints + engine `[RISK]` themes + scope §12 governance for risks) — not from any API response | The setup steps and `[RISK]` notes live in engine source + markdown, not in any endpoint; exposing them as data would be a frozen-backend change. Authoring from the docs is accurate and decoupled. A future live `[RISK]`/setup endpoint is a clean additive v1.1 path (noted, not built) |
 | 2026-06-21 | **Phase 11**: a multilabel target is **one `\|`-delimited column** (e.g. `Auto\|Home`), parsed into a multi-hot indicator matrix by a `MultiLabelBinarizer` **fitted on TRAIN only**; the runner restores the real label NAMES as `model.classes_` after fitting OvR-on-indicator | The LOCKED contract has a single `target` field, so the delimited-column representation keeps the contract unchanged; OvR-on-indicator otherwise exposes integer column classes (0..n), losing the product names needed for metrics/curves/report. Train-only fit = the leakage boundary (a test-only label is ignored). New module `classifyos/multilabel.py` |
+| 2026-06-23 | **Phase 14**: `UserFeatureBuilder` reads its source columns from the **RAW post-split frame**, not the preprocessed frame, even though its output columns are injected at the prompt's specified position (after FeatureBuilder, before interactions) | The Preprocessor **scales** numerics and **encodes/drops** datetime columns, so post-preprocessing a `datetime_diff` (`end − start`) is impossible (the datetime columns are gone) and numeric ops would run on scaled values. Reading from raw is the only design that makes the prompt's headline use case (`duration = end_time − start_time`) work; outputs are made NaN-free (numeric→0.0, coded→−1) and joined by index so the preprocessing "drop" strategy stays aligned. plan_tweak 40 |
+| 2026-06-23 | **Phase 14**: invalid user-feature specs (missing/wrong-type column, target-as-source, unknown op at the builder, name collision) are **skipped + logged**, not raised; the config boundary (`build_config`) **hard-rejects** unknown ops/types/duplicate names | Two layers: the config boundary is the structural allowlist guard (a malformed config fails fast), while fit-time issues that depend on the actual data (column existence/type) must not abort an otherwise-valid run — "one bad spec must not kill the run", mirroring the per-algorithm robustness rule. No free-text formula is ever evaluated ([RISK]) |
 | 2026-06-21 | **Phase 11**: multilabel renders through the **unchanged locked envelope** — per-label metrics/curves/class-report populate; the single confusion matrix, MCC and log-loss are `null` (undefined for a multi-hot target), and curves carry per-label one-vs-rest entries | The contract is general enough to express multilabel honestly without a new field — `null`/empty for the genuinely-undefined pieces beats a fabricated number or a contract bump. Scope conclusion: ship "runs + renders honestly with documented limits", not full parity (per-label thresholds + imbalance weighting → v1.x). plan_tweak 34–35 |
 
 ---
@@ -1005,6 +1020,60 @@ frontend application code was changed; no bug found; no deviation (plan_tweak un
 - plan_tweak.md: row 39 added (first contract version bump, additive). api_short_desc.md updated
   with the `1.1` / `result.tuning` note. Prompt archived to
   `prompts/api_phases/phase_12_tuning_in_response.md` (verbatim).
+
+## Completed this session (Phase 14 — 2026-06-23) — user-defined structured features (engine)
+
+> **New engine capability beyond the original scope: USER-DEFINED feature engineering.**
+> Engine-only this session (the API request field + the UI builder panel are separate
+> follow-up prompts). OFF by default — a run with no user features is byte-for-byte unchanged.
+> The hard safety rule: **no free-text formulas, ever** — the user composes a feature from a
+> column + an operation from a fixed allowlist (+ optionally a second column); the engine
+> applies only KNOWN operations to KNOWN columns and never `eval`/`exec`s any user input.
+
+- **`backend/classifyos/preprocessing/user_features.py` (NEW)** — `UserFeatureBuilder(config)`,
+  an sklearn-style `fit(train_df, target)` / `transform(df)` / `fit_transform` builder mirroring
+  the FeatureBuilder leakage discipline, with `created_features_` and `skipped_specs_` attrs.
+  Operations (fixed allowlists, in `config.py`):
+  - **numeric** (two numeric cols): `add`, `subtract`, `multiply`, `divide`/`ratio` (same
+    near-zero-denominator guard as the ratio features, filled per
+    `interaction_features.fill_method`).
+  - **datetime_diff** (two datetime cols, `op=subtract`) → a numeric duration in `unit`
+    (`seconds`/`minutes`/`hours`/`days`, default `days`). Covers `duration = end − start`.
+  - **single** (one col): `log` (`log1p`, train min ≥ 0 required), `abs`, `bin` (quantile
+    bins, train-only edges), and date-parts `year`/`month`/`day`/`dayofweek`/`hour`.
+  - **Leakage-safe:** bin edges and the divide median-fill are learned on TRAIN only and
+    applied unchanged ([RISK] noted). **No-eval safety** [RISK]-marked at the module top.
+  - **Robust:** an invalid spec (missing column, wrong column type, target-as-source, unknown
+    op, **name collision with an existing column**) is skipped + logged with a clear reason —
+    the run never aborts; valid specs still build. Outputs are NaN-free (numeric→`0.0`,
+    coded `bin`/date-parts→`-1`) so they feed balancing/training directly. Input frame + config
+    never mutated; joblib-picklable.
+- **`backend/classifyos/config.py` (sanctioned edit)** — added the fixed allowlist tuples
+  (`USER_FEATURE_TYPES` / `_NUMERIC_OPS` / `_SINGLE_*_OPS` / `_DATETIME_DIFF_OPS` /
+  `_DATETIME_UNITS`), a `user_features: []` key to `DEFAULT_CONFIG`, and `_validate_user_features`
+  (the allowlist guard at the config boundary: rejects unknown type/op, non-string columns,
+  empty/duplicate names; defers column existence/type to fit time).
+- **`backend/classifyos/runner.py` (sanctioned edit)** — `_engineer` now runs
+  `UserFeatureBuilder` between FeatureBuilder and the interaction step. **Design call:** it reads
+  source columns from the **RAW post-split frame** (`self.train_df_`/`self.test_df_`), not the
+  preprocessed frame, then joins the created columns (by index) onto the engineered frame — the
+  only way `datetime_diff` and meaningful numeric ops work, since the Preprocessor scales numerics
+  and encodes/drops datetime columns. `_run_config` isolation intact; empty list = no-op.
+- **Tests** `tests/test_user_features.py` (24): datetime duration (days + seconds, correct known
+  values, unparseable row → 0.0 not NaN); numeric divide zero-guard (no inf) under zero + median
+  fill; add/subtract/multiply; single log/abs, log-negative-train rejected, **bin edges train-only
+  (poisoned test split unchanged + extremes clip to outer bins)**, date-part extraction;
+  validation skips (missing column / wrong type / unknown op / target-as-source / name collision)
+  + valid-and-invalid coexisting; `build_config` rejects unknown op/type/duplicate name + default
+  `[]`; input-df/config immutability + joblib round-trip; **ModelRunner empty-`user_features`
+  no-op identity** and a feature run adding the new column to `active_features_` (incl. a date-part
+  from a RAW datetime column that is NOT a model feature — proving the raw-frame read).
+  **232 passed** total (208 prior + 24) — no regressions.
+- **Hallucination check ✅** — `pd.to_datetime(errors="coerce")`, `.dt.total_seconds()`,
+  `.dt.year/month/day/dayofweek/hour`, `np.log1p`, `pd.qcut(retbins=True)` verified against the
+  installed **pandas 2.3.3** / **numpy** in the venv.
+- Archived this session's prompt to `prompts/backend_phases/phase_14_user_features.md`;
+  updated `backend_short_desc.md` (UserFeatureBuilder entry) and `plan_tweak.md` (row 40).
 
 ## Completed this session (Doc-update enforcement hook — 2026-06-15) — ⚠️ REMOVED 2026-06-16
 

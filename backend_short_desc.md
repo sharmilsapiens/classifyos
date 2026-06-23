@@ -114,6 +114,34 @@ for the first time, and measured the engine's speed on a 10k+ row dataset.
   algorithms, tuning off) and a realistic tuning sanity run (one model, 25 trials) to confirm the
   hard per-model time cap bounds it. See PROJECT_STATE.md for the measured numbers.
 
+## Phase 14 — User-defined structured features (✅ Done, 2026-06-23)
+**In one line:** Let a user add their own derived columns — picked from dropdowns, never
+typed as a formula — so analysts can build domain features (like `duration = end_date −
+start_date` or `premium ÷ sum_assured`) without writing or running any code.
+- **`UserFeatureBuilder` (preprocessing/user_features.py):** a new leakage-safe
+  fit/transform builder (same discipline as the existing FeatureBuilder). It reads a list of
+  STRUCTURED specs and builds exactly the columns asked for.
+- **What it can build (fixed allowlists only):** two-number ops (add / subtract / multiply /
+  divide / ratio, with the same divide-by-near-zero guard the ratio features use); a
+  date-difference (`end − start`) turned into a numeric duration in a chosen unit
+  (seconds/minutes/hours/days); and single-column transforms — `log`, `abs`, quantile `bin`,
+  and pulling a date part (`year`/`month`/`day`/`day-of-week`/`hour`) out of a date column.
+- **Safety — no formulas, ever.** The user never sends a formula string the backend
+  evaluates; they choose a column + an operation from a fixed list + (optionally) a second
+  column + a name. The backend applies only KNOWN operations to KNOWN columns — `eval`/`exec`
+  are never used on user input (a [RISK] comment marks this). Unknown operations/types are
+  rejected the moment the config is built.
+- **No leakage, no surprises.** Anything the builder needs to learn (bin edges, the
+  divide-fill value) is learned from the TRAINING rows only and applied unchanged to the test
+  rows. A spec that points at a missing column, the wrong column type, or the target is simply
+  skipped with a clear logged reason — it never crashes the run — and a name that clashes with
+  an existing column is refused so nothing is ever overwritten.
+- **OFF by default.** With no user features configured (the default) a run is byte-for-byte
+  identical to before. The new columns slot into the pipeline right after the automatic
+  feature engineering and before the interaction step, so they can themselves become
+  interaction candidates and are present for balancing and training. Engine layer only — the
+  API and UI that let users define these are separate follow-up sessions. (24 new tests.)
+
 ---
 
 ## How to read this project

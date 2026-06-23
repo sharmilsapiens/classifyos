@@ -17,6 +17,8 @@ Phase 3 pipeline-order decision in PROJECT_STATE.md / plan_tweak.md row 4):
 #. ``train_test_split_cls`` → :attr:`train_df_`, :attr:`test_df_`
 #. ``Preprocessor.fit(train)`` → transform train AND test
 #. ``FeatureBuilder.fit(train)`` → transform both
+#. ``UserFeatureBuilder.fit(train)`` → transform both (user-defined structured features,
+   computed from the RAW split frame; OFF when ``config["user_features"]`` is empty)
 #. ``InteractionFeatureBuilder.fit(train)`` → transform both (+ writes ``plot6``)
 #. ``handle_class_imbalance`` on the TRAIN matrices ONLY → balanced train + class weight
 #. (optional, OFF by default) ``tune_model`` per algorithm on the PRE-balance TRAIN
@@ -61,6 +63,7 @@ from .preprocessing.interactions import (
     plot_interaction_summary,
 )
 from .preprocessing.preprocess import Preprocessor
+from .preprocessing.user_features import UserFeatureBuilder
 from .split import train_test_split_cls
 
 logger = logging.getLogger(__name__)
@@ -237,6 +240,22 @@ class ModelRunner:
         fb = FeatureBuilder(cfg)
         train_fb = fb.fit_transform(train_pp, target)
         test_fb = fb.transform(test_pp)
+
+        # 5b. user-defined structured features. These are computed from the RAW post-split
+        # frames (self.train_df_/self.test_df_) — NOT the preprocessed frame — so that
+        # datetime_diff can see real datetime columns and numeric ops use unscaled values;
+        # the Preprocessor scales numerics and encodes/drops datetime columns. Their output
+        # columns are then injected here, AFTER FeatureBuilder and BEFORE interactions, so
+        # they can become interaction candidates and exist before balancing/training.
+        # [RISK] leakage — fitted on the TRAIN frame only; no test rows reach fit(). Output
+        # columns join by index, so the preprocessing "drop" strategy stays aligned.
+        ufb = UserFeatureBuilder(cfg)
+        ufb.fit(self.train_df_, target)
+        if ufb.created_features_:
+            train_uf = ufb.transform(self.train_df_)
+            test_uf = ufb.transform(self.test_df_)
+            train_fb = train_fb.join(train_uf[ufb.created_features_])
+            test_fb = test_fb.join(test_uf[ufb.created_features_])
 
         # 6. pairwise interactions (+ plot6 on the engineered TRAIN frame)
         ib = InteractionFeatureBuilder(cfg)

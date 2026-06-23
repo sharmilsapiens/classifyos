@@ -39,6 +39,26 @@ TUNING_METRICS = (
     "log_loss",
 )
 
+# --- user-defined feature engineering (UserFeatureBuilder) ---------------------------
+# Fixed allowlists for STRUCTURED user features. The user picks
+# [column(s)] + [operation from these allowlists] + [a new name]; the engine applies
+# KNOWN operations to KNOWN columns. There is NO free-text formula and NOTHING is ever
+# eval()'d — keeping these allowlists next to the config validation is the safety guard
+# at the config boundary (see backend/classifyos/preprocessing/user_features.py).
+USER_FEATURE_TYPES = ("numeric", "datetime_diff", "single")
+#: Two-column numeric operations (both columns must be numeric). ``ratio`` is an alias of
+#: ``divide``; both apply the same near-zero-denominator guard as the ratio features.
+USER_FEATURE_NUMERIC_OPS = ("add", "subtract", "multiply", "divide", "ratio")
+#: Single-column transforms that require a NUMERIC source column.
+USER_FEATURE_SINGLE_NUMERIC_OPS = ("log", "abs", "bin")
+#: Single-column transforms that require a DATETIME source column (date-part extraction).
+USER_FEATURE_SINGLE_DATE_OPS = ("year", "month", "day", "dayofweek", "hour")
+USER_FEATURE_SINGLE_OPS = USER_FEATURE_SINGLE_NUMERIC_OPS + USER_FEATURE_SINGLE_DATE_OPS
+#: Datetime-difference operations (two datetime columns → a numeric duration).
+USER_FEATURE_DATETIME_DIFF_OPS = ("subtract",)
+#: Allowed duration units for ``datetime_diff`` (default ``days``).
+USER_FEATURE_DATETIME_UNITS = ("seconds", "minutes", "hours", "days")
+
 
 DEFAULT_CONFIG: dict[str, Any] = {
     # --- required (placeholders here; build_config fills them) ---
@@ -70,6 +90,16 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "binning": True,
         "max_poly_features": 8,
     },
+    # --- user-defined features (UserFeatureBuilder) ------------------------------
+    # A list of STRUCTURED specs derived from existing columns. Default [] → the
+    # feature is OFF and a run is identical to having no key at all. Each spec is a dict,
+    # e.g. {"name": "duration_days", "op": "subtract", "type": "datetime_diff",
+    #       "col_a": "end_time", "col_b": "start_time", "unit": "days"}
+    #       {"name": "premium_per_sum", "op": "divide", "type": "numeric",
+    #        "col_a": "annual_premium", "col_b": "sum_assured"}
+    #       {"name": "log_claim", "op": "log", "type": "single", "col_a": "claim_amount"}
+    # NO free-text formula is ever accepted or eval()'d — only the fixed allowlists above.
+    "user_features": [],
     # --- interaction features (Section 7B; InteractionFeatureBuilder) ---
     "interaction_features": {
         "enabled": True,
@@ -203,6 +233,7 @@ def _validate_config(config: dict[str, Any]) -> None:
 
     _validate_feature_engineering(config["feature_engineering"])
     _validate_tuning(config["tuning"])
+    _validate_user_features(config["user_features"])
 
 
 def _validate_tuning(t: Any) -> None:
@@ -247,6 +278,70 @@ def _validate_tuning(t: Any) -> None:
     overrides = t.get("search_space_overrides", {})
     if not isinstance(overrides, dict):
         raise ValueError("'tuning.search_space_overrides' must be a dict")
+
+
+def _validate_user_features(specs: Any) -> None:
+    """Validate the ``user_features`` list (UserFeatureBuilder).
+
+    This is the allowlist guard at the config boundary: every spec must reference a
+    valid ``type`` and an ``op`` permitted for that type (rejecting unknown ops/types
+    up front), supply string column references, and carry a non-empty, unique ``name``.
+    Column existence and type-compatibility are NOT checked here (the columns are not
+    known until a dataset is loaded) — those are validated at fit time by the builder.
+    """
+    if not isinstance(specs, list):
+        raise ValueError("'user_features' must be a list of feature specs")
+
+    seen_names: set[str] = set()
+    for i, spec in enumerate(specs):
+        where = f"user_features[{i}]"
+        if not isinstance(spec, dict):
+            raise ValueError(f"{where} must be a dict, got {spec!r}")
+
+        name = spec.get("name")
+        if not isinstance(name, str) or not name.strip():
+            raise ValueError(f"{where}.name must be a non-empty string")
+        if name in seen_names:
+            raise ValueError(f"{where}.name {name!r} is duplicated in user_features")
+        seen_names.add(name)
+
+        ftype = spec.get("type")
+        if ftype not in USER_FEATURE_TYPES:
+            raise ValueError(
+                f"{where}.type must be one of {list(USER_FEATURE_TYPES)}, got {ftype!r}"
+            )
+
+        op = spec.get("op")
+        if ftype == "numeric":
+            allowed_ops = USER_FEATURE_NUMERIC_OPS
+        elif ftype == "datetime_diff":
+            allowed_ops = USER_FEATURE_DATETIME_DIFF_OPS
+        else:  # single
+            allowed_ops = USER_FEATURE_SINGLE_OPS
+        if op not in allowed_ops:
+            raise ValueError(
+                f"{where}.op must be one of {list(allowed_ops)} for type {ftype!r}, "
+                f"got {op!r}"
+            )
+
+        if not isinstance(spec.get("col_a"), str) or not spec["col_a"].strip():
+            raise ValueError(f"{where}.col_a must be a non-empty column-name string")
+
+        # Two-column types need a second column; single transforms must not have one.
+        if ftype in ("numeric", "datetime_diff"):
+            if not isinstance(spec.get("col_b"), str) or not spec["col_b"].strip():
+                raise ValueError(
+                    f"{where}.col_b must be a non-empty column-name string for "
+                    f"type {ftype!r}"
+                )
+
+        if ftype == "datetime_diff":
+            unit = spec.get("unit", "days")
+            if unit not in USER_FEATURE_DATETIME_UNITS:
+                raise ValueError(
+                    f"{where}.unit must be one of {list(USER_FEATURE_DATETIME_UNITS)}, "
+                    f"got {unit!r}"
+                )
 
 
 def _validate_feature_engineering(fe: Any) -> None:
