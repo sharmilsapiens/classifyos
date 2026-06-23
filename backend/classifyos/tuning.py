@@ -115,6 +115,12 @@ def _space_xgboost(trial: Any, ov: Any) -> dict[str, Any]:
         "reg_lambda": trial.suggest_float(
             "reg_lambda", **_b(ov, "reg_lambda", low=1e-3, high=10.0, log=True)
         ),
+        # ``gamma`` (a.k.a. ``min_split_loss``): the minimum loss reduction required to make
+        # a further partition on a leaf node. A direct complexity regulariser distinct from
+        # depth and the L1/L2 (``reg_alpha``/``reg_lambda``) terms — larger gamma → more
+        # conservative trees. 0.0 (the XGBoost default) is included so the search can stay
+        # unregularised on this axis when that wins.
+        "gamma": trial.suggest_float("gamma", **_b(ov, "gamma", low=0.0, high=5.0)),
     }
 
 
@@ -124,11 +130,18 @@ def _space_lightgbm(trial: Any, ov: Any) -> dict[str, Any]:
     ``bagging_freq`` is suggested (1–7) rather than left at LightGBM's default of 0, because
     with ``bagging_freq=0`` the ``bagging_fraction`` knob is inert; this keeps the tuned
     bagging actually effective.
+
+    [RISK] overfitting — LightGBM grows **leaf-wise**, so with its default ``max_depth=-1``
+    (unbounded) and ``num_leaves`` tuned up to 255, individual trees can become very deep and
+    overfit on smaller datasets. ``max_depth`` (3–12) now bounds that leaf-wise growth — the
+    standard ``num_leaves ≲ 2^max_depth`` guard pairing depth with the leaf count. ``num_leaves``
+    is left as-is; the depth cap is the structural backstop on tree complexity.
     """
     return {
         "num_leaves": trial.suggest_int(
             "num_leaves", **_b(ov, "num_leaves", low=15, high=255)
         ),
+        "max_depth": trial.suggest_int("max_depth", **_b(ov, "max_depth", low=3, high=12)),
         "learning_rate": trial.suggest_float(
             "learning_rate", **_b(ov, "learning_rate", low=0.01, high=0.3, log=True)
         ),
@@ -204,12 +217,26 @@ def _space_logreg(trial: Any, ov: Any) -> dict[str, Any]:
 
 def _space_svm(trial: Any, ov: Any) -> dict[str, Any]:
     """SVM space — minimal. NOTE: slow. The SVM wrapper re-runs internal calibration CV on
-    every trial, so each evaluation is expensive; keep ``n_trials`` small for SVM."""
-    return {
+    every trial, so each evaluation is expensive; keep ``n_trials`` small for SVM.
+
+    ``kernel`` is a real categorical (``["rbf", "linear"]``), not the former no-op
+    single-element list. ``linear`` is cheaper per fit and sometimes wins on standard-scaled
+    data; ``rbf`` captures non-linearity at higher cost. The space is **conditional**:
+    ``gamma`` is an RBF-only knob (SVC ignores ``gamma`` when ``kernel="linear"``), so it is
+    suggested only on the ``rbf`` branch — a linear trial returns no ``gamma`` at all rather
+    than a dead parameter. The slow-model guidance still stands: keep ``n_trials`` small for
+    SVM regardless of kernel.
+    """
+    params: dict[str, Any] = {
         "C": trial.suggest_float("C", **_b(ov, "C", low=1e-2, high=1e2, log=True)),
-        "gamma": trial.suggest_float("gamma", **_b(ov, "gamma", low=1e-4, high=1e0, log=True)),
-        "kernel": trial.suggest_categorical("kernel", _ch(ov, "kernel", ["rbf"])),
+        "kernel": trial.suggest_categorical("kernel", _ch(ov, "kernel", ["rbf", "linear"])),
     }
+    # Conditional: gamma only matters (and is only suggested) for the rbf kernel.
+    if params["kernel"] == "rbf":
+        params["gamma"] = trial.suggest_float(
+            "gamma", **_b(ov, "gamma", low=1e-4, high=1e0, log=True)
+        )
+    return params
 
 
 def _space_naivebayes(trial: Any, ov: Any) -> dict[str, Any]:

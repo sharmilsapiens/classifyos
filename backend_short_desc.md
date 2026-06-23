@@ -81,6 +81,7 @@ anyone returning after a break who wants the gist without reading code.
 - No leakage: every candidate is scored using cross-validation *inside the training split only*; the test set is never touched. Balancing (SMOTE) is applied only to the final fit, never inside the tuning folds.
 - Safety: each model is tuned independently — if one model's search errors, it quietly falls back to defaults and the run continues. A **hard default time cap (600s per model)** means a tuning run can never run unbounded.
 - The conductor (ModelRunner) calls the tuner before fitting each requested model, feeds the best settings into the final fit, and records what was tuned (and the winning settings) in `run_profile.json`. CLI flags: `--tune`, `--tune-models`, `--tune-metric`, `--trials`, `--timeout`, `--tune-cv-folds`.
+- **7B.2 follow-up (2026-06-23):** widened three search spaces after a read-only audit — LightGBM now also tunes `max_depth` (so its leaf-wise trees can't grow unbounded against a large leaf count), XGBoost gains `gamma` (an extra "don't bother splitting unless it helps enough" dial), and SVM's kernel is now a genuine rbf-vs-linear choice (with the rbf-only `gamma` skipped when linear is picked). Tuning is still OFF by default and a non-tuning run is unchanged.
 
 ## Tooling — Doc-update enforcement hook (✅ Done 2026-06-15, ❌ Removed 2026-06-16)
 **In one line:** Briefly added a safety net that wouldn't let a coding session finish if it changed the ML engine but forgot to update the project's living docs — then removed it as ineffective.

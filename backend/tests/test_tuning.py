@@ -153,10 +153,108 @@ def test_tune_xgboost_returns_params(binary_matrices) -> None:
         "n_estimators",
         "subsample",
         "colsample_bytree",
+        "gamma",
     }.issubset(best)
     # the returned params are real estimator kwargs (correct types)
     assert isinstance(best["max_depth"], int)
     assert 0.0 < best["learning_rate"] < 1.0
+    # gamma (min_split_loss) is a uniform float regulariser over 0..5
+    assert isinstance(best["gamma"], float) and 0.0 <= best["gamma"] <= 5.0
+
+
+def test_tune_lightgbm_includes_max_depth(binary_matrices) -> None:
+    """Tuning LightGBM returns ``max_depth`` within 3…12 (the leaf-wise growth bound).
+
+    ``max_depth`` was added alongside the existing ``num_leaves`` to cap LightGBM's leaf-wise
+    tree growth (the ``num_leaves ≲ 2^max_depth`` guard); it must surface in the best params.
+    """
+    bm = binary_matrices
+    cfg = _lapse_config(
+        algorithms=["LightGBM"], tuning=_tuning_cfg(models=["LGBM"], n_trials=3)
+    )
+    best = tune_model("LightGBM", bm.X_train, bm.y_train, "binary", cfg, random_state=42)
+
+    assert isinstance(best, dict) and best
+    assert "num_leaves" in best  # unchanged, still tuned
+    assert "max_depth" in best
+    assert isinstance(best["max_depth"], int) and 3 <= best["max_depth"] <= 12
+
+
+# --------------------------------------------------------------------------- #
+# unit — SVM conditional kernel/gamma space                                   #
+# --------------------------------------------------------------------------- #
+
+
+class _RecordingTrial:
+    """A minimal stub trial that returns a fixed categorical pick and midpoint numerics.
+
+    Lets the SVM space's conditional branch (``gamma`` only on ``rbf``) be tested
+    deterministically WITHOUT a real Optuna study or any slow calibrated-SVC fit.
+    """
+
+    def __init__(self, kernel: str) -> None:
+        self._kernel = kernel
+        self.suggested: dict[str, object] = {}
+
+    def suggest_float(self, name, low, high, log=False):  # noqa: ANN001
+        value = (low * high) ** 0.5 if log else (low + high) / 2.0
+        self.suggested[name] = value
+        return value
+
+    def suggest_int(self, name, low, high, log=False):  # noqa: ANN001
+        value = (low + high) // 2
+        self.suggested[name] = value
+        return value
+
+    def suggest_categorical(self, name, choices):  # noqa: ANN001
+        value = self._kernel if name == "kernel" else choices[0]
+        self.suggested[name] = value
+        return value
+
+
+def test_svm_space_kernel_is_a_real_choice() -> None:
+    """The SVM kernel categorical now offers two kernels (no longer the no-op ``["rbf"]``)."""
+    from classifyos.tuning import _space_svm
+
+    rbf = _space_svm(_RecordingTrial("rbf"), {})
+    linear = _space_svm(_RecordingTrial("linear"), {})
+    assert rbf["kernel"] == "rbf"
+    assert linear["kernel"] == "linear"
+    assert "C" in rbf and "C" in linear
+
+
+def test_svm_space_gamma_is_conditional() -> None:
+    """``gamma`` is suggested only for ``rbf`` (SVC ignores it on a linear kernel)."""
+    from classifyos.tuning import _space_svm
+
+    rbf = _space_svm(_RecordingTrial("rbf"), {})
+    linear = _space_svm(_RecordingTrial("linear"), {})
+    # rbf branch carries a numeric gamma; linear branch carries none.
+    assert "gamma" in rbf and isinstance(rbf["gamma"], float)
+    assert "gamma" not in linear
+
+
+def test_tune_svm_either_kernel_roundtrips(binary_matrices) -> None:
+    """A real (tiny-budget) SVM study returns one of the two kernels with a matching space.
+
+    SVM is the slow model (calibrated SVC re-runs internal CV per trial), so this uses the
+    minimal trial count the speed contract allows. Whichever kernel the winning trial picks,
+    the returned params must be self-consistent: ``gamma`` present iff ``kernel == "rbf"``.
+    """
+    bm = binary_matrices
+    cfg = _lapse_config(
+        algorithms=["SVM"],
+        tuning=_tuning_cfg(models=["SVM"], n_trials=2, cv_folds=2),
+    )
+    best = tune_model("SVM", bm.X_train, bm.y_train, "binary", cfg, random_state=42)
+
+    assert isinstance(best, dict) and best
+    assert "C" in best
+    assert best["kernel"] in {"rbf", "linear"}
+    if best["kernel"] == "rbf":
+        assert "gamma" in best
+    else:
+        assert "gamma" not in best  # conditional space: no dead gamma on linear
 
 
 def test_tuning_improves_or_matches(binary_matrices) -> None:

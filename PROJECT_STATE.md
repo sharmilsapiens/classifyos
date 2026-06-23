@@ -4,11 +4,15 @@
 > A copy is uploaded to the ClassifyOS Claude Project knowledge after each update so the
 > planning/overseer chat stays in sync with the local repo.
 
-**Last updated:** 2026-06-21
-**Updated by:** Claude Code (Phase 11 — FINAL: multilabel wired end-to-end (Product
+**Last updated:** 2026-06-23
+**Updated by:** Claude Code (Phase 7B.2 — expanded three Optuna search spaces from the
+read-only tuning audit: LightGBM `max_depth`, XGBoost `gamma`, SVM real+conditional `kernel`.
+Engine refinement of the existing tuning layer; no scope deviation. 206 backend pytest green)
+
+**Prior update:** 2026-06-21 — Phase 11 (FINAL): multilabel wired end-to-end (Product
 Recommendation), 7-use-case E2E sweep (engine+API+browser), 12k-row performance baseline,
 tuning sanity, governance dossier — **Phase 11 engineering complete; v1.0 ready for
-sign-off/demo**)
+sign-off/demo**
 **Repo tag / commit:** 4ef560b (Phase 10) + Phase 11 commit pending. **v1.0 tag pending the
 human sign-offs/demo.**
 
@@ -24,6 +28,9 @@ check, and produced the **governance dossier** (`docs/governance_signoff_v1.0.md
 **202 backend pytest · 72 frontend vitest · 9 Playwright E2E — all green.** What remains before
 release is purely **human**: Naveen's per-phase sign-off, the `[RISK]` + leakage-audit review, the
 stakeholder demo, signatures, and the `v1.0` git tag (see the dossier + "Testing debt" below).
+A subsequent audit-driven tuning refinement (**Phase 7B.2**, 2026-06-23) expanded three Optuna
+search spaces; backend pytest now **206 green** (was 202). No behaviour change to a non-tuning
+run; tuning stays OFF by default.
 
 **Active phase (historical context below):** Phase 8 complete — **FastAPI layer** (`backend/api/`)
 wraps the engine over HTTP for the Phase 9 frontend, and the **`/api/v1/run` response schema is
@@ -83,7 +90,7 @@ written. Engine complete; ready for Phase 8 (FastAPI layer).
 | 5 | Class balancing (Section 8) | ✅ Done | handle_class_imbalance (smote/undersample/class_weight/none, train-only) + 10 tests; SMOTE k_neighbors auto-guard + tiny-minority fallback; multilabel→class_weight |
 | 6 | Models + evaluation (Sections 10–13) | ✅ Done | 6 wrappers via 1 ABC + MODEL_REGISTRY + evaluate_model + classify; 47 tests; xgboost/lightgbm added to deps |
 | 7 | Plots + ModelRunner + CLI (Sections 14–16) | ✅ Done | ModelRunner (deep-copy config isolation, corrected order, robust per-algo failures) + plot_results (plot1/2/3/5) + CLI (load_dotenv, inspect/run modes); 13 tests; real-data run on iris done; engine feature-complete |
-| 7B | Optuna hyperparameter tuning (Section 8B) | ✅ Done | `tuning.py` (`tune_model`) — OFF by default; one uniform mechanism for all 6 models; CV-in-train trial scoring (leakage-safe); per-model isolation + hard 600s/model timeout; ModelRunner + config + CLI (`--tune…`) sanctioned edits; 17 tests; **AutoML pulled v1.5→v1.0** (plan_tweak 24–25) |
+| 7B | Optuna hyperparameter tuning (Section 8B) | ✅ Done | `tuning.py` (`tune_model`) — OFF by default; one uniform mechanism for all 6 models; CV-in-train trial scoring (leakage-safe); per-model isolation + hard 600s/model timeout; ModelRunner + config + CLI (`--tune…`) sanctioned edits; 17 tests; **AutoML pulled v1.5→v1.0** (plan_tweak 24–25). **7B.2 (2026-06-23):** audit-driven search-space expansion — LGBM `max_depth`, XGB `gamma`, SVM real+conditional `kernel`; +4 tests (206 total); refinement, no scope deviation (plan_tweak 38) |
 | 8 | FastAPI layer | ✅ Done | 6 endpoints under `/api/v1/`; `/run` schema LOCKED (docs/api_contract.md); `curves.py` helper + plot2 refactor; `save_input` upload support; `/explain` stub; 36 tests (184 total) |
 | 9 | React dashboard (12 pages) | ✅ Done | **9a** (foundation: Option A design + Recharts; shadcn/ui; typed client vs LOCKED contract; app shell + nav; live round-trip; 13 FE tests). **9b** (6 result pages + Overview upgrade; binary+multiclass vs fixtures; 46 FE tests). **9c** (Explainability v2.0-ready stub wired to `/explain`; Setup Guide + Risk Register authored from the real docs; **Overview/Pipeline merged → 12 nav items**, `/pipeline` redirects to `/`; polish pass; 55 FE tests). Build clean. |
 | 10 | Testing: browser E2E + real CORS + render gaps + suite audit | ✅ Done | Playwright (1.61.0) two-server webServer; happy-path E2E parametrized (binary+multiclass run live → rendered charts/heatmap/PNG); real cross-origin CORS test (GET + preflight OPTIONS); `/explain` live-path; +7 vitest gap tests. Suites green: **184 backend pytest + 62 frontend vitest + 4 Playwright E2E**. Tests only — no behaviour change, no deviation |
@@ -904,6 +911,48 @@ frontend application code was changed; no bug found; no deviation (plan_tweak un
   review; leakage-audit sign-off; stakeholder demo (Amit Shah, DharaniKiran Kavuri, Matat Rotbaum);
   signatures; repo tag **`v1.0`**.
 - Prompt archived to `prompts/testing_phases/phase_11_integration_signoff.md` (verbatim).
+
+## Completed this session (Phase 7B.2 — 2026-06-23) — Optuna search-space expansion
+
+> **Sanctioned editable surface: `tuning.py` `_space_*` functions + `tests/test_tuning.py` ONLY**
+> (per the phase prompt). No wrapper/registry/runner/config/API/CLI change. Driven entirely by
+> the read-only `docs/tuning_audit.md`. A **refinement of the already-sanctioned Phase 7B tuning
+> layer** (itself plan_tweak 24) — **no new scope deviation**; a non-tuning run is byte-for-byte
+> unchanged and tuning stays OFF by default.
+
+- **Three audit-ranked additions/fixes** (the audit's items 1–3; the lower-priority items 4–6
+  were explicitly deferred this session):
+  1. **LightGBM — added `max_depth` (int 3…12, uniform)** to `_space_lightgbm`. [RISK] overfitting:
+     LightGBM grows leaf-wise, so with the default `max_depth=-1` (unbounded) and `num_leaves`
+     tuned to 255 trees can overfit on smaller datasets; `max_depth` now bounds that growth (the
+     standard `num_leaves ≲ 2^max_depth` guard). `num_leaves` left as-is. *(Audit's highest-value
+     fix.)*
+  2. **XGBoost — added `gamma` / `min_split_loss` (float 0.0…5.0, uniform)** to `_space_xgboost` —
+     a complexity regulariser (minimum loss reduction to make a split) distinct from depth and the
+     L1/L2 (`reg_alpha`/`reg_lambda`) terms; 0.0 included so the search can stay unregularised on
+     this axis.
+  3. **SVM — `kernel` is now a real categorical `["rbf", "linear"]`** (was the no-op single-element
+     `["rbf"]`). The space is **conditional**: `gamma` is an RBF-only knob (SVC ignores it on a
+     linear kernel), so it is suggested only on the `rbf` branch — a linear trial returns no dead
+     `gamma`. Linear is cheaper and sometimes wins on scaled data; the slow-calibrated-SVC
+     small-`n_trials` guidance still stands.
+- **Hallucination check ✅** — verified every parameter against the **installed** versions in the
+  venv: **lightgbm 4.6.0** (`max_depth` in `LGBMClassifier.__init__`, default -1), **xgboost 3.2.0**
+  (`gamma` accepted via the sklearn-API `**kwargs`, round-trips through `get_params`, fits clean),
+  **scikit-learn 1.9.0** (`SVC` accepts `kernel="linear"`; `gamma` default `"scale"`, ignored for
+  linear). No new runtime deps.
+- **Tests (+4 → `tests/test_tuning.py`):** `test_tune_xgboost_returns_params` extended to assert
+  `gamma` ∈ best-params within 0…5; **new** `test_tune_lightgbm_includes_max_depth` (max_depth ∈
+  3…12, num_leaves still present); **new** `test_svm_space_kernel_is_a_real_choice` +
+  `test_svm_space_gamma_is_conditional` (a recording-stub trial proves gamma present on `rbf`,
+  absent on `linear` — fast, deterministic, no slow SVC fit); **new**
+  `test_tune_svm_either_kernel_roundtrips` (a real tiny-budget SVM study returns a self-consistent
+  space: `gamma` present iff `kernel == "rbf"`). SVM kept to a minimal trial budget per the speed
+  contract. **Full suite: 206 passed** (was 202) — no regressions.
+- RUNBOOK.md tuning section needed **no change** — it describes the tuning *controls*, not a
+  per-model tuned-parameter enumeration, so the additions don't make it inaccurate.
+- plan_tweak.md: row 38 added — recorded as a **refinement of existing tuning, no scope deviation**.
+- Prompt archived to `prompts/backend_phases/phase_07B2_search_space_expansion.md` (verbatim).
 
 ## Completed this session (Doc-update enforcement hook — 2026-06-15) — ⚠️ REMOVED 2026-06-16
 
