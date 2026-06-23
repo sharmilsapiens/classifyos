@@ -23,9 +23,16 @@ from __future__ import annotations
 
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from classifyos.config import build_config
+from classifyos.config import (
+    USER_FEATURE_DATETIME_DIFF_OPS,
+    USER_FEATURE_DATETIME_UNITS,
+    USER_FEATURE_NUMERIC_OPS,
+    USER_FEATURE_SINGLE_OPS,
+    USER_FEATURE_TYPES,
+    build_config,
+)
 
 # --------------------------------------------------------------------------- #
 # Request models                                                              #
@@ -64,6 +71,82 @@ class TuningConfig(BaseModel):
     n_trials: int = 30
     timeout_seconds: float | None = 600  # hard per-model wall-clock cap; None opts out
     search_space_overrides: dict[str, Any] = Field(default_factory=dict)
+
+
+class UserFeatureSpec(BaseModel):
+    """One user-defined STRUCTURED feature spec (UserFeatureBuilder).
+
+    Mirrors the engine's allowlist-bounded spec shape (see
+    ``classifyos.preprocessing.user_features`` and the ``USER_FEATURE_*`` allowlists in
+    ``classifyos.config``): a new column built by applying a KNOWN ``op`` from a fixed
+    allowlist to KNOWN existing column(s). There is NO free-text formula — nothing is ever
+    ``eval``'d. The three shapes:
+
+    * ``type="numeric"`` — two numeric columns + an op in :data:`USER_FEATURE_NUMERIC_OPS`
+      (``add``/``subtract``/``multiply``/``divide``/``ratio``); ``col_b`` required.
+    * ``type="datetime_diff"`` — two datetime columns, ``op="subtract"`` → a duration in
+      ``unit`` (:data:`USER_FEATURE_DATETIME_UNITS`, default ``days``); ``col_b`` required.
+    * ``type="single"`` — one column + an op in :data:`USER_FEATURE_SINGLE_OPS`
+      (numeric ``log``/``abs``/``bin`` or date-part ``year``/``month``/``day``/``dayofweek``/
+      ``hour``); ``col_b`` must be omitted.
+
+    This is the fast-fail web-boundary guard (reject an unknown ``op``/``type`` with a clear
+    422 before any work runs). The engine's ``build_config`` remains the AUTHORITATIVE
+    validator — these checks intentionally mirror its allowlists and must not diverge from
+    them. Column existence/type are NOT checked here (the dataset is not loaded yet); the
+    engine validates those at fit time and skips a bad spec without aborting the run.
+    """
+
+    # Reject unknown keys so a typo'd spec field is a clear 422, not a silent no-op.
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(..., description="New column name (non-empty; must not collide).")
+    type: str = Field(..., description=f"One of {list(USER_FEATURE_TYPES)}.")
+    op: str = Field(..., description="Operation from the allowlist for this type.")
+    col_a: str = Field(..., description="Source column A (non-empty).")
+    col_b: str | None = Field(None, description="Source column B (required for two-column types).")
+    unit: str | None = Field(None, description="Duration unit for datetime_diff (default days).")
+
+    @field_validator("name", "col_a")
+    @classmethod
+    def _non_empty(cls, value: str) -> str:
+        if not value or not value.strip():
+            raise ValueError("must be a non-empty string")
+        return value
+
+    @model_validator(mode="after")
+    def _check_type_op_columns(self) -> "UserFeatureSpec":
+        """Reject an unknown type, an op not permitted for the type, or a missing col_b."""
+        if self.type not in USER_FEATURE_TYPES:
+            raise ValueError(
+                f"type must be one of {list(USER_FEATURE_TYPES)}, got {self.type!r}"
+            )
+
+        if self.type == "numeric":
+            allowed_ops = USER_FEATURE_NUMERIC_OPS
+        elif self.type == "datetime_diff":
+            allowed_ops = USER_FEATURE_DATETIME_DIFF_OPS
+        else:  # single
+            allowed_ops = USER_FEATURE_SINGLE_OPS
+        if self.op not in allowed_ops:
+            raise ValueError(
+                f"op must be one of {list(allowed_ops)} for type {self.type!r}, got {self.op!r}"
+            )
+
+        # Two-column types need col_b; single transforms must not carry one.
+        if self.type in ("numeric", "datetime_diff"):
+            if not self.col_b or not self.col_b.strip():
+                raise ValueError(f"col_b is required for type {self.type!r}")
+        elif self.col_b is not None:
+            raise ValueError("col_b must be omitted for a single-column feature")
+
+        if self.type == "datetime_diff" and self.unit is not None:
+            if self.unit not in USER_FEATURE_DATETIME_UNITS:
+                raise ValueError(
+                    f"unit must be one of {list(USER_FEATURE_DATETIME_UNITS)}, got {self.unit!r}"
+                )
+
+        return self
 
 
 class RunConfig(BaseModel):
@@ -107,6 +190,9 @@ class RunConfig(BaseModel):
     feature_engineering: FeatureEngineeringConfig = Field(default_factory=FeatureEngineeringConfig)
     interaction_features: InteractionFeaturesConfig = Field(default_factory=InteractionFeaturesConfig)
     tuning: TuningConfig = Field(default_factory=TuningConfig)
+    # User-defined structured features (UserFeatureBuilder). Empty/omitted → no user features
+    # (unchanged behaviour). Each spec is validated against the engine's allowlists above.
+    user_features: list[UserFeatureSpec] = Field(default_factory=list)
 
     @field_validator("input_file", "target")
     @classmethod
@@ -135,6 +221,12 @@ class RunConfig(BaseModel):
         engine's validation and the API's validation stay one and the same, never duplicated.
         """
         overrides = self.model_dump(exclude={"input_file", "target", "feature_cols"})
+        # The engine reads each user-feature spec as a plain dict and treats a present
+        # ``unit``/``col_b`` of ``None`` as invalid; dump each spec with ``exclude_none`` so
+        # the optional keys drop out and the shape matches the engine's spec exactly.
+        overrides["user_features"] = [
+            spec.model_dump(exclude_none=True) for spec in self.user_features
+        ]
         return build_config(
             self.input_file,
             self.target,

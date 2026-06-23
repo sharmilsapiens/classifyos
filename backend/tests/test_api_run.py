@@ -277,6 +277,107 @@ def test_tuned_run_exposes_best_params(api_client) -> None:
 
 
 # --------------------------------------------------------------------------- #
+# user-defined structured features (request-side; response schema unchanged)   #
+# --------------------------------------------------------------------------- #
+
+# A small, fast run config reused by the user-feature request tests.
+_UF_BASE = {
+    "input_file": "policy_lapse.csv",
+    "target": "will_lapse",
+    "feature_cols": ["age", "annual_premium"],
+    "problem_type": "binary",
+    "class_balance": "none",
+    "interaction_features": {"max_auto_pairs": 0},
+    "algorithms": ["LogisticRegression"],
+}
+
+
+def test_run_with_user_features_creates_columns(api_client) -> None:
+    """A valid ``user_features`` request runs and the created columns surface in the response.
+
+    Two specs exercise distinct shapes: a numeric ``divide`` (two numeric columns) and a
+    ``single`` date-part extraction (the datetime path; the sample data has only one datetime
+    column, so a two-column ``datetime_diff`` isn't expressible here). The created columns must
+    appear in ``result.run.active_features`` — proving the engine built them — and the response
+    schema is UNCHANGED (request-side only, still ``1.1``).
+    """
+    payload = {
+        **_UF_BASE,
+        "user_features": [
+            {"name": "premium_per_sum", "type": "numeric", "op": "divide",
+             "col_a": "annual_premium", "col_b": "sum_assured"},
+            {"name": "start_year", "type": "single", "op": "year",
+             "col_a": "policy_start_date"},
+        ],
+    }
+    resp = api_client.post("/api/v1/run", json=payload)
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "ok"
+    assert body["schema_version"] == "1.1"  # request-side only — no response/version change
+    active = body["result"]["run"]["active_features"]
+    assert "premium_per_sum" in active
+    assert "start_year" in active
+
+
+def test_run_with_unknown_user_feature_op_is_422(api_client) -> None:
+    """An op outside the type's allowlist is rejected at the API boundary (422)."""
+    payload = {
+        **_UF_BASE,
+        "user_features": [
+            {"name": "bad", "type": "numeric", "op": "exponentiate",
+             "col_a": "annual_premium", "col_b": "sum_assured"},
+        ],
+    }
+    assert api_client.post("/api/v1/run", json=payload).status_code == 422
+
+
+def test_run_with_missing_col_b_is_422(api_client) -> None:
+    """A two-column ``numeric`` spec missing ``col_b`` is rejected at the API boundary (422)."""
+    payload = {
+        **_UF_BASE,
+        "user_features": [
+            {"name": "bad", "type": "numeric", "op": "divide", "col_a": "annual_premium"},
+        ],
+    }
+    assert api_client.post("/api/v1/run", json=payload).status_code == 422
+
+
+def test_runconfig_no_user_features_maps_to_empty() -> None:
+    """Omitting ``user_features`` forwards an empty list to the engine — unchanged behaviour."""
+    from api.models import RunConfig
+
+    cfg = RunConfig(input_file="policy_lapse.csv", target="will_lapse", feature_cols=["age"])
+    assert cfg.to_engine_config()["user_features"] == []
+
+
+def test_runconfig_user_feature_spec_drops_none_optionals() -> None:
+    """A single-column spec forwards to the engine WITHOUT ``col_b``/``unit`` (None dropped).
+
+    The engine reads each spec as a plain dict and treats a present ``unit=None`` as invalid,
+    so ``to_engine_config`` must dump with ``exclude_none`` — the optional keys must be absent,
+    not present-as-null.
+    """
+    from api.models import RunConfig
+
+    cfg = RunConfig(
+        input_file="policy_lapse.csv",
+        target="will_lapse",
+        feature_cols=["age"],
+        user_features=[
+            {"name": "start_year", "type": "single", "op": "year", "col_a": "policy_start_date"}
+        ],
+    )
+    spec = cfg.to_engine_config()["user_features"][0]
+    assert spec == {
+        "name": "start_year",
+        "type": "single",
+        "op": "year",
+        "col_a": "policy_start_date",
+    }
+
+
+# --------------------------------------------------------------------------- #
 # JSON-safety unit test                                                        #
 # --------------------------------------------------------------------------- #
 

@@ -34,6 +34,12 @@ shape was **locked** (frozen) so the frontend can be built against a stable cont
   and returns one big, fixed-shape JSON result: run metadata, a per-model scoreboard, a
   sample of the predictions table, confusion matrices, per-class breakdowns, the ranked
   feature impact, the ROC/PR curve points for charts, and the list of downloadable files.
+  **The request can also carry `user_features`** — a list of user-defined *structured* feature
+  specs (e.g. "divide column A by column B", "the year of a date column"). These are picked from
+  a fixed allowlist of operations on existing columns — never a free-text formula — and the API
+  rejects an unknown operation (or a two-column op missing its second column) with a precise 422.
+  The created columns flow into the engineered feature set and show up in the response's
+  `active_features`; this is a **request-side addition only — the response shape is unchanged.**
 - **`POST /explain`** — meant for "why did the model predict this for this one row?" (SHAP).
   **In v1.0 this is an honest placeholder**: the server keeps no trained model between
   requests and there's no model store yet, so it returns a clearly-structured "not available

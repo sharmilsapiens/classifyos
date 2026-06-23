@@ -5,7 +5,16 @@
 > planning/overseer chat stays in sync with the local repo.
 
 **Last updated:** 2026-06-23
-**Updated by:** Claude Code (Phase 14 — **engine-only**: USER-DEFINED structured features.
+**Updated by:** Claude Code (Phase 15 — **API-only, request-side**: exposed `user_features` on the
+`/api/v1/run` REQUEST so the dashboard can send user-defined feature specs. New `UserFeatureSpec`
+Pydantic sub-model + optional `RunConfig.user_features` (default `[]`); a fast-fail 422 allowlist
+check (unknown `type`/`op`, or a two-column type missing `col_b`) mirrors the engine's
+`USER_FEATURE_*` constants (imported, not duplicated); `to_engine_config` dumps each spec with
+`exclude_none` and forwards it to `build_config` (the authoritative validator). **No response
+change and NO version bump** — the created columns are real engineered columns that already
+surface in `result.run.active_features` (verified end-to-end). +5 API tests (**237 backend
+pytest**). plan_tweak 41. UI follow-up is a separate session.)
+**Prior update (same day):** Phase 14 — **engine-only**: USER-DEFINED structured features.
 New leakage-safe `UserFeatureBuilder` (`preprocessing/user_features.py`) + sanctioned
 `user_features` config key (default `[]`, OFF) + sanctioned ModelRunner edit. Users specify
 new columns as STRUCTURED specs — `[col_a] + [op from a fixed allowlist] + [col_b]` or a
@@ -119,6 +128,7 @@ written. Engine complete; ready for Phase 8 (FastAPI layer).
 | 11 | Integration: 7-use-case E2E + multilabel + perf + governance (LAST phase) | ✅ Done (engineering) | **Multilabel wired end-to-end** (delimited target → `MultiLabelBinarizer` → OvR; per-label metrics/curves/report/predictions; honest null for confusion/MCC; additive, binary/multiclass untouched). **All 7 use cases** driven through engine+API (`test_use_case_sweep`, 8 tests) AND browser (Playwright 7-case sweep). **Perf baseline 13.0s** on 12k rows/4 algos (target < 5 min). Tuning sanity (XGB, 25 trials) 65.7s, timeout-bounded. **Governance dossier** `docs/governance_signoff_v1.0.md`. Suites: **202 pytest + 72 vitest + 9 E2E**. plan_tweak 34–37. **Human sign-offs/demo + `v1.0` tag remain.** |
 | 12 | API: expose tuned hyperparameters on `/run` (additive, schema 1.0→1.1) | ✅ Done | New optional `result.tuning` block (per-model `best_params` + tuning settings); first contract version bump, done additively; **zero engine change**; `tuning` null on a non-tuning run. +2 tuning tests; `/explain` keeps its own 1.0. plan_tweak 39. UI panel = separate session |
 | 14 | Engine: USER-DEFINED structured features (`UserFeatureBuilder`) | ✅ Done | **Engine-only.** New leakage-safe `preprocessing/user_features.py` + sanctioned `user_features` config key (default `[]`, OFF → run byte-identical) + sanctioned ModelRunner edit. STRUCTURED specs only (no free-text formula; no `eval`/`exec`, [RISK]-marked): numeric `add/subtract/multiply/divide/ratio`, `datetime_diff` (duration), single `log/abs/bin` + date-parts. Train-only fit/transform (bin edges, divide-fill); invalid specs skipped+logged; name collisions refused; reads RAW post-split frame (so `datetime_diff` works) and injects after FeatureBuilder, before interactions. +24 tests (**232 total**). plan_tweak 40. API/UI separate |
+| 15 | API: accept `user_features` on the `/run` REQUEST | ✅ Done | **API-only, request-side.** New `UserFeatureSpec` Pydantic sub-model + optional `RunConfig.user_features` (default `[]`). Fast-fail 422 allowlist check (unknown `type`/`op`, two-column type missing `col_b`) mirrors the engine's `USER_FEATURE_*` constants (imported). `to_engine_config` dumps each spec with `exclude_none` → `build_config` (authoritative validator). **No response change / no version bump** — created columns surface in `result.run.active_features` (verified). +5 tests (**237 total**). plan_tweak 41. UI follow-up separate |
 | 13 | UI: dedicated **Tuning Results** page (consumes schema 1.1) | ✅ Done | **UI-only.** New `RunTuning` type + optional `tuning` on `RunResult` (mirrors the 1.1 contract exactly); `pages/TuningResults.tsx` reads `result.tuning` from the store (no new network call, no `run_profile.json` scrape) with three states — no-run / tuning-OFF (`null`/`enabled:false` → "not enabled" + Configuration hint) / tuning-ON (settings header strip + one card per tuned model's `best_params` key→value table; untuned run models shown "ran on defaults"; `unknown` values stringified defensively, empty `{}` → "no params returned"). Route `/tuning` + sidebar entry (nav 12 → **13**). Zero engine/API change. +10 vitest (**82 total**); build clean. No plan_tweak deviation |
 
 Status legend: ⬜ Not started · 🔄 In progress · ✅ Done · ⚠️ Blocked

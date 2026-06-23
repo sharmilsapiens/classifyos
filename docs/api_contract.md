@@ -71,9 +71,32 @@ problem there is returned as HTTP 422.
                             "max_auto_pairs": 10, "fill_method": "zero" },
   "tuning": { "enabled": false, "models": [], "metric": "f1_weighted", "cv": true,
               "cv_folds": 3, "n_trials": 30, "timeout_seconds": 600,
-              "search_space_overrides": {} }
+              "search_space_overrides": {} },
+  "user_features": [            // OPTIONAL; [] / omitted → no user features (unchanged)
+    // STRUCTURED specs only — NO free-text formula, nothing is ever eval()'d. Each spec
+    // applies a KNOWN op (from a fixed allowlist) to KNOWN existing column(s). An unknown
+    // type/op, or a two-column type missing col_b, is rejected with HTTP 422 at the boundary.
+    { "name": "premium_per_sum", "type": "numeric",       // numeric | datetime_diff | single
+      "op": "divide",                                     // numeric: add|subtract|multiply|divide|ratio
+      "col_a": "annual_premium", "col_b": "sum_assured" },
+    { "name": "duration_days", "type": "datetime_diff",   // two datetime cols → numeric duration
+      "op": "subtract", "col_a": "end_date", "col_b": "start_date",
+      "unit": "days" },                                   // seconds|minutes|hours|days (default days)
+    { "name": "start_year", "type": "single",             // one column; col_b must be omitted
+      "op": "year",                                       // single: log|abs|bin | year|month|day|dayofweek|hour
+      "col_a": "policy_start_date" }
+  ]
 }
 ```
+
+**`user_features` (request-side only; response schema UNCHANGED).** The created columns are
+real engineered columns, so they already surface in the existing `result.run.active_features`
+list (and, when ranked, `result.feature_impact`) — there is no new response field and no
+version bump. The API performs a fast-fail allowlist check (unknown `type`/`op`, or a
+two-column type without `col_b` → 422), mirroring the `USER_FEATURE_*` allowlists in the
+engine's `config.py`; the engine's `build_config` remains the authoritative validator.
+Column existence/type are validated by the engine at fit time (a spec that references a
+missing/wrong-typed column is skipped and logged — it never aborts the run).
 
 ### Response — LOCKED envelope (`schema_version` `1.0`)
 
