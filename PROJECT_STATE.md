@@ -5,9 +5,13 @@
 > planning/overseer chat stays in sync with the local repo.
 
 **Last updated:** 2026-06-23
-**Updated by:** Claude Code (Phase 7B.2 — expanded three Optuna search spaces from the
+**Updated by:** Claude Code (Phase 12 — additive API change: surfaced the per-model tuned
+hyperparameters on the `/api/v1/run` response as a new optional `result.tuning` block; first
+version bump of the locked contract `1.0` → `1.1`, done additively. Zero engine change; the UI
+panel that consumes it is a separate session. plan_tweak 39)
+**Prior update (same day):** Phase 7B.2 — expanded three Optuna search spaces from the
 read-only tuning audit: LightGBM `max_depth`, XGBoost `gamma`, SVM real+conditional `kernel`.
-Engine refinement of the existing tuning layer; no scope deviation. 206 backend pytest green)
+Engine refinement of the existing tuning layer; no scope deviation. 206 backend pytest green
 
 **Prior update:** 2026-06-21 — Phase 11 (FINAL): multilabel wired end-to-end (Product
 Recommendation), 7-use-case E2E sweep (engine+API+browser), 12k-row performance baseline,
@@ -95,6 +99,7 @@ written. Engine complete; ready for Phase 8 (FastAPI layer).
 | 9 | React dashboard (12 pages) | ✅ Done | **9a** (foundation: Option A design + Recharts; shadcn/ui; typed client vs LOCKED contract; app shell + nav; live round-trip; 13 FE tests). **9b** (6 result pages + Overview upgrade; binary+multiclass vs fixtures; 46 FE tests). **9c** (Explainability v2.0-ready stub wired to `/explain`; Setup Guide + Risk Register authored from the real docs; **Overview/Pipeline merged → 12 nav items**, `/pipeline` redirects to `/`; polish pass; 55 FE tests). Build clean. |
 | 10 | Testing: browser E2E + real CORS + render gaps + suite audit | ✅ Done | Playwright (1.61.0) two-server webServer; happy-path E2E parametrized (binary+multiclass run live → rendered charts/heatmap/PNG); real cross-origin CORS test (GET + preflight OPTIONS); `/explain` live-path; +7 vitest gap tests. Suites green: **184 backend pytest + 62 frontend vitest + 4 Playwright E2E**. Tests only — no behaviour change, no deviation |
 | 11 | Integration: 7-use-case E2E + multilabel + perf + governance (LAST phase) | ✅ Done (engineering) | **Multilabel wired end-to-end** (delimited target → `MultiLabelBinarizer` → OvR; per-label metrics/curves/report/predictions; honest null for confusion/MCC; additive, binary/multiclass untouched). **All 7 use cases** driven through engine+API (`test_use_case_sweep`, 8 tests) AND browser (Playwright 7-case sweep). **Perf baseline 13.0s** on 12k rows/4 algos (target < 5 min). Tuning sanity (XGB, 25 trials) 65.7s, timeout-bounded. **Governance dossier** `docs/governance_signoff_v1.0.md`. Suites: **202 pytest + 72 vitest + 9 E2E**. plan_tweak 34–37. **Human sign-offs/demo + `v1.0` tag remain.** |
+| 12 | API: expose tuned hyperparameters on `/run` (additive, schema 1.0→1.1) | ✅ Done | New optional `result.tuning` block (per-model `best_params` + tuning settings); first contract version bump, done additively; **zero engine change**; `tuning` null on a non-tuning run. +2 tuning tests; `/explain` keeps its own 1.0. plan_tweak 39. UI panel = separate session |
 
 Status legend: ⬜ Not started · 🔄 In progress · ✅ Done · ⚠️ Blocked
 
@@ -953,6 +958,46 @@ frontend application code was changed; no bug found; no deviation (plan_tweak un
   per-model tuned-parameter enumeration, so the additions don't make it inaccurate.
 - plan_tweak.md: row 38 added — recorded as a **refinement of existing tuning, no scope deviation**.
 - Prompt archived to `prompts/backend_phases/phase_07B2_search_space_expansion.md` (verbatim).
+
+## Completed this session (Phase 12 — 2026-06-23) — tuned hyperparameters on /run (schema 1.0 → 1.1)
+
+> **First version bump of the LOCKED `/api/v1/run` contract, done ADDITIVELY.** API-only —
+> **zero engine change** (the runner already produces the data). Driven by the read-only
+> `docs/tuned_params_path_audit.md` (Option 1, Section C/D). Prompt 1 of 2; the UI panel that
+> consumes the new field is a separate later session.
+
+- **The gap closed:** the engine produces the per-model tuned hyperparameters (in
+  `ModelRunner.tuned_params_` and the `run_profile.json` `tuning` block) but the locked `1.0`
+  response omitted them, so the dashboard could only see them by downloading the artifact. Now
+  they ride the typed, versioned `/run` envelope.
+- **`backend/api/models.py`** — added a `RunTuning` response sub-model (`enabled`, `metric`,
+  `cv`, `cv_folds`, `n_trials`, `timeout_seconds`, `tuned_models: list[str]`, `best_params:
+  dict[str, dict[str, Any]]` — heterogeneous values), added `tuning: RunTuning | None = None`
+  to `RunResult`, and bumped `RunResponse.schema_version` default `"1.0"` → `"1.1"`. The block
+  is fully optional, so a non-tuning run is unchanged.
+- **`backend/api/routes/run.py`** — new `_tuning(runner)` helper copies
+  `runner.run_profile_["tuning"]` into the result; returns `None` when tuning was OFF **or**
+  produced no `best_params`, so the field is null on a normal run. Wired into `_build_result`;
+  no existing reshaper output altered. Pure plumbing — no ML.
+- **`docs/api_contract.md`** — added the `result.tuning` block to the response section, a `1.1`
+  additive header note + footer line, and a contract note (null when OFF; copied from the engine
+  profile). All `1.0` field descriptions left intact.
+- **Tests (additive + the necessary `1.1`/key updates):** `test_api_run.py` — new
+  `test_tuned_run_exposes_best_params` (tiny budget: XGBoost, `n_trials=3`, `cv_folds=2` →
+  `result.tuning.enabled=True`, `XGBoost` in `tuned_models`, non-empty JSON-serializable
+  `best_params`) and `test_non_tuning_run_has_null_tuning`; `RESULT_KEYS` gained `"tuning"` and
+  the envelope assertion now expects `"1.1"`. `test_use_case_sweep.py` schema_version assertion
+  updated `"1.0"` → `"1.1"`. `/explain` keeps its own `1.0` envelope (separate endpoint, out of
+  scope). **Touched API + sweep suites green** (`test_api_run` 18, other API files 16, sweep 8).
+- **Hallucination check ✅** — Pydantic v2 (`BaseModel` / `Field(default_factory=…)` /
+  `dict[str, dict[str, Any]]`) verified against the installed pydantic in the venv; the
+  `RunTuning` model validates and serializes the real `run_profile` `tuning` dict.
+- **Frontend untouched** (per the prompt) — relied on the parser's version-tolerance
+  (`parse.ts` checks `schema_version` is a string and validates only known keys), so `1.1` and
+  the extra optional key do not break the current UI.
+- plan_tweak.md: row 39 added (first contract version bump, additive). api_short_desc.md updated
+  with the `1.1` / `result.tuning` note. Prompt archived to
+  `prompts/api_phases/phase_12_tuning_in_response.md` (verbatim).
 
 ## Completed this session (Doc-update enforcement hook — 2026-06-15) — ⚠️ REMOVED 2026-06-16
 

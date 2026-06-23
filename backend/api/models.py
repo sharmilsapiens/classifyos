@@ -247,6 +247,25 @@ class ArtifactEntry(BaseModel):
     size_bytes: int
 
 
+class RunTuning(BaseModel):
+    """``result.tuning`` — per-model tuned hyperparameters (NEW in schema 1.1).
+
+    Additive in ``schema_version`` 1.1: mirrors the ``tuning`` block of ``run_profile.json``
+    one-for-one. The whole block is optional — ``RunResult.tuning`` is ``None`` when tuning was
+    OFF (or produced no tuned params), so a non-tuning run is byte-identical to 1.0.
+    ``best_params`` values are heterogeneous (float/int/str/bool), hence ``dict[str, Any]``.
+    """
+
+    enabled: bool
+    metric: str | None = None
+    cv: bool | None = None
+    cv_folds: int | None = None
+    n_trials: int | None = None
+    timeout_seconds: float | None = None
+    tuned_models: list[str] = Field(default_factory=list)
+    best_params: dict[str, dict[str, Any]] = Field(default_factory=dict)
+
+
 class RunResult(BaseModel):
     """``result`` — the whole reshaped run output."""
 
@@ -260,12 +279,16 @@ class RunResult(BaseModel):
     feature_impact: list[FeatureImpactRow]
     curves: dict[str, Any]
     artifacts: list[ArtifactEntry]
+    # NEW in schema 1.1 (additive, optional): the per-model tuned hyperparameters. ``None``
+    # when tuning was OFF / produced nothing, so existing 1.0 fields are untouched.
+    tuning: RunTuning | None = None
 
 
 class RunResponse(BaseModel):
     """Top-level envelope for ``POST /api/v1/run`` (the forward-compat seam)."""
 
     status: str = "ok"  # "ok" | "error"
-    schema_version: str = "1.0"
+    # 1.1 (additive): adds the optional ``result.tuning`` block; all 1.0 fields are unchanged.
+    schema_version: str = "1.1"
     result: RunResult | None = None
     error: str | None = None

@@ -23,6 +23,7 @@ RESULT_KEYS = {
     "feature_impact",
     "curves",
     "artifacts",
+    "tuning",  # NEW in schema 1.1 (additive); null on a non-tuning run
 }
 
 RUN_KEYS = {
@@ -86,8 +87,13 @@ def test_binary_run_envelope(binary_run_response) -> None:
     assert binary_run_response.status_code == 200
     body = binary_run_response.json()
     assert body["status"] == "ok"
-    assert body["schema_version"] == "1.0"
+    assert body["schema_version"] == "1.1"
     assert RESULT_KEYS == set(body["result"].keys())
+
+
+def test_non_tuning_run_has_null_tuning(binary_run_response) -> None:
+    """A run with tuning OFF (the default) carries ``result.tuning`` as null (1.1 additive)."""
+    assert binary_run_response.json()["result"]["tuning"] is None
 
 
 def test_binary_run_meta_block(binary_run_response) -> None:
@@ -226,6 +232,48 @@ def test_multilabel_run_schema(multilabel_run_response) -> None:
 
     # strict-JSON round-trip (no NaN/Inf leaked).
     assert json.dumps(body, allow_nan=False)
+
+
+# --------------------------------------------------------------------------- #
+# tuned run — result.tuning is populated (schema 1.1, additive)                #
+# --------------------------------------------------------------------------- #
+
+
+def test_tuned_run_exposes_best_params(api_client) -> None:
+    """A tuned run surfaces ``result.tuning`` with the model + its non-empty best_params.
+
+    Tiny Optuna budget (n_trials=3, cv_folds=2) on ONE fast model (XGBoost) keeps this cheap
+    while exercising the real engine → run_profile → API path end to end.
+    """
+    payload = {
+        "input_file": "policy_lapse.csv",
+        "target": "will_lapse",
+        "feature_cols": ["age", "annual_premium"],
+        "problem_type": "binary",
+        "class_balance": "none",
+        "interaction_features": {"max_auto_pairs": 0},
+        "algorithms": ["XGBoost"],
+        "tuning": {
+            "enabled": True,
+            "models": ["XGBoost"],
+            "n_trials": 3,
+            "cv": True,
+            "cv_folds": 2,
+        },
+    }
+    resp = api_client.post("/api/v1/run", json=payload)
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["schema_version"] == "1.1"
+
+    tuning = body["result"]["tuning"]
+    assert tuning is not None
+    assert tuning["enabled"] is True
+    assert "XGBoost" in tuning["tuned_models"]
+    best = tuning["best_params"]["XGBoost"]
+    assert best  # non-empty per-model chosen hyperparameters
+    # The whole tuning block must be JSON-serializable (no NaN/Inf/numpy leaked).
+    assert json.dumps(tuning, allow_nan=False)
 
 
 # --------------------------------------------------------------------------- #

@@ -4,6 +4,13 @@
 > The Phase 9 React frontend is generated against it; it must not change silently. Additive
 > changes bump `schema_version` (`1.0` → `1.1`); `1.0` is never mutated in place.
 > See CLAUDE.md → "API contract is locked after Phase 8."
+>
+> **`1.1` (additive, current default).** Adds one new **optional** block — `result.tuning` —
+> carrying the per-model tuned hyperparameters when Optuna tuning was on. It is `null`/absent
+> when tuning was OFF (or produced no tuned params), so a non-tuning run is byte-identical to
+> `1.0`. No existing `1.0` field was renamed, retyped, or removed. The response envelope now
+> reports `"schema_version": "1.1"`. Old clients ignore the new field; this is the first
+> version bump of the locked contract.
 
 ## Conventions
 
@@ -126,7 +133,19 @@ problem there is returned as HTTP 422.
     },
     "artifacts": [                 // the 11 output files; PNGs fetched on demand
       {"name": "plot1_confusion_matrix.png", "suffix": ".png", "size_bytes": 0}
-    ]
+    ],
+    "tuning": {                    // NEW in 1.1 (additive); null/absent when tuning was OFF
+      "enabled": true,
+      "metric": "f1_weighted",
+      "cv": true,
+      "cv_folds": 3,
+      "n_trials": 30,
+      "timeout_seconds": 600,      // may be null (the per-model cap opt-out)
+      "tuned_models": ["XGBoost"], // models that produced tuned params
+      "best_params": {             // per-model chosen hyperparameters (heterogeneous values)
+        "XGBoost": {"learning_rate": 0.07, "max_depth": 6, "gamma": 1.2}
+      }
+    }
   },
   "error": null                    // top-level string when status == "error"
 }
@@ -147,6 +166,11 @@ problem there is returned as HTTP 422.
 - Numeric values are JSON-safe: `NaN`/`Infinity`/undefined metrics are `null`.
 - On `status: "error"`, `result` is `null` and a top-level `error` string is present (HTTP 400
   for known input failures such as a missing file; config-validation failures are HTTP 422).
+- **`result.tuning` (1.1, additive, optional)** carries the per-model tuned hyperparameters and
+  the tuning settings that produced them. It is `null`/absent when tuning was OFF (or every
+  study produced nothing). `best_params` is `{model: {param: value}}` with heterogeneous values
+  (float/int/str/bool); `tuned_models` lists the models that yielded tuned params. The block is
+  copied verbatim from the engine's `run_profile.json` `tuning` block — the API adds no ML.
 
 ### Execution model (limitation)
 
@@ -158,3 +182,4 @@ response. A long run can exceed a reverse-proxy/gateway timeout. A background-jo
 ---
 
 _Locked at Phase 8 sign-off. Any change to `schema_version: "1.0"` must be additive._
+_`1.1` (additive): added the optional `result.tuning` block; all `1.0` fields are unchanged._

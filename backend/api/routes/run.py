@@ -102,6 +102,7 @@ def _build_result(runner: ModelRunner, storage: StorageAdapter) -> dict[str, Any
         "feature_impact": _feature_impact(runner),
         "curves": _curves(runner),
         "artifacts": collect_artifacts(storage),
+        "tuning": _tuning(runner),
     }
 
 
@@ -239,6 +240,23 @@ def _feature_impact(runner: ModelRunner) -> list[dict[str, Any]]:
     if fi is None or not isinstance(fi, pd.DataFrame) or fi.empty:
         return []
     return fi.to_dict(orient="records")
+
+
+def _tuning(runner: ModelRunner) -> dict[str, Any] | None:
+    """``result.tuning`` — per-model tuned hyperparameters (NEW in schema 1.1, additive).
+
+    The runner already builds this block in ``run_profile.json`` (``tuning`` → ``enabled``,
+    the tuning settings, ``tuned_models`` and ``best_params``); we simply copy it out. Returns
+    ``None`` when tuning was OFF or produced no tuned params, so the field is null and a
+    non-tuning run is unchanged from schema 1.0. No ML here — pure plumbing.
+    """
+    tuning = (runner.run_profile_ or {}).get("tuning")
+    if not tuning or not tuning.get("enabled"):
+        return None
+    # Enabled but every study failed / returned nothing → no params to show; treat as null.
+    if not tuning.get("best_params"):
+        return None
+    return tuning
 
 
 def _curves(runner: ModelRunner) -> dict[str, Any]:

@@ -44,12 +44,21 @@ shape was **locked** (frozen) so the frontend can be built against a stable cont
 
 ## The locked `/run` result (the contract)
 
-The `/run` response is **frozen** at version `1.0` (see `docs/api_contract.md`). Key points
+The `/run` response is **frozen** (see `docs/api_contract.md`), now at version `1.1`. Key points
 the frontend relies on: models come back as a **list** (so a failed model is shown, not
 hidden); the predictions table is **sampled** for display (the full table is a downloadable
 CSV); the confusion matrices and curves are always computed on the **full** test set; charts
 are referenced by filename only; and every number is JSON-safe (undefined values become
 `null`, never broken JSON). Future changes must be additive and bump the version number.
+
+**`1.1` (additive) — tuned hyperparameters.** The response gained one new **optional** block,
+`result.tuning`, carrying the per-model tuned hyperparameters when Optuna tuning was on: the
+tuning settings (`metric`/`cv`/`cv_folds`/`n_trials`/`timeout_seconds`), the list of
+`tuned_models`, and `best_params` (`{model: {param: value}}`). It is `null`/absent when tuning
+was OFF (or produced nothing), so a non-tuning run is byte-identical to `1.0` — every existing
+field is untouched. The block is copied straight from the engine's `run_profile.json` `tuning`
+block; the API adds no ML. This is the **first version bump of the locked contract**, done
+additively (`schema_version` now reports `"1.1"`).
 
 ## Supporting pieces
 
