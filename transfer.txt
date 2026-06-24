@@ -1,0 +1,51 @@
+# ClassifyOS — Transfer / New-Machine Setup
+
+Transferred via OneDrive folder copy (whole C:\Projects\classifyos). Git history,
+source, docs, and backend\.env are all included. Dependencies were NOT copied and
+must be reinstalled (see below).
+
+Claude: read this file, then walk me through / execute the setup steps.
+
+## What was EXCLUDED from the copy (regenerable — must reinstall)
+  - frontend\node_modules\        (npm install recreates)
+  - backend\.venv\                (recreate venv + pip install)
+  - all __pycache__\, .pytest_cache\, frontend\dist\, node_modules\.vite\  (caches/build)
+
+## Prerequisites to install on the new laptop
+  - Python 3.11.x   (3.11.0 on the old machine)
+  - Node.js 24.x LTS (24.16.0 on the old machine)
+  - Git 2.5x
+  Then set git identity:
+    git config --global user.name  "Sharmil"
+    git config --global user.email "sharmil.basa@sapiens.com"
+
+## Setup steps
+1. Backend
+     cd backend
+     python -m venv .venv
+     .venv\Scripts\activate
+     pip install -r requirements.txt
+
+2. Frontend
+     cd frontend
+     npm install
+
+3. Verify backend\.env
+   It came across with the folder copy, BUT its DATA_DIR / OUTPUT_DIR are absolute
+   paths that point OUTSIDE the repo (old machine: e.g. C:/Projects/classifyos_data/...).
+   Those data folders were NOT part of this copy. Fix one of:
+     a) copy the old DATA_DIR/OUTPUT_DIR folders to the new machine and update .env, OR
+     b) point DATA_DIR/OUTPUT_DIR at new local folders and seed DATA_DIR from
+        backend\data\samples\ (committed sample CSVs).
+   (.env is gitignored, so it does not travel via git — it only arrived because we
+    copied the working folder directly.)
+
+## Smoke test
+     cd backend
+     .venv\Scripts\activate
+     pytest tests\ -v
+     uvicorn api.main:app --reload --port 8000
+     cd ..\frontend
+     npm run dev
+     # ML engine standalone:
+     python -m classifyos.cli --file policy_lapse.csv --target will_lapse --inspect
