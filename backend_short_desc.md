@@ -142,6 +142,23 @@ start_date` or `premium ÷ sum_assured`) without writing or running any code.
   interaction candidates and are present for balancing and training. Engine layer only — the
   API and UI that let users define these are separate follow-up sessions. (24 new tests.)
 
+## ⚠ Temporary change — interaction features unwired (2026-06-25)
+**In one line:** By request, the "interaction features" stage (Phase 4's column-combining step)
+was **temporarily switched off** in training and **hidden from the dashboard** — not deleted, and
+reversible at any time.
+- **Engine:** the conductor (ModelRunner) now forces interaction features OFF for every run, no
+  matter what the request asks for, so no `a_x_b`/`a_minus_b` combined columns are built and the
+  interaction summary chart (`plot6`) is no longer produced. The API still reports an
+  `interaction_cols` list — it's just empty — so nothing downstream breaks.
+- **Dashboard:** the Interaction-features controls on the Configuration page, the sidebar link,
+  and the Interaction Features result page are hidden (the page's code is kept in place, just
+  unwired); visiting `/interactions` redirects to the home page.
+- **Note:** the ordinary ratio features from Phase 4 (`a_div_b`) are a *separate* feature and stay
+  ON; because the API tags interaction columns by name pattern, such a ratio column can still show
+  up in `interaction_cols` — harmless, and unchanged by this work.
+- **To restore:** see PROJECT_STATE.md / plan_tweak.md row 42 — revert the one engine line, the
+  plot6 call, the three UI comment blocks, and the matching test edits.
+
 ---
 
 ## How to read this project

@@ -10,7 +10,7 @@ import {
   BarChart3,
   BookOpen,
   ClipboardList,
-  Combine,
+  // Combine,  // unused while the Interaction Features nav entry is hidden
   Grid3x3,
   LayoutDashboard,
   LineChart,
@@ -36,7 +36,8 @@ export const NAV_ITEMS: NavItem[] = [
   { path: "/configure", label: "Configuration", icon: Settings2, group: "Workspace" },
 
   { path: "/feature-impact", label: "Feature Impact", icon: BarChart3, group: "Results" },
-  { path: "/interactions", label: "Interaction Features", icon: Combine, group: "Results" },
+  // TEMPORARILY HIDDEN — interaction features unwired from the backend.
+  // { path: "/interactions", label: "Interaction Features", icon: Combine, group: "Results" },
   { path: "/confusion", label: "Confusion Matrix", icon: Grid3x3, group: "Results" },
   { path: "/class-report", label: "Class Report", icon: ClipboardList, group: "Results" },
   { path: "/curves", label: "ROC / PR Curves", icon: LineChart, group: "Results" },

@@ -258,15 +258,23 @@ class ModelRunner:
             test_fb = test_fb.join(test_uf[ufb.created_features_])
 
         # 6. pairwise interactions (+ plot6 on the engineered TRAIN frame)
+        # [TEMP — interaction features unwired] Interaction features are temporarily
+        # force-disabled here regardless of the incoming request config. The builder
+        # short-circuits when disabled (no pairs discovered, transform returns a copy),
+        # so result.run.interaction_cols comes back empty and no plot6 is written —
+        # the LOCKED schema 1.0 is unchanged (interaction_cols is just []).
+        # To re-enable: delete the next line and restore the plot6 call below.
+        cfg["interaction_features"] = {**cfg.get("interaction_features", {}), "enabled": False}
         ib = InteractionFeatureBuilder(cfg)
         train_fin = ib.fit_transform(train_fb, target)
         test_fin = ib.transform(test_fb)
-        try:
-            plot_interaction_summary(
-                train_fin, target, ib.interaction_cols_, self.storage
-            )
-        except Exception:  # noqa: BLE001 — a plot must never abort a run
-            logger.exception("ModelRunner: plot6 (interaction summary) failed")
+        if ib.enabled_ and ib.interaction_cols_:
+            try:
+                plot_interaction_summary(
+                    train_fin, target, ib.interaction_cols_, self.storage
+                )
+            except Exception:  # noqa: BLE001 — a plot must never abort a run
+                logger.exception("ModelRunner: plot6 (interaction summary) failed")
 
         X_train = train_fin.drop(columns=[target])
         y_train = train_fin[target]

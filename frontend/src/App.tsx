@@ -11,7 +11,8 @@ import Overview from "@/pages/Overview"
 import UploadPage from "@/pages/Upload"
 import Configure from "@/pages/Configure"
 import FeatureImpact from "@/pages/FeatureImpact"
-import Interactions from "@/pages/Interactions"
+// TEMPORARILY HIDDEN — interaction features unwired from the backend.
+// import Interactions from "@/pages/Interactions"
 import ConfusionMatrix from "@/pages/ConfusionMatrix"
 import ClassReport from "@/pages/ClassReport"
 import Curves from "@/pages/Curves"
@@ -35,7 +36,9 @@ function App() {
 
         {/* Result pages (9b) */}
         <Route path="/feature-impact" element={<FeatureImpact />} />
-        <Route path="/interactions" element={<Interactions />} />
+        {/* TEMPORARILY HIDDEN — interaction features unwired. Redirect stale links. */}
+        {/* <Route path="/interactions" element={<Interactions />} /> */}
+        <Route path="/interactions" element={<Navigate to="/" replace />} />
         <Route path="/confusion" element={<ConfusionMatrix />} />
         <Route path="/class-report" element={<ClassReport />} />
         <Route path="/curves" element={<Curves />} />

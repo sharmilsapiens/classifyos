@@ -4,7 +4,26 @@
 > A copy is uploaded to the ClassifyOS Claude Project knowledge after each update so the
 > planning/overseer chat stays in sync with the local repo.
 
-**Last updated:** 2026-06-23
+**Last updated:** 2026-06-25
+**Updated by:** Claude Code (**TEMPORARY — interaction features unwired**. By request, Section 7B
+interaction features were temporarily removed from training and hidden from the UI (NOT deleted —
+fully reversible). **Engine:** `ModelRunner._engineer` now force-disables `interaction_features`
+on the deep-copied run config regardless of the incoming request, so `InteractionFeatureBuilder`
+short-circuits (no pairs, transform returns a copy) and `plot6_interaction_summary.png` is no
+longer written; `result.run.interaction_cols` comes back empty — **the LOCKED schema 1.0/1.1 is
+unchanged** (the field still exists, just `[]`). **UI:** the Interaction-features config card
+(`Configure.tsx`), the sidebar nav entry (`nav.ts`), and the `/interactions` route+import
+(`App.tsx`) are commented out; `/interactions` now redirects to `/`. The `Interactions.tsx` page
+and `results.ts` decoders are left intact (unreferenced) for trivial restore. **Tests updated**
+to match: `test_runner` (no `_x_`/`_minus_` interaction cols; plot6 absent), `test_use_case_sweep`
+(plot6 dropped from the expected set, now 10). All 48 affected backend tests green; frontend
+`tsc -b` clean. plan_tweak 42. **Caveat:** the API's `interaction_cols` heuristic still matches
+the `_div_` marker, which is ALSO used by the Section 7 `FeatureBuilder` ratio features — so when
+`feature_engineering.ratios` is on, a ratio column like `a_div_b` can still surface in
+`interaction_cols`; this is pre-existing marker imprecision, unchanged by this work, and harmless
+now that the Interactions page is hidden. **To re-enable:** delete the force-disable line in
+`_engineer`, restore the plot6 call + the three UI comment blocks, and revert the test edits.)
+**Prior update:** 2026-06-23
 **Updated by:** Claude Code (Phase 16 — **UI-only**: a **feature-builder panel** on the
 Configuration page where analysts build the `user_features` specs the API accepted in Phase 15 —
 entirely from **dropdowns**, never a free-text formula (the engine's no-eval safety contract carried

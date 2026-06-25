@@ -33,7 +33,7 @@ const MISSING = ["median", "mean", "mode", "ffill", "drop"] as const
 const ENCODING = ["onehot", "label", "ordinal", "target"] as const
 const SCALING = ["standard", "minmax", "robust", "none"] as const
 const OUTLIER = ["iqr", "zscore", "none"] as const
-const FILL = ["zero", "median", "nan"] as const
+// const FILL = ["zero", "median", "nan"] as const  // unused while interactions card is hidden
 const TUNING_METRICS = [
   "f1_weighted", "f1_macro", "accuracy", "precision_weighted", "recall_weighted",
   "roc_auc", "pr_auc", "mcc", "log_loss",
@@ -287,8 +287,9 @@ export default function Configure() {
           </CardContent>
         </Card>
 
-        {/* Interactions */}
-        <Card>
+        {/* Interactions — TEMPORARILY HIDDEN (interaction features unwired from the
+            backend). Restore this card to re-expose the controls. */}
+        {/* <Card>
           <CardHeader><CardTitle>Interaction features</CardTitle></CardHeader>
           <CardContent className="space-y-3">
             <div className="flex flex-wrap gap-6">
@@ -310,7 +311,7 @@ export default function Configure() {
               </Field>
             </div>
           </CardContent>
-        </Card>
+        </Card> */}
 
         {/* User-defined features */}
         <FeatureBuilderPanel

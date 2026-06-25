@@ -88,8 +88,14 @@ def test_runner_end_to_end_binary(storage) -> None:
     per_model = runner.predictions_df_.groupby("model").size()
     assert (per_model == n_test).all()
 
-    # active features include the engineered interaction columns
-    assert any("_x_" in c or "_div_" in c for c in runner.active_features_)
+    # [TEMP — interaction features unwired] Interactions are force-disabled in the
+    # runner, so NO interaction columns should appear in active_features_. We check the
+    # interaction-EXCLUSIVE markers only ("_x_", "_minus_"); "_div_" is shared with the
+    # Section 7 FeatureBuilder ratio features (`{num}_div_{denom}`), which remain on.
+    # Restore the original assertion (any "_x_"/"_div_" present) when re-enabling.
+    assert not any(
+        "_x_" in c or "_minus_" in c for c in runner.active_features_
+    )
 
 
 def test_runner_multiclass(storage) -> None:
@@ -169,10 +175,13 @@ def test_all_output_files(storage, output_dir) -> None:
         PLOT3_KEY,
         PLOT4_KEY,
         PLOT5_KEY,
-        PLOT6_KEY,
+        # PLOT6_KEY,  # [TEMP — interaction features unwired] plot6 not written; restore on re-enable
     ]
     for key in expected:
         assert storage.exists(key), f"missing output: {key}"
+
+    # [TEMP — interaction features unwired] plot6 must NOT be produced while disabled.
+    assert not storage.exists(PLOT6_KEY)
 
     # run_profile.json is valid JSON with the documented keys (read from OUTPUT_DIR)
     with open(output_dir / RUN_PROFILE_KEY, encoding="utf-8") as fh:
