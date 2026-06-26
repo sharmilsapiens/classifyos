@@ -88,13 +88,14 @@ def test_runner_end_to_end_binary(storage) -> None:
     per_model = runner.predictions_df_.groupby("model").size()
     assert (per_model == n_test).all()
 
-    # [TEMP — interaction features unwired] Interactions are force-disabled in the
-    # runner, so NO interaction columns should appear in active_features_. We check the
-    # interaction-EXCLUSIVE markers only ("_x_", "_minus_"); "_div_" is shared with the
-    # Section 7 FeatureBuilder ratio features (`{num}_div_{denom}`), which remain on.
-    # Restore the original assertion (any "_x_"/"_div_" present) when re-enabling.
+    # [TEMP — interaction AND feature-engineering features unwired] Both Section 7B
+    # interactions and Section 7 derived features (ratio/bin/poly) are force-disabled in
+    # the runner, so none of their markers should appear in active_features_. "_div_" is
+    # shared by both (Section 7 ratios `{num}_div_{denom}` and interaction ratios), and
+    # with Section 7 off it no longer appears either. Restore the original assertion (any
+    # "_x_"/"_div_" present) when re-enabling.
     assert not any(
-        "_x_" in c or "_minus_" in c for c in runner.active_features_
+        "_x_" in c or "_minus_" in c or "_div_" in c for c in runner.active_features_
     )
 
 

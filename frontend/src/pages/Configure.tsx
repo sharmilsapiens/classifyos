@@ -267,8 +267,12 @@ export default function Configure() {
           </CardContent>
         </Card>
 
-        {/* Feature engineering */}
-        <Card>
+        {/* Feature engineering — TEMPORARILY HIDDEN (Section 7 derived features unwired
+            from the backend). Restore this card to re-expose the controls. The engine
+            force-disables feature_engineering regardless, so leaving the form defaults
+            (fe_enabled: true, etc.) is harmless — the payload still carries them and the
+            runner overrides. */}
+        {/* <Card>
           <CardHeader><CardTitle>Feature engineering</CardTitle></CardHeader>
           <CardContent className="space-y-3">
             <Switch id="fe_enabled" label="Enabled" checked={form.fe_enabled}
@@ -286,7 +290,7 @@ export default function Configure() {
                 onChange={(e) => updateForm({ fe_max_poly_features: Number(e.target.value) })} />
             </Field>
           </CardContent>
-        </Card>
+        </Card> */}
 
         {/* Interactions — TEMPORARILY HIDDEN (interaction features unwired from the
             backend). Restore this card to re-expose the controls. */}

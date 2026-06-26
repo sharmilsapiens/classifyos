@@ -67,3 +67,50 @@ Or restore manually:
    and `test_use_case_sweep.py` (expected artifact count back to 11).
 4. Run `pytest tests/ -v` (backend) and `tsc -b` / `npm run build` (frontend) to confirm green.
 5. Update `PROJECT_STATE.md` and this file: mark entry #1 **Restored** with the date.
+
+---
+
+## 2. Section 7 — Feature Engineering (derived features)
+
+**One-line:** Temporarily removed Section 7 derived features (ratios / binning / polynomial)
+from training and hid the "Feature engineering" config card; nothing deleted. The separate
+user-defined Feature Builder panel is **unaffected** and stays visible.
+
+**Status:** Unwired 2026-06-26 · still unwired.
+
+### Short description
+
+By owner request (pre-demo), Section 7 `FeatureBuilder` derived features were taken out of the
+active pipeline:
+
+- **Engine** (`backend/classifyos/runner.py`, `ModelRunner._engineer`): a single line force-disables
+  `feature_engineering` on the deep-copied run config regardless of what the incoming request asks
+  (mirroring the Section 7B interaction unwiring in the same method). `FeatureBuilder` then
+  short-circuits — `fit` builds nothing (`created_features_` stays empty) and `transform` returns a
+  copy — so no `_sq` / `_div_` / `_bin` columns enter `active_features`. Section 7 writes **no plot
+  or CSV** of its own, so no artifact disappears. The LOCKED schema is **unchanged** — `active_features`
+  still exists, it just contains fewer columns.
+- **UI** (commented out, files/fields left intact for a trivial restore):
+  - `frontend/src/pages/Configure.tsx` — the "Feature engineering" config `<Card>` (the `fe_enabled`
+    / ratios / binning / polynomial switches + max-poly field). The `fe_*` fields remain in
+    `ConfigFormState`/`buildPayload` and the form defaults are unchanged (`fe_enabled: true`), so the
+    payload still carries them and the engine overrides — exactly the Section 7B pattern.
+- **Results:** nothing visible to change. The only result field touched is `active_features`, whose
+  sole frontend consumer is the already-hidden `Interactions.tsx`. The `"Feature engineering"` entry
+  in `Overview.tsx`'s `PIPELINE_STAGES` run-progress list is **left as-is** (consistent with entry #1,
+  which left `"Interaction features"` in the same list — a transient label, not a control).
+- **Tests:** `test_runner.py`'s end-to-end assertion was tightened to also forbid `_div_` markers (no
+  ratio columns now). `test_features.py` exercises `FeatureBuilder` **directly** (not via the runner
+  force-disable) so it stays green and untouched. No other test asserts engineered columns via the runner.
+
+### How to wire back
+
+1. **Engine** — in `backend/classifyos/runner.py::ModelRunner._engineer`, delete the force-disable line:
+   ```python
+   cfg["feature_engineering"] = {**cfg.get("feature_engineering", {}), "enabled": False}
+   ```
+2. **UI** — uncomment the "Feature engineering" `<Card>` in `Configure.tsx`.
+3. **Tests** — revert the `test_runner.py` assertion to forbid only `"_x_"`/`"_minus_"` (drop the
+   `"_div_"` clause) so Section 7 ratio columns are allowed again.
+4. Run `pytest tests/ -v` (backend) and `tsc -b` / `npm run build` (frontend) to confirm green.
+5. Update `PROJECT_STATE.md` and this file: mark entry #2 **Restored** with the date.

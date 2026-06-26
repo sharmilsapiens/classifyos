@@ -4,7 +4,26 @@
 > A copy is uploaded to the ClassifyOS Claude Project knowledge after each update so the
 > planning/overseer chat stays in sync with the local repo.
 
-**Last updated:** 2026-06-25
+**Last updated:** 2026-06-26
+**Updated by:** Claude Code (**TEMPORARY — feature engineering unwired**. By request (pre-demo),
+Section 7 derived features (ratio / binning / polynomial) were temporarily removed from training
+and the "Feature engineering" config card hidden (NOT deleted — fully reversible). **Engine:**
+`ModelRunner._engineer` now force-disables `feature_engineering` on the deep-copied run config
+regardless of the incoming request (mirroring the Section 7B line just below it), so `FeatureBuilder`
+short-circuits — `fit` builds nothing, `transform` returns a copy — and no `_sq`/`_div_`/`_bin`
+columns enter `active_features`. Section 7 writes no plot/CSV of its own, so no artifact disappears;
+**the LOCKED schema is unchanged** (`active_features` just has fewer columns). **UI:** the
+"Feature engineering" config card (`Configure.tsx`) is commented out; the `fe_*` form fields/defaults
+are left intact (payload still carries them, engine overrides). The **user-defined Feature Builder
+panel is unaffected** and stays visible. **Results:** nothing visible changes — the only consumer of
+`active_features` is the already-hidden `Interactions.tsx`; the `"Feature engineering"` label in
+`Overview.tsx`'s run-progress stage list is left as-is (consistent with the 7B entry). **Tests:**
+`test_runner`'s end-to-end assertion tightened to also forbid `_div_` markers; `test_features` drives
+`FeatureBuilder` directly (not via the runner) so it stays green and untouched. Backend tests green;
+frontend `tsc -b` + `vite build` clean. **Logged as entry #2 in `unwire.md`** with full wire-back
+steps. **To re-enable:** delete the force-disable line in `_engineer`, uncomment the config card, and
+revert the `test_runner` assertion.)
+**Prior update:** 2026-06-25
 **Updated by:** Claude Code (**TEMPORARY — interaction features unwired**. By request, Section 7B
 interaction features were temporarily removed from training and hidden from the UI (NOT deleted —
 fully reversible). **Engine:** `ModelRunner._engineer` now force-disables `interaction_features`

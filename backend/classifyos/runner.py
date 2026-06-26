@@ -237,6 +237,13 @@ class ModelRunner:
         test_pp = pre.transform(self.test_df_)
 
         # 5. derived features (polynomial / ratio / binning)
+        # [TEMP — feature engineering unwired] Section 7 derived features are temporarily
+        # force-disabled here regardless of the incoming request config (mirroring the
+        # interaction unwiring below). FeatureBuilder short-circuits when disabled — fit
+        # builds nothing (created_features_ stays empty) and transform returns a copy — so
+        # no ratio/bin/poly columns enter active_features. The LOCKED schema is unchanged.
+        # To re-enable: delete the next line.
+        cfg["feature_engineering"] = {**cfg.get("feature_engineering", {}), "enabled": False}
         fb = FeatureBuilder(cfg)
         train_fb = fb.fit_transform(train_pp, target)
         test_fb = fb.transform(test_pp)

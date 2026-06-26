@@ -153,11 +153,25 @@ reversible at any time.
 - **Dashboard:** the Interaction-features controls on the Configuration page, the sidebar link,
   and the Interaction Features result page are hidden (the page's code is kept in place, just
   unwired); visiting `/interactions` redirects to the home page.
-- **Note:** the ordinary ratio features from Phase 4 (`a_div_b`) are a *separate* feature and stay
-  ON; because the API tags interaction columns by name pattern, such a ratio column can still show
-  up in `interaction_cols` — harmless, and unchanged by this work.
+- **Note:** the ordinary ratio features from Phase 4 (`a_div_b`) are a *separate* feature; they were
+  also unwired on 2026-06-26 (see the next section), so the `_div_`-marker caveat that once let a
+  ratio column surface in `interaction_cols` no longer applies in practice.
 - **To restore:** see PROJECT_STATE.md / plan_tweak.md row 42 — revert the one engine line, the
   plot6 call, the three UI comment blocks, and the matching test edits.
+
+## ⚠ Temporary change — feature engineering unwired (2026-06-26)
+**In one line:** By request (pre-demo), the Phase 4 "feature engineering" stage (Section 7's
+ratio / binning / polynomial derived columns) was **temporarily switched off** in training and the
+**"Feature engineering" config card hidden** — not deleted, and reversible at any time.
+- **Engine:** the conductor (ModelRunner) now forces feature engineering OFF for every run, no matter
+  what the request asks for, so no `_sq` / `_div_` / `_bin` derived columns are built. Section 7 has
+  no chart or CSV of its own, so no artifact disappears; the result's feature list just has fewer
+  columns and nothing downstream breaks.
+- **Dashboard:** only the "Feature engineering" controls on the Configuration page are hidden. The
+  separate **user-defined Feature Builder panel stays visible and fully works** — it is a different
+  feature. No result page changes.
+- **To restore:** see PROJECT_STATE.md / `unwire.md` entry #2 — revert the one engine line, uncomment
+  the config card, and revert the `test_runner` assertion.
 
 ## Bugfix — XGBoost/LightGBM on real "dotted/bracketed" column names (✅ Done, 2026-06-26)
 **In one line:** XGBoost and LightGBM used to crash on real datasets whose columns came from
