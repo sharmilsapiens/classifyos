@@ -8,6 +8,7 @@
    ════════════════════════════════════════════════════════════════════════ */
 
 import type { ClassBalance, ProblemType, RunConfig, UserFeatureSpec } from "@/api/types"
+import type { SearchSpaceOverrides } from "@/lib/searchSpaces"
 
 /** Flat, form-friendly mirror of RunConfig (nested groups flattened with fe_ / ix_ / tune_ prefixes). */
 export interface ConfigFormState {
@@ -45,7 +46,10 @@ export interface ConfigFormState {
   tune_cv: boolean
   tune_cv_folds: number
   tune_n_trials: number
+  /** per-model wall-clock cap (seconds); null = no timeout (the default). */
   tune_timeout_seconds: number | null
+  /** per-model search-space bound/choice overrides; {} = engine defaults. */
+  tune_search_space_overrides: SearchSpaceOverrides
   // user-defined structured features (built via the feature-builder panel)
   user_features: UserFeatureSpec[]
 }
@@ -83,7 +87,8 @@ export const DEFAULT_FORM_STATE: ConfigFormState = {
   tune_cv: true,
   tune_cv_folds: 3,
   tune_n_trials: 30,
-  tune_timeout_seconds: 600,
+  tune_timeout_seconds: null, // no per-model wall-clock cap by default (n_trials bounds the study)
+  tune_search_space_overrides: {},
   user_features: [],
 }
 
@@ -148,7 +153,7 @@ export function buildPayload(form: ConfigFormState): RunConfig {
       cv_folds: form.tune_cv_folds,
       n_trials: form.tune_n_trials,
       timeout_seconds: form.tune_timeout_seconds,
-      search_space_overrides: {},
+      search_space_overrides: form.tune_search_space_overrides,
     },
     // Structured specs only — assembled from dropdowns; never a free-text formula.
     user_features: form.user_features,

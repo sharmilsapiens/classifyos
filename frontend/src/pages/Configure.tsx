@@ -25,6 +25,7 @@ import { Switch } from "@/components/ui/switch"
 import { Button, buttonVariants } from "@/components/ui/button"
 import { EmptyState, PageHeader } from "@/components/common/States"
 import FeatureBuilderPanel from "@/components/config/FeatureBuilderPanel"
+import TuningOverridesPanel from "@/components/config/TuningOverridesPanel"
 
 // Allowed values — mirror config.py's tuples exactly.
 const PROBLEM_TYPES = ["binary", "multiclass", "multilabel"] as const
@@ -329,24 +330,37 @@ export default function Configure() {
             <Switch id="tune_enabled" label="Enable tuning (off by default — can be slow)"
               checked={form.tune_enabled} onChange={(e) => updateForm({ tune_enabled: e.target.checked })} />
             {form.tune_enabled && (
-              <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
-                <Field label="Metric">
-                  <Select value={form.tune_metric} onChange={(e) => updateForm({ tune_metric: e.target.value })}>
-                    {TUNING_METRICS.map((m) => <option key={m} value={m}>{m}</option>)}
-                  </Select>
-                </Field>
-                <Field label="CV folds">
-                  <Input type="number" min={2} value={form.tune_cv_folds}
-                    onChange={(e) => updateForm({ tune_cv_folds: Number(e.target.value) })} />
-                </Field>
-                <Field label="Trials / model">
-                  <Input type="number" min={1} value={form.tune_n_trials}
-                    onChange={(e) => updateForm({ tune_n_trials: Number(e.target.value) })} />
-                </Field>
-                <Field label="Timeout (s/model)">
-                  <Input type="number" min={1} value={form.tune_timeout_seconds ?? 0}
-                    onChange={(e) => updateForm({ tune_timeout_seconds: Number(e.target.value) })} />
-                </Field>
+              <div className="space-y-3">
+                <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
+                  <Field label="Metric">
+                    <Select value={form.tune_metric} onChange={(e) => updateForm({ tune_metric: e.target.value })}>
+                      {TUNING_METRICS.map((m) => <option key={m} value={m}>{m}</option>)}
+                    </Select>
+                  </Field>
+                  <Field label="CV folds">
+                    <Input type="number" min={2} value={form.tune_cv_folds}
+                      onChange={(e) => updateForm({ tune_cv_folds: Number(e.target.value) })} />
+                  </Field>
+                  <Field label="Trials / model">
+                    <Input type="number" min={1} value={form.tune_n_trials}
+                      onChange={(e) => updateForm({ tune_n_trials: Number(e.target.value) })} />
+                  </Field>
+                  <Field label="Timeout (s/model)">
+                    <Input type="number" min={1} disabled={form.tune_timeout_seconds === null}
+                      placeholder="no timeout"
+                      value={form.tune_timeout_seconds ?? ""}
+                      onChange={(e) =>
+                        updateForm({ tune_timeout_seconds: e.target.value === "" ? null : Number(e.target.value) })
+                      } />
+                  </Field>
+                </div>
+                <Switch id="tune_no_timeout" label="No timeout — run all trials (default; n_trials is the only bound)"
+                  checked={form.tune_timeout_seconds === null}
+                  onChange={(e) => updateForm({ tune_timeout_seconds: e.target.checked ? null : 600 })} />
+                <TuningOverridesPanel
+                  overrides={form.tune_search_space_overrides}
+                  onChange={(next) => updateForm({ tune_search_space_overrides: next })}
+                />
               </div>
             )}
           </CardContent>

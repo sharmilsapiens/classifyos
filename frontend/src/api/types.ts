@@ -42,8 +42,9 @@ export interface TuningConfig {
   cv: boolean
   cv_folds: number
   n_trials: number
-  /** hard per-model wall-clock cap (seconds); null opts out. */
+  /** per-model wall-clock cap (seconds); null = no cap (the default — n_trials bounds the study). */
   timeout_seconds: number | null
+  /** per-model search-space bound/choice overrides; {} = engine defaults. */
   search_space_overrides: Record<string, unknown>
 }
 

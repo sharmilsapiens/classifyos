@@ -125,14 +125,21 @@ def _lapse_config(**overrides):
 
 
 # --------------------------------------------------------------------------- #
-# config — the hard default timeout                                           #
+# config — default has NO wall-clock cap; n_trials is the bound                #
 # --------------------------------------------------------------------------- #
 
 
-def test_default_timeout_is_bounded() -> None:
-    """The shipped default must cap every tuning run (never None/unbounded by default)."""
-    t = DEFAULT_CONFIG["tuning"]["timeout_seconds"]
-    assert t is not None and isinstance(t, (int, float)) and t > 0
+def test_default_timeout_is_uncapped() -> None:
+    """By owner request (plan_tweak #43, reversing #25) there is no default per-model
+    wall-clock cap — ``timeout_seconds`` defaults to None so a study runs all trials."""
+    assert DEFAULT_CONFIG["tuning"]["timeout_seconds"] is None
+
+
+def test_default_n_trials_is_the_bound() -> None:
+    """With no default timeout, ``n_trials`` is the SOLE bound on a study, so it must
+    stay a finite positive int (otherwise an enabled tune-all run is open-ended)."""
+    n = DEFAULT_CONFIG["tuning"]["n_trials"]
+    assert isinstance(n, int) and not isinstance(n, bool) and n > 0
 
 
 # --------------------------------------------------------------------------- #

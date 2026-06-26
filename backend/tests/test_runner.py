@@ -154,15 +154,21 @@ def test_runner_handles_bad_algo(storage) -> None:
 
 def test_all_output_files(storage, output_dir) -> None:
     """Every expected artifact exists in OUTPUT_DIR after a binary run."""
-    cfg = _lapse_config()
-    ModelRunner(cfg, storage).run()
-
     from classifyos.analysis.feature_impact import (
         PLOT_PNG_KEY as PLOT4_KEY,
         SUMMARY_CSV_KEY,
     )
     from classifyos.evaluation.plots import PLOT1_KEY, PLOT2_KEY, PLOT3_KEY, PLOT5_KEY
     from classifyos.preprocessing.interactions import PLOT_PNG_KEY as PLOT6_KEY
+
+    # OUTPUT_DIR is session-scoped and shared, so another test (test_interactions'
+    # test_plot6_written) may have left a plot6 here. Clear it first so the
+    # "plot6 must NOT be produced" assertion below tests THIS runner's behaviour,
+    # not stale cross-test state. [TEMP — remove with the interaction unwiring.]
+    (output_dir / PLOT6_KEY).unlink(missing_ok=True)
+
+    cfg = _lapse_config()
+    ModelRunner(cfg, storage).run()
 
     expected = [
         RESULTS_CSV_KEY,

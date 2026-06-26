@@ -159,6 +159,19 @@ reversible at any time.
 - **To restore:** see PROJECT_STATE.md / plan_tweak.md row 42 — revert the one engine line, the
   plot6 call, the three UI comment blocks, and the matching test edits.
 
+## Bugfix — XGBoost/LightGBM on real "dotted/bracketed" column names (✅ Done, 2026-06-26)
+**In one line:** XGBoost and LightGBM used to crash on real datasets whose columns came from
+flattened JSON (e.g. `covers[0].insuranceAmount`); they now train fine.
+- **Why it broke:** both libraries refuse feature names that contain special characters like
+  `[`, `]`, `<`. The scikit-learn models (Logistic Regression, Random Forest) don't care, so only
+  XGBoost/LightGBM failed — which is exactly what was seen on `arizona_buyingpropensity.csv`.
+- **The fix:** the two model wrappers now quietly rename columns to safe placeholder names
+  (`f0, f1, …`) just for the library's benefit, then translate the importances back to the real
+  column names afterwards. Nothing the rest of the system sees changes, and it's leakage-safe.
+- **Heads-up (unrelated):** on that particular dataset every model scored a perfect 1.0, which
+  usually means a column is giving away the answer (target leakage). That's logged as a separate
+  open item for a data review — it is *not* a model bug.
+
 ---
 
 ## How to read this project

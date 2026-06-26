@@ -70,8 +70,8 @@ problem there is returned as HTTP 422.
                             "drop_original_if_interacted": false,
                             "max_auto_pairs": 10, "fill_method": "zero" },
   "tuning": { "enabled": false, "models": [], "metric": "f1_weighted", "cv": true,
-              "cv_folds": 3, "n_trials": 30, "timeout_seconds": 600,
-              "search_space_overrides": {} },
+              "cv_folds": 3, "n_trials": 30, "timeout_seconds": null,  // null = no per-model cap (default); n_trials bounds the study
+              "search_space_overrides": {} },  // per-model bound/choice overrides, e.g. {"XGBoost": {"max_depth": {"low": 3, "high": 6}}}
   "user_features": [            // OPTIONAL; [] / omitted → no user features (unchanged)
     // STRUCTURED specs only — NO free-text formula, nothing is ever eval()'d. Each spec
     // applies a KNOWN op (from a fixed allowlist) to KNOWN existing column(s). An unknown
@@ -163,7 +163,7 @@ missing/wrong-typed column is skipped and logged — it never aborts the run).
       "cv": true,
       "cv_folds": 3,
       "n_trials": 30,
-      "timeout_seconds": 600,      // may be null (the per-model cap opt-out)
+      "timeout_seconds": null,     // null = no per-model cap (the default); a number re-imposes one
       "tuned_models": ["XGBoost"], // models that produced tuned params
       "best_params": {             // per-model chosen hyperparameters (heterogeneous values)
         "XGBoost": {"learning_rate": 0.07, "max_depth": 6, "gamma": 1.2}
@@ -206,3 +206,8 @@ response. A long run can exceed a reverse-proxy/gateway timeout. A background-jo
 
 _Locked at Phase 8 sign-off. Any change to `schema_version: "1.0"` must be additive._
 _`1.1` (additive): added the optional `result.tuning` block; all `1.0` fields are unchanged._
+_2026-06-26 (default-value change only, **no schema/version change** — field shapes unchanged):
+`tuning.timeout_seconds` now defaults to `null` (no per-model wall-clock cap; `n_trials` bounds
+the study) rather than `600`. `tuning.search_space_overrides` (always present in `1.0`) is now
+exercised by the UI — `{model: {param: {low, high}}}` for numeric bounds, `{model: {param: [choices]}}`
+for categoricals; `{}` = engine defaults. See plan_tweak #43._

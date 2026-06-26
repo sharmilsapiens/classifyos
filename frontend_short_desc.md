@@ -65,7 +65,14 @@ the current run configuration, the last `/run` result, and the loading/error fla
   feature pickers, problem type, algorithms, balancing, encoding/scaling/missing, test size,
   threshold, calibration, feature-engineering, interactions, the Optuna tuning dials, and the
   **user-defined feature builder** below). It mirrors the three required fields client-side so you
-  see a problem before the server's 422.
+  see a problem before the server's 422. **Tuning (when enabled)** now defaults to **no per-model
+  timeout** (a "No timeout" switch; `n_trials` is the only bound, with a number field to re-impose a
+  cap) and includes a **per-model search-space editor** — a collapsible "Search space (advanced)"
+  disclosure containing one collapsible block per algorithm (XGBoost, LightGBM, RandomForest, …)
+  where you can override each parameter's low/high bound (or, for categoricals like RandomForest
+  `max_features` / SVM `kernel`, the allowed choices). A blank field uses the engine default
+  (shown as the placeholder), so an untouched panel sends `{}` and changes nothing; the edits ride
+  along in the `/run` request as `tuning.search_space_overrides`.
 - **Run** — posts the config to `/run` (which is **synchronous** — long/tuning runs can take a
   while), shows an in-progress state on the **Pipeline** page, then a model scoreboard, the
   artifact downloads, and the raw result envelope. (Rich charts/tables are 9b.) A real

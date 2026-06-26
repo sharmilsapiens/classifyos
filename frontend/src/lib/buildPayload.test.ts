@@ -37,7 +37,8 @@ describe("buildPayload", () => {
       enabled: false,
       models: [],
       metric: "f1_weighted",
-      timeout_seconds: 600,
+      timeout_seconds: null, // no per-model wall-clock cap by default
+      search_space_overrides: {},
     })
   })
 

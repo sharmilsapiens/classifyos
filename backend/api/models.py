@@ -69,7 +69,7 @@ class TuningConfig(BaseModel):
     cv: bool = True
     cv_folds: int = 3
     n_trials: int = 30
-    timeout_seconds: float | None = 600  # hard per-model wall-clock cap; None opts out
+    timeout_seconds: float | None = None  # per-model wall-clock cap; None = no cap (n_trials bounds it)
     search_space_overrides: dict[str, Any] = Field(default_factory=dict)
 
 

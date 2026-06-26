@@ -126,6 +126,31 @@ def test_feature_importance_trees(name, binary_matrices) -> None:
     assert sum(fi.values()) > 0  # at least some signal attributed
 
 
+@pytest.mark.parametrize("name", ["XGBoost", "LightGBM"])
+def test_special_chars_in_feature_names(name, binary_matrices) -> None:
+    """XGBoost/LightGBM train on columns with ``[ ] <`` (JSON-flattened real data).
+
+    Regression: such columns (e.g. ``covers[0].insuranceAmount``) crashed training
+    with ``feature_names must be string, and may not contain [, ] or <`` (XGBoost) /
+    ``Do not support special JSON characters in feature name`` (LightGBM). The wrappers
+    now rename columns to safe positional names internally and map importances back.
+    """
+    d = binary_matrices
+    n = d.X_train.shape[1]
+    special = [f"covers[{i}].rate<x>" for i in range(n)]
+    X_train = d.X_train.set_axis(special, axis=1)
+    X_test = d.X_test.set_axis(special, axis=1)
+
+    model = build_model(name, problem_type="binary").fit(X_train, d.y_train)
+    preds = model.predict(X_test)
+    assert len(preds) == len(d.y_test)
+    assert model.predict_proba(X_test).shape == (len(d.y_test), 2)
+
+    fi = model.feature_importance()
+    assert isinstance(fi, dict)
+    assert set(fi) == set(special)  # importances map back to the original (special) names
+
+
 @pytest.mark.parametrize("name", NO_IMPORTANCE_MODELS)
 def test_feature_importance_none(name, binary_matrices) -> None:
     """RBF-kernel SVM and GaussianNB expose no importance → None (no error)."""

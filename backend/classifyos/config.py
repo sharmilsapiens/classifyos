@@ -120,15 +120,17 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "metric": "f1_weighted",  # optimised metric; must be a TUNING_METRICS name
         "cv": True,  # True = k-fold CV within train; False = single train-internal split
         "cv_folds": 3,
-        "n_trials": 30,  # per model
-        # [RISK] runaway tuning — a HARD per-model wall-clock cap (seconds) so a tuning run
-        # can NEVER go unbounded. With models=[] (tune all), enabling tuning would otherwise
-        # run a 30-trial study for every algorithm including the slow SVM (calibrated SVC,
-        # internal CV per trial); without a cap that is an open-ended run. 600s/model is a
-        # safety ceiling, not a target — n_trials usually binds first. Set explicitly to
-        # ``None`` to opt out (only do so when scoping with a short ``models`` list).
-        "timeout_seconds": 600,  # per model; reach the cap OR n_trials, whichever first
-        "search_space_overrides": {},  # optional per-model bound overrides
+        "n_trials": 30,  # per model — with no timeout (below) this is the SOLE bound on a study
+        # [RISK] runaway tuning — there is NO default wall-clock cap (``timeout_seconds=None``):
+        # by owner request (2026-06-26, plan_tweak #43) the per-model timeout is OFF by default so
+        # a study always runs the full ``n_trials``. **``n_trials`` is therefore the only thing
+        # bounding a study** — it must stay a finite positive int (it always defaults to 30), or an
+        # enabled ``models=[]`` (tune-all) run, which fits every algorithm incl. the slow calibrated
+        # SVM, becomes open-ended. Set ``timeout_seconds`` to a positive number to re-impose a hard
+        # ceiling (reach the cap OR n_trials, whichever first) — recommended for large data or a
+        # long ``n_trials``. This reverses the earlier 600s default (plan_tweak #25).
+        "timeout_seconds": None,  # per model; None = no cap (n_trials bounds the study)
+        "search_space_overrides": {},  # optional per-model bound/choice overrides (engine ``_b``/``_ch``)
     },
     "random_state": 42,
 }

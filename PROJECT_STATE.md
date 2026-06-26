@@ -207,6 +207,7 @@ Status legend: ⬜ Not started · 🔄 In progress · ✅ Done · ⚠️ Blocked
 | 2026-06-16 | Tuning trial scoring is **k-fold CV inside the TRAIN split** (default; single train-internal split optional via `cv=False`); the test set is never passed to `tune_model` (structural). Balancing/SMOTE is NOT applied inside the CV folds — tuning runs on the pre-balance train folds, and ModelRunner balances only the final fit (the prompt's documented safe default); `class_weight` is passed through to per-trial `build_model` (mild approximation, [RISK]-noted) | Per-fold balancing would leak synthetic minority rows across folds; the safe default keeps trial scoring leakage-free without the per-fold-SMOTE complexity |
 | 2026-06-16 | Best params are read from `study.best_trial.user_attrs["tuned_params"]`, NOT `study.best_params` | A search-space function may transform a suggestion (e.g. the LogisticRegression `"solver|penalty"` categorical splits into two estimator kwargs); reading the stored derived params guarantees the returned dict is exactly what was scored |
 | 2026-06-16 | `tuning.timeout_seconds` default is a **hard 600s per model**, NOT `None` (the prompt's literal default) — explicit `None` still accepted as an opt-out | With `models=[]` (tune-all) + `n_trials=30`, an unbounded default would run a 30-trial study for every algorithm incl. the slow calibrated-SVM. A finite ceiling makes a tuning run impossible to leave unbounded; a study stops at the timeout OR the trial cap, whichever first |
+| 2026-06-26 | **REVERSES the 2026-06-16 row above (owner request).** `tuning.timeout_seconds` default `600`→**`None`** (no per-model cap) everywhere — `config.py`/`api/models.py`/frontend form/contract examples; **`n_trials` (still 30) is now the SOLE study bound.** The `[RISK] runaway tuning` comment is kept and rewritten (governance: not removed). The frontend also exposes `search_space_overrides` (per-model collapsible editor) which was previously hardcoded `{}` | Owner wants tuning uncapped by default and the per-model search space editable from the browser. No engine ML change, no schema/version change (default-value only — field shapes unchanged). Re-impose a cap by setting `timeout_seconds` for large data / long `n_trials`. plan_tweak #43 |
 | 2026-06-16 | Per-model isolation: each model's study runs in its own try/except — a study that errors (or whose every trial fails, e.g. an inverted-bound override) returns `{}` and the model falls back to defaults, never aborting the run (same pattern as the Phase 6/7 per-algo isolation) | "One bad model must not kill the run" extended to tuning; robustness on real data / extreme configs |
 | 2026-06-16 | **Phase 7B follow-up**: LogisticRegression tuning space reduced to `C` only (dropped the solver/penalty pairs) | sklearn 1.9 deprecated the `penalty` arg (FutureWarning, removal in 1.10) and `liblinear` rejects multiclass (`n_classes >= 3`) — the pairs warned on every fit and hard-errored on multiclass targets (surfaced by a user tuning LR on 3-class iris). Clean penalty-type tuning needs `saga` + `l1_ratio` (slow / convergence risk) — deferred. plan_tweak row 26 |
 | 2026-06-17 | **Phase 8**: sanctioned curve-points helper — new `evaluation/curves.py::compute_curve_points` (ROC/PR points + AUC/AP per class, one-vs-rest for multiclass), and `plot_results` plot2 refactored to draw from it | The frontend needs raw curve coordinates; deriving them in two places (plot + API) would drift. One additive module = one source of truth. Reads held-out test predictions only, fits nothing (leakage-safe). plan_tweak 27 |
@@ -1219,6 +1220,70 @@ frontend application code was changed; no bug found; no deviation (plan_tweak un
 - `frontend/` scaffolded with Vite + React + TypeScript (`react-ts` template);
   `vite.config.ts` extended with `/api → http://localhost:8000` dev proxy.
 
+## Completed this session (Tuning UI — 2026-06-26) — search-space override editor + uncapped timeout
+
+- **Per-model search-space editor (frontend).** The Configuration page now exposes
+  `tuning.search_space_overrides` (in the locked contract since `1.0`, but previously hardcoded
+  to `{}` by `buildPayload`). New collapsible **"Search space (advanced)"** disclosure containing
+  one collapsible block per algorithm; numeric params (e.g. XGBoost `max_depth`, `learning_rate`)
+  get **low/high** override fields, categoricals (RandomForest `max_features`, SVM `kernel`) get
+  **choice checkboxes**. Blank/unchanged = engine default, so an untouched panel sends `{}` and a
+  default-tuning run is unchanged. New `frontend/src/lib/searchSpaces.ts` (read-only mirror of the
+  engine `_space_*` bounds — introduces no new tunable knob) + `components/config/TuningOverridesPanel.tsx`;
+  wired through `ConfigFormState.tune_search_space_overrides` → `buildPayload`.
+- **Removed the default tuning timeout cap (owner request).** `timeout_seconds` now defaults to
+  **`None` (no per-model wall-clock cap)** in `config.py`, `api/models.py`, the frontend form, and
+  the `docs/api_contract.md` examples — **`n_trials` (still 30) is the SOLE bound** on a study.
+  Configure gains a **"No timeout" switch** (default on; unchecking restores a numeric cap field).
+  This **reverses the Phase-7B `600`s hardening** (decisions-log 2026-06-16 / plan_tweak #25): an
+  enabled tune-all run now runs to completion of every algorithm's `n_trials`. The `[RISK] runaway
+  tuning` comment in `config.py` is **kept and rewritten** (governance: not removed) to document
+  that `n_trials` is now the only bound.
+- **No engine ML change, no schema/version change.** Field shapes are unchanged (default-value
+  change only — contract footer notes it; schema stays `1.1`). `test_default_timeout_is_bounded`
+  → `test_default_timeout_is_uncapped` + `test_default_n_trials_is_the_bound`; `buildPayload.test.ts`
+  expects `timeout_seconds: null`. **Backend tuning + API-run suites green (46); frontend `npm run
+  build` clean.** plan_tweak #43; `frontend_short_desc.md` Configure section updated.
+- **Tooling:** added `C:/Projects/classifyos_data` to `.claude/settings.local.json`
+  `permissions.additionalDirectories` so the external dataset `.csv` files are @-taggable / readable
+  in Claude Code (the committed `backend/data/samples/*.csv` were already tracked → already taggable).
+- **Known follow-up (pre-existing, not from this work):** `frontend/src/pages/referencePages.test.tsx`
+  asserts **13** nav items but the `chore/unwire-interaction-features` branch (commit `7b592f8`)
+  commented out the Interactions nav entry → **12**, so that one test is red on this branch
+  independently of the tuning work.
+
+## Completed this session (Bugfix — 2026-06-26) — XGBoost/LightGBM special-char feature names
+
+- **Symptom.** Running a real dataset (`real/arizona_buyingpropensity.csv`, JSON-flattened
+  insurance quote data with columns like `policyHolder.ownerships[0].type.description`,
+  `covers[0].insuranceAmount`) made XGBoost and LightGBM fail at fit while LogisticRegression
+  and RandomForest ran fine.
+  - XGBoost: `ValueError: feature_names must be string, and may not contain [, ] or <`.
+  - LightGBM: `LightGBMError: Do not support special JSON characters in feature name`.
+- **Root cause.** Both libraries reject special characters in feature names; the `[0]`
+  array-index columns from the flattened source trip the restriction. sklearn models don't care.
+- **Fix.** `backend/classifyos/models/wrappers.py` — added `_needs_safe_feature_names` flag +
+  `_safe_X()` helper on `_SklearnEstimatorWrapper`. When set, DataFrame columns are renamed to
+  safe positional names (`f0..fn-1`) before every `fit`/`predict`/`predict_proba` call;
+  importances still map back to the real names via `feature_names_` (captured from the original
+  `X` before renaming). Flag enabled on `XGBoostModel` and `LightGBMModel`. Bare-ndarray `X`
+  passes through untouched. No public contract change; additive and leakage-safe.
+- **Test.** `tests/test_models.py::test_special_chars_in_feature_names` (XGBoost + LightGBM) —
+  fits on columns containing `[`, `]`, `<`, asserts predict/predict_proba work and importances
+  map back to the special names. **Full suite green: 240 passed.**
+- **Also fixed a pre-existing test-isolation bug (surfaced when running the whole suite).**
+  `OUTPUT_DIR` is a session-scoped shared temp dir; `test_interactions::test_plot6_written`
+  writes `plot6_interaction_summary.png` into it and never cleans up, so on this
+  interactions-unwired branch `test_runner::test_all_output_files`'s `assert not exists(plot6)`
+  failed (test_interactions sorts before test_runner). Fix: `test_all_output_files` now unlinks
+  any stale plot6 before its run so the assertion tests the runner's own behaviour. Marked
+  `[TEMP — remove with the interaction unwiring]`. Unrelated to the wrappers bugfix; only
+  appeared because the full suite hadn't been run end-to-end since the unwiring.
+- **⚠️ Separate observation (not fixed, flagged to user).** On this dataset every model scores
+  1.0000 on accuracy/F1/ROC-AUC/MCC — a strong target-leakage signal (likely `status.description`
+  and/or `activePolicyNumber` encoding the outcome). Not part of this bugfix; needs a feature
+  review with the data owner.
+
 ## In progress / partially done
 
 - **Phase 9 (React dashboard) — ✅ COMPLETE (9a + 9b + 9c).** All **12 pages** are real screens:
@@ -1235,7 +1300,8 @@ frontend application code was changed; no bug found; no deviation (plan_tweak un
 
 | # | Issue | Severity | Found | Status |
 |---|---|---|---|---|
-| | none | | | |
+| 1 | XGBoost/LightGBM crash on feature names with `[ ] <` (JSON-flattened cols) | High | 2026-06-26 | ✅ Fixed (wrappers `_safe_X`) |
+| 2 | Perfect 1.0 metrics on `arizona_buyingpropensity.csv` → suspected target leakage (`status.description`/`activePolicyNumber`) | Medium | 2026-06-26 | Open — needs feature review |
 
 ## Blockers
 
@@ -1367,4 +1433,5 @@ Contract doc: `docs/api_contract.md` — frozen; changes must be additive and bu
 | 2026-06-20/21 | Phase 11 (FINAL) — multilabel end-to-end + 7-use-case sweep + 12k perf baseline + governance dossier | **Engineering complete; v1.0 ready for sign-off/demo.** Multilabel (Product Recommendation) wired end-to-end for the first time — new `classifyos/multilabel.py` (delimited-set ↔ indicator bridge) + additive multilabel branches in runner/predict/curves/plots/api (`MultiLabelBinarizer` train-only → OvR; per-label metrics/curves/report/predictions; honest `null` for confusion/MCC); binary+multiclass untouched. **All 7 use cases** driven through engine+API (`test_use_case_sweep.py`, 8 tests) AND browser (Playwright 7-case sweep, multilabel asserts honest states). 4 new datasets + 12k perf set generated (`generate_sample_data.py`); use-case CSVs committed as the E2E seed. **Perf: 12k×4 algos = 13.0s** (target < 5 min); tuning sanity (XGB, 25 trials) = 65.7s. **Governance dossier** `docs/governance_signoff_v1.0.md` (scope §12 checklist + 35-row [RISK] table + leakage proof + demo script + v1.0 limitations + human action items). **Suites: 202 pytest · 72 vitest · 9 E2E (all green)**; build clean. plan_tweak 34–37. Scope conclusion: multilabel ships "runs+renders honestly with documented limits" (per-label thresholds + imbalance weighting → v1.x). **Human sign-offs/demo + `v1.0` tag remain.** Prompt archived to `prompts/testing_phases/phase_11_integration_signoff.md` |
 | 2026-06-22 | Tuning search-space audit (READ-ONLY) — produced `docs/tuning_audit.md` | Read-only investigation; no code/test/config changed. Documented per-model tuned-vs-missing hyperparameters (validated against installed sklearn 1.9.0 / xgboost 3.2.0 / lightgbm 4.6.0 / optuna 4.9.0), trial scoring + leakage boundary, tuning.py→ModelRunner→build_model flow, config/CLI/API configurability, and safe-vs-dangerous user-exposed knobs. Top findings: LightGBM missing `max_depth` (num_leaves≤255 unbounded → overfit risk), XGBoost missing `gamma`, SVM `kernel=["rbf"]` no-op categorical, unvalidated `search_space_overrides`, misleading `--timeout` CLI help. No backend_short_desc change (no engine change); no plan_tweak (investigation only). Prompt archived to `prompts/tooling/audit_search_spaces.md` |
 | 2026-06-23 | Read-only audit of tuned-params data path → `docs/tuned_params_path_audit.md` | Read-only investigation; no code/test/config changed. Traced per-model `best_params` engine→API→UI: engine produces it (`ModelRunner.tuned_params_` + `run_profile.json` `tuning.best_params`/`tuned_models`), but `/run` response model/serializer omit it (only reachable as the downloadable `run_profile.json` via `/outputs`), so the typed UI never receives it. Recommended Option 1 (additive `result.tuning` block, `schema_version` 1.0→1.1, zero engine change; Overview panel) over Option 2 (UI scrapes `run_profile.json` — untyped coupling + extra fetch); version bump shown safe (parser is version-tolerant, validates only known keys). Per-layer blast radius listed. No backend_short_desc/plan_tweak change (no code change). Prompt archived to `prompts/tooling/audit_tuned_params_path.md` |
+| 2026-06-26 | Tuning UI — per-model search-space override editor + removed default timeout cap | Frontend exposes `tuning.search_space_overrides` (was hardcoded `{}`): collapsible "Search space (advanced)" → per-algorithm collapsibles with low/high numeric overrides + categorical choice checkboxes (`searchSpaces.ts` mirror + `TuningOverridesPanel.tsx`); blank = engine default so an untouched panel sends `{}`. **`timeout_seconds` default `600`→`None` everywhere** (config.py/api models/form/contract examples) per owner request — `n_trials` is now the sole study bound; "No timeout" UI switch (default on). Reverses plan_tweak #25; `[RISK]` comment kept+rewritten. No engine ML / no schema-version change (default-value only). Tests flipped (`test_default_timeout_is_uncapped` + `_n_trials_is_the_bound`; buildPayload expects `null`); backend tuning+API-run green (46), FE build clean. Also added data dir to `.claude` `additionalDirectories` (CSV @-tagging). plan_tweak #43. Pre-existing red: `referencePages.test.tsx` nav count 13≠12 (interaction-unwiring branch, not this work) |
 | | | |

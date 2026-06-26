@@ -24,6 +24,11 @@ Other library quirks handled here, verified against the installed versions
 
 * **XGBoost** rejects string labels (``XGBClassifier`` wants ``0..n-1``), so this wrapper
   label-encodes ``y`` in :meth:`fit` and maps predictions back.
+* **XGBoost / LightGBM** reject special characters in feature names (XGBoost: ``[ ] <``;
+  LightGBM: any "special JSON character"). JSON-flattened columns like
+  ``covers[0].insuranceAmount`` crash training, so both wrappers rename DataFrame columns
+  to safe positional names (``f0..fn-1``) before every estimator call and map importances
+  back via ``feature_names_``. See ``_needs_safe_feature_names`` / ``_safe_X``.
 * **GaussianNB** has no feature importance → ``None``.
 * **SVM** uses ``CalibratedClassifierCV(SVC(), ensemble=False)`` for probabilities
   (``SVC(probability=True)`` is deprecated in sklearn 1.9, removed in 1.11). Calibration
@@ -59,6 +64,13 @@ class _SklearnEstimatorWrapper(ModelWrapper):
     #: Estimator needs integer-encoded labels (vs. native string-label support).
     _needs_label_encoding: bool = False
 
+    #: Estimator rejects feature names containing special characters (``[ ] <`` for
+    #: XGBoost; any "special JSON character" for LightGBM). When ``True`` the DataFrame
+    #: columns are renamed to safe positional names (``f0..fn-1``) before every call into
+    #: the estimator. Importances map back to the real names via :attr:`feature_names_`,
+    #: which is captured from the *original* (un-renamed) ``X`` in :meth:`fit`.
+    _needs_safe_feature_names: bool = False
+
     def _build_estimator(self) -> Any:
         """Construct the underlying (unfitted) sklearn-compatible estimator."""
         raise NotImplementedError  # pragma: no cover - intermediate base
@@ -93,7 +105,7 @@ class _SklearnEstimatorWrapper(ModelWrapper):
         if self.class_weight and not is_multilabel:
             fit_kwargs["sample_weight"] = self._sample_weights(y_arr)
 
-        estimator.fit(X, y_fit, **fit_kwargs)
+        estimator.fit(self._safe_X(X), y_fit, **fit_kwargs)
         self.model = estimator
 
         if self._label_encoder is not None:
@@ -104,7 +116,7 @@ class _SklearnEstimatorWrapper(ModelWrapper):
 
     def predict(self, X: Any) -> np.ndarray:
         """Predict labels, mapping back to the original label space if encoded."""
-        pred = np.asarray(self.model.predict(X))
+        pred = np.asarray(self.model.predict(self._safe_X(X)))
         if self._label_encoder is not None:
             pred = self._label_encoder.inverse_transform(pred)
         return pred
@@ -116,7 +128,7 @@ class _SklearnEstimatorWrapper(ModelWrapper):
         own ``classes_``, which we adopt as :attr:`classes_` in :meth:`fit`, so columns
         align by construction.
         """
-        proba = np.asarray(self.model.predict_proba(X))
+        proba = np.asarray(self.model.predict_proba(self._safe_X(X)))
         # [RISK] downstream metrics, calibration, classify and the plots all assume a
         # 2-D ``(n, n_classes)`` proba with columns in ``classes_`` order. Guard the
         # degenerate single-column binary case defensively (none of the current
@@ -136,6 +148,20 @@ class _SklearnEstimatorWrapper(ModelWrapper):
         }
 
     # -- helpers ------------------------------------------------------------------
+
+    def _safe_X(self, X: Any) -> Any:
+        """Rename DataFrame columns to safe positional names for fussy estimators.
+
+        XGBoost rejects ``[ ] <`` and LightGBM rejects any "special JSON character" in
+        feature names. Real-world data (e.g. JSON-flattened columns like
+        ``covers[0].insuranceAmount``) routinely contains these, which crashed training.
+        Renaming to ``f0..fn-1`` by position is safe and reversible: importances come back
+        in column order and are mapped to the original names via :attr:`feature_names_`.
+        Non-DataFrame ``X`` (a bare ndarray) has no names, so it passes through untouched.
+        """
+        if not self._needs_safe_feature_names or not isinstance(X, pd.DataFrame):
+            return X
+        return X.set_axis([f"f{i}" for i in range(X.shape[1])], axis=1)
 
     @staticmethod
     def _feature_names(X: Any) -> list[str]:
@@ -224,6 +250,7 @@ class XGBoostModel(_SklearnEstimatorWrapper):
 
     name = "XGBoost"
     _needs_label_encoding = True  # XGBClassifier requires 0..n-1 labels
+    _needs_safe_feature_names = True  # XGBoost rejects [, ], < in feature names
 
     def _build_estimator(self) -> Any:
         from xgboost import XGBClassifier
@@ -248,6 +275,7 @@ class LightGBMModel(_SklearnEstimatorWrapper):
     """
 
     name = "LightGBM"
+    _needs_safe_feature_names = True  # LightGBM rejects special JSON chars in feature names
 
     def _build_estimator(self) -> Any:
         from lightgbm import LGBMClassifier
