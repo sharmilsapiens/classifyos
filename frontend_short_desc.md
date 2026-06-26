@@ -254,6 +254,22 @@ columns, a missing-data scan, and how the number columns correlate.
   so it loads instantly. Charts use Recharts; the correlation grid is a lightweight coloured table
   (the same technique as the Confusion Matrix). 3 new render tests.
 
+## Post-training importance on the Feature Impact page (✅ Done, 2026-06-26)
+**In one line:** The Feature Impact page now has a second section showing, **per model**, which
+features the *trained* model actually leaned on — separate from the existing top section, which
+ranks raw features *before* any model is trained.
+- **Two clearly-separated stories on one page.** The top (unchanged) section is the pre-training
+  screen: how each raw column relates to the target, with the ID-like leakage warning. The new
+  bottom section is the post-training, per-model native importance.
+- **Pick a model, see its ranking.** A model dropdown drives a ranked horizontal bar of that
+  model's importances (top 20), shown next to the `plot3` chart (all models in one figure).
+- **Honest about gaps.** A short note explains that SVM and Naive Bayes expose no native importance
+  (so they're omitted) and that the values aren't comparable across models. If no model in the run
+  exposes any, the section shows a friendly explanation instead of an empty chart.
+- **Backwards-safe.** The block reads the optional `result.feature_importance` (schema 1.3); an
+  older run without it simply shows the "no native importance" state — no crash. New render tests
+  cover the present and absent cases.
+
 ---
 
 ## How to read this project

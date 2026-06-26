@@ -23,12 +23,13 @@ from .conftest import (
 
 # The logical output artifacts every successful run must produce.
 # [TEMP — interaction features unwired] plot6_interaction_summary.png is not written
-# while interactions are force-disabled; restore it to the set when re-enabling (→ 11).
+# while interactions are force-disabled; restore it to the set when re-enabling (→ 12).
 EXPECTED_ARTIFACTS = {
     "classification_results.csv",
     "metrics_comparison.csv",
     "class_report.csv",
     "feature_impact_summary.csv",
+    "feature_importance_summary.csv",  # native per-model importance, post-training (schema 1.3)
     "run_profile.json",
     "plot1_confusion_matrix.png",
     "plot2_roc_pr_curves.png",
@@ -95,7 +96,7 @@ def test_use_case_runs_and_renders(sweep_responses, uid, problem_type, n_classes
     assert resp.status_code == 200, f"{uid}: HTTP {resp.status_code}"
     body = resp.json()
     assert body["status"] == "ok", f"{uid}: {body.get('error')}"
-    assert body["schema_version"] == "1.2"
+    assert body["schema_version"] == "1.3"
 
     result = body["result"]
     assert result["run"]["problem_type"] == problem_type

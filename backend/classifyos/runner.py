@@ -72,6 +72,7 @@ logger = logging.getLogger(__name__)
 RESULTS_CSV_KEY = "classification_results.csv"
 METRICS_CSV_KEY = "metrics_comparison.csv"
 CLASS_REPORT_CSV_KEY = "class_report.csv"
+FEATURE_IMPORTANCE_CSV_KEY = "feature_importance_summary.csv"
 RUN_PROFILE_KEY = "run_profile.json"
 
 
@@ -114,6 +115,13 @@ class ModelRunner:
         self.metrics_: dict[str, dict[str, Any]] = {}
         #: {model_name: best hyperparameters} for every model that was tuned this run.
         self.tuned_params_: dict[str, dict[str, Any]] = {}
+        #: {model_name: {feature: importance} or None} — each successful model's NATIVE
+        #: (built-in) feature importance, read post-training from the fitted estimator
+        #: (tree impurity/gain or |coef|). ``None`` for models that expose none (RBF-SVM,
+        #: GaussianNB). Keyed by the engineered/active feature columns. Model-dependent and
+        #: NOT comparable across models — distinct from the pre-training ``feature_impact_``
+        #: screen, which ranks RAW features by their statistical association with the target.
+        self.feature_importances_: dict[str, dict[str, float] | None] = {}
         self.X_test_: pd.DataFrame | None = None
         self.y_test_: pd.Series | None = None
         #: For multilabel runs only: the test target as a binary indicator matrix
@@ -203,6 +211,15 @@ class ModelRunner:
             if prediction_frames
             else pd.DataFrame()
         )
+
+        # Post-training native feature importance, read from each fitted model. This is a
+        # MODEL property (what the trained estimator relied on), distinct from the raw
+        # pre-training feature_impact_ screen above. Leakage-safe: it reads the fitted
+        # estimator's internal state only — no test data, no refit. ``feature_importance()``
+        # already guards its own None case (RBF-SVM / GaussianNB expose nothing).
+        self.feature_importances_ = {
+            name: model.feature_importance() for name, model in self.models_.items()
+        }
 
         n_ok = len(self.models_)
         logger.info(
@@ -505,6 +522,13 @@ class ModelRunner:
         with self.storage.open_write(CLASS_REPORT_CSV_KEY) as fh:
             report_df.to_csv(fh, index=False)
 
+        # post-training native feature importance, one (model, feature, importance, rank)
+        # row per model that exposes any. Always written (header-only if no model exposes
+        # importances) so the artifact set stays stable across problem types / model mixes.
+        importance_df = self._build_feature_importance_df()
+        with self.storage.open_write(FEATURE_IMPORTANCE_CSV_KEY) as fh:
+            importance_df.to_csv(fh, index=False)
+
         # run profile
         self.run_profile_ = self._build_run_profile(cfg, class_weight)
         with self.storage.open_write(RUN_PROFILE_KEY) as fh:
@@ -546,6 +570,32 @@ class ModelRunner:
                     }
                 )
         columns = ["model", "class", "precision", "recall", "f1_score", "support"]
+        return pd.DataFrame(rows, columns=columns)
+
+    def _build_feature_importance_df(self) -> pd.DataFrame:
+        """Flatten each model's native feature importance into ranked long-form rows.
+
+        One row per (model, feature) with the model's own importance value and a 1-based
+        ``rank`` (descending by importance within that model). Models that expose no native
+        importance (RBF-SVM, GaussianNB → ``feature_importance()`` is ``None``) contribute
+        no rows. Returns an empty frame with the locked columns when no model exposes any,
+        so the CSV is always written with a stable header.
+        """
+        columns = ["model", "feature", "importance", "rank"]
+        rows: list[dict[str, Any]] = []
+        for name, importances in self.feature_importances_.items():
+            if not importances:  # None (no native importance) or empty dict
+                continue
+            ranked = sorted(importances.items(), key=lambda kv: kv[1], reverse=True)
+            for rank, (feature, value) in enumerate(ranked, start=1):
+                rows.append(
+                    {
+                        "model": name,
+                        "feature": feature,
+                        "importance": float(value),
+                        "rank": rank,
+                    }
+                )
         return pd.DataFrame(rows, columns=columns)
 
     def _build_run_profile(

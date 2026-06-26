@@ -24,6 +24,7 @@ RESULT_KEYS = {
     "curves",
     "artifacts",
     "tuning",  # NEW in schema 1.1 (additive); null on a non-tuning run
+    "feature_importance",  # NEW in schema 1.3 (additive); per-model native importance
 }
 
 RUN_KEYS = {
@@ -87,8 +88,22 @@ def test_binary_run_envelope(binary_run_response) -> None:
     assert binary_run_response.status_code == 200
     body = binary_run_response.json()
     assert body["status"] == "ok"
-    assert body["schema_version"] == "1.2"
+    assert body["schema_version"] == "1.3"
     assert RESULT_KEYS == set(body["result"].keys())
+
+
+def test_binary_run_feature_importance_block(binary_run_response) -> None:
+    """``result.feature_importance`` (1.3) carries ranked native importance per tree/linear model.
+
+    The binary fixture trains LogisticRegression + RandomForest, both of which expose native
+    importances, so the block is a non-null dict keyed by model with ranked rows.
+    """
+    fi = binary_run_response.json()["result"]["feature_importance"]
+    assert isinstance(fi, dict) and fi
+    rf = fi["RandomForest"]
+    assert [r["rank"] for r in rf] == list(range(1, len(rf) + 1))
+    importances = [r["importance"] for r in rf]
+    assert importances == sorted(importances, reverse=True)  # ranked desc within the model
 
 
 def test_non_tuning_run_has_null_tuning(binary_run_response) -> None:
@@ -295,7 +310,7 @@ def test_tuned_run_exposes_best_params(api_client) -> None:
     resp = api_client.post("/api/v1/run", json=payload)
     assert resp.status_code == 200
     body = resp.json()
-    assert body["schema_version"] == "1.2"
+    assert body["schema_version"] == "1.3"
 
     tuning = body["result"]["tuning"]
     assert tuning is not None
@@ -345,7 +360,9 @@ def test_run_with_user_features_creates_columns(api_client) -> None:
     assert resp.status_code == 200
     body = resp.json()
     assert body["status"] == "ok"
-    assert body["schema_version"] == "1.2"  # request-side only — no response/version change
+    # user_features is request-side only — it adds no response field of its own; the version
+    # reflects the current contract default (1.3).
+    assert body["schema_version"] == "1.3"
     active = body["result"]["run"]["active_features"]
     assert "premium_per_sum" in active
     assert "start_year" in active

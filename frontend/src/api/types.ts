@@ -210,6 +210,18 @@ export interface FeatureImpactRow {
   rank: number | null
 }
 
+/**
+ * One ranked feature in result.feature_importance[model] (schema 1.3, additive).
+ * The model's NATIVE (built-in) importance for one feature, read post-training from the
+ * fitted estimator (tree impurity/gain or |coef|), ranked descending WITHIN the model.
+ * Model-dependent and NOT comparable across models. Consumed by: Feature Impact.
+ */
+export interface FeatureImportanceRow {
+  feature: string
+  importance: number | null
+  rank: number | null
+}
+
 /** One ROC curve (one-vs-rest per class). Consumed by: ROC / PR Curves. */
 export interface RocCurve {
   fpr: number[]
@@ -276,6 +288,12 @@ export interface RunResult {
   artifacts: ArtifactEntry[]
   /** schema 1.1 (additive): per-model tuned hyperparameters; null/absent when tuning was OFF. */
   tuning?: RunTuning | null
+  /**
+   * schema 1.3 (additive): native per-model post-training feature importance, keyed by model.
+   * Models with no native importance (RBF-SVM, GaussianNB) are omitted; null/absent when no
+   * model exposes any. Distinct from feature_impact (the pre-training raw-data screen).
+   */
+  feature_importance?: Record<string, FeatureImportanceRow[]> | null
 }
 
 /** Top-level envelope for POST /api/v1/run (the forward-compat seam). */

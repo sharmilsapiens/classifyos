@@ -225,6 +225,32 @@ train, worse on test) rather than genuinely generalising.
   column (amber/red as the gap widens). Confusion matrices, per-class reports and curves stay
   test-only by design.
 
+## Post-training feature importance — what each model leaned on (✅ Done, 2026-06-26)
+**In one line:** Every trained model now reports its own **native** feature importance —
+how much each input column actually drove that model's decisions — surfaced as data
+(JSON + CSV), not just the existing chart.
+- **What it is:** a *post-training, per-model* view, distinct from the existing pre-training
+  `feature_impact` screen. The pre-training screen asks "which raw columns correlate with the
+  target?" (a property of the data, before any model exists). This asks "which columns did the
+  **trained model** rely on?" (a property of the model). They answer different questions and can
+  disagree.
+- **It's model-dependent.** Random Forest / XGBoost / LightGBM report tree impurity/gain
+  importances; Logistic Regression reports coefficient magnitudes. SVM (RBF) and Naive Bayes
+  genuinely have no such number, so they're simply omitted — not faked. Because each model
+  measures importance its own way, the values are **not comparable across models**.
+- **What was already there:** the engine already computed these (each model wrapper's
+  `feature_importance()`) and drew them as `plot3_feature_importance.png`. The numbers just lived
+  only in the picture.
+- **What's new:** the conductor (ModelRunner) now collects them into `feature_importances_` and
+  writes a ranked `feature_importance_summary.csv` (one `model, feature, importance, rank` row per
+  model that exposes any). No leakage surface — it reads the fitted model's internals only, no test
+  data and no re-fitting.
+- **Surfaced everywhere additively.** The API gained an optional `result.feature_importance` block
+  keyed by model (locked contract bumped `1.2 → 1.3`, additive only — `null`/omitted when no model
+  exposes importances, so old runs are unchanged), and the dashboard's Feature Impact page now shows
+  a per-model ranked bar + the `plot3` chart beneath the pre-training screen, with a note that
+  SVM/Naive Bayes are omitted and values aren't cross-comparable.
+
 ---
 
 ## How to read this project

@@ -99,6 +99,16 @@ additively (`schema_version` now reports `"1.1"`).
   the upload/inspect payload, **not** the locked `/run` contract, so it is purely additive — **no
   version bump**. Documented in `docs/api_contract.md`.
 
+- **Post-training feature importance on `/run` (2026-06-26, additive, `1.2 → 1.3`)** — the `/run`
+  response gained an optional `result.feature_importance` block: each model's **native** importance
+  (tree impurity/gain or coefficient magnitude), keyed by model name, as ranked
+  `{feature, importance, rank}` rows. It's the post-training, model-derived counterpart to the
+  existing pre-training `result.feature_impact` screen of raw features. Models with no native
+  importance (RBF-SVM, GaussianNB) are omitted, and the whole block is `null` when none qualify —
+  so a run with only those models is byte-identical to earlier schemas. Also written as
+  `feature_importance_summary.csv`. Pure plumbing of values the engine already computed (the API
+  adds no ML); documented in `docs/api_contract.md` (the contract's third additive bump).
+
 ---
 
 ## How to read this project

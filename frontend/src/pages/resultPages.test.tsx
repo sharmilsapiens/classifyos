@@ -115,6 +115,35 @@ describe("Feature Impact", () => {
     expect(screen.getAllByText(/ID-like/i).length).toBeGreaterThan(0)
     expect(screen.getByText(/leakage, not signal/i)).toBeInTheDocument()
   })
+
+  it("renders the post-training (native) importance section when the 1.3 block is present", () => {
+    // Inject a schema-1.3 feature_importance block (the captured fixtures predate it).
+    const withImportance = {
+      ...binary,
+      result: {
+        ...binary.result!,
+        feature_importance: {
+          RandomForest: [
+            { feature: "tenure_months", importance: 0.42, rank: 1 },
+            { feature: "premium_amount", importance: 0.18, rank: 2 },
+          ],
+        },
+      },
+    } as unknown as RunResponse
+
+    renderPage(<FeatureImpact />, withImportance)
+    expect(screen.getByText(/Post-training importance/i)).toBeInTheDocument()
+    // Chart internals (axis feature labels) don't render in jsdom, so assert on the
+    // model selector option + the SVM/NB omission note, which are real DOM.
+    expect(screen.getByRole("option", { name: "RandomForest" })).toBeInTheDocument()
+    expect(screen.getByText(/SVM and Naive Bayes expose no native importance/i)).toBeInTheDocument()
+  })
+
+  it("shows the 'no native importance' state when the 1.3 block is absent", () => {
+    // The binary fixture carries no feature_importance → friendly explanation, no crash.
+    renderPage(<FeatureImpact />, binary)
+    expect(screen.getByText(/No model in this run exposes a native feature importance/i)).toBeInTheDocument()
+  })
 })
 
 describe("Predictions Table", () => {

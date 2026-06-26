@@ -359,6 +359,20 @@ class FeatureImpactRow(BaseModel):
     rank: int | None = None
 
 
+class FeatureImportanceRow(BaseModel):
+    """One ranked feature in ``result.feature_importance[model]`` (NEW in schema 1.3).
+
+    The model's NATIVE (built-in) importance for one feature, read post-training from the
+    fitted estimator (tree impurity/gain or ``|coef|``), with a 1-based ``rank`` descending
+    within that model. Model-dependent and NOT comparable across models — distinct from the
+    pre-training ``result.feature_impact`` screen of raw features.
+    """
+
+    feature: str
+    importance: float | None = None
+    rank: int | None = None
+
+
 class ArtifactEntry(BaseModel):
     """One output file in ``result.artifacts`` (PNGs fetched on demand via /outputs)."""
 
@@ -402,6 +416,10 @@ class RunResult(BaseModel):
     # NEW in schema 1.1 (additive, optional): the per-model tuned hyperparameters. ``None``
     # when tuning was OFF / produced nothing, so existing 1.0 fields are untouched.
     tuning: RunTuning | None = None
+    # NEW in schema 1.3 (additive, optional): native per-model feature importance, keyed by
+    # model name. Models with no native importance (RBF-SVM, GaussianNB) are omitted; ``None``
+    # when no model exposes any, so an SVM/NB-only run is byte-identical to earlier schemas.
+    feature_importance: dict[str, list[FeatureImportanceRow]] | None = None
 
 
 class RunResponse(BaseModel):
@@ -410,7 +428,8 @@ class RunResponse(BaseModel):
     status: str = "ok"  # "ok" | "error"
     # 1.1 (additive): added the optional ``result.tuning`` block.
     # 1.2 (additive): added ``result.models[].train`` (pre-balance train headline metrics).
-    # All earlier fields are unchanged across both bumps.
-    schema_version: str = "1.2"
+    # 1.3 (additive): added the optional ``result.feature_importance`` block (native
+    #     per-model post-training importance). All earlier fields are unchanged across bumps.
+    schema_version: str = "1.3"
     result: RunResult | None = None
     error: str | None = None

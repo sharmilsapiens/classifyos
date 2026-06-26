@@ -13,12 +13,13 @@ from pathlib import Path
 
 from classifyos.io.storage import StorageAdapter
 
-# The 11 artifacts, in a stable display order: CSVs + the run profile, then the six plots.
+# The artifacts, in a stable display order: CSVs + the run profile, then the six plots.
 ARTIFACT_KEYS: tuple[str, ...] = (
     "classification_results.csv",   # full per-sample predictions (Section 15)
     "metrics_comparison.csv",       # one summary row per model (Section 15)
     "class_report.csv",             # per-class per-model report (Section 15)
-    "feature_impact_summary.csv",   # ranked raw feature impact (Section 5)
+    "feature_impact_summary.csv",   # ranked raw feature impact, pre-training (Section 5)
+    "feature_importance_summary.csv",  # native per-model importance, post-training (Section 15)
     "run_profile.json",             # audit record of the run (Section 15)
     "plot1_confusion_matrix.png",   # Section 14
     "plot2_roc_pr_curves.png",      # Section 14

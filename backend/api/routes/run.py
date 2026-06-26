@@ -103,6 +103,7 @@ def _build_result(runner: ModelRunner, storage: StorageAdapter) -> dict[str, Any
         "curves": _curves(runner),
         "artifacts": collect_artifacts(storage),
         "tuning": _tuning(runner),
+        "feature_importance": _feature_importance(runner),
     }
 
 
@@ -268,6 +269,31 @@ def _feature_impact(runner: ModelRunner) -> list[dict[str, Any]]:
     if fi is None or not isinstance(fi, pd.DataFrame) or fi.empty:
         return []
     return fi.to_dict(orient="records")
+
+
+def _feature_importance(
+    runner: ModelRunner,
+) -> dict[str, list[dict[str, Any]]] | None:
+    """``result.feature_importance`` — native per-model importance (NEW in schema 1.3, additive).
+
+    Reshapes the runner's ``feature_importances_`` ({model: {feature: value} | None}) into
+    ``{model: [{feature, importance, rank}, …]}``, ranked descending within each model. Models
+    exposing no native importance (RBF-SVM, GaussianNB) are omitted. Returns ``None`` when no
+    model exposes any, so the field is null and an SVM/NB-only run matches the earlier schema.
+    Post-training and model-derived — distinct from the pre-training ``feature_impact`` screen.
+    No ML here — pure plumbing of values the engine already computed.
+    """
+    by_model = getattr(runner, "feature_importances_", None) or {}
+    out: dict[str, list[dict[str, Any]]] = {}
+    for name, importances in by_model.items():
+        if not importances:  # None (no native importance) or empty dict
+            continue
+        ranked = sorted(importances.items(), key=lambda kv: kv[1], reverse=True)
+        out[name] = [
+            {"feature": feature, "importance": float(value), "rank": rank}
+            for rank, (feature, value) in enumerate(ranked, start=1)
+        ]
+    return out or None
 
 
 def _tuning(runner: ModelRunner) -> dict[str, Any] | None:

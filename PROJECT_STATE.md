@@ -5,7 +5,31 @@
 > planning/overseer chat stays in sync with the local repo.
 
 **Last updated:** 2026-06-26
-**Updated by:** Claude Code (**NEW — train-vs-test metrics (the overfit gap)**. The dashboard's
+**Updated by:** Claude Code (**NEW — post-training feature importance (full stack, additive `1.2 → 1.3`)**.
+Added a *post-training, per-model* native feature-importance view, distinct from the pre-training
+`feature_impact` raw-data screen — different question: "what the trained model relied on" vs "which raw
+columns correlate with the target". **Engine:** `ModelRunner` collects each fitted model's
+`feature_importance()` into a new `feature_importances_` attr (`{model: {feature: value} | None}`) and
+writes a ranked `feature_importance_summary.csv` (`model, feature, importance, rank`; only models that
+expose importances contribute rows; header-only if none). Reuses the existing wrapper method + the
+existing `plot3` PNG — **no new ML, no new library calls** (hallucination check trivially clean).
+Leakage-safe (reads fitted-model internals only; no test data, no refit). Values are **model-dependent**
+(tree impurity/gain, LR `|coef|`; RBF-SVM/GaussianNB expose none → `None`, omitted) and **not comparable
+across models**. **API:** new optional `result.feature_importance` block keyed by model
+(`{model: [{feature, importance, rank}]}`), `null`/omitted when no model exposes any → an SVM/NB-only run
+is byte-identical to earlier schemas; `schema_version` bumped `1.2 → 1.3` (third additive bump, same
+pattern as `tuning`/`train`); `feature_importance_summary.csv` added to the artifacts allowlist;
+`docs/api_contract.md` updated additively (header note, example, notes bullet, footer). **UI:** Feature
+Impact page gained a "Post-training importance · per model" card (model selector → ranked Recharts bar +
+the `plot3` PNG) below the pre-training screen, with an SVM/NB-omission note + a graceful "no native
+importance" state; new `FeatureImportanceRow` type + optional `feature_importance` on `RunResult`.
+**Tests:** +1 runner test (importances captured per model; CSV ranked desc; NaiveBayes→`None`), +1 API
+test (`result.feature_importance` ranked rows; `RESULT_KEYS` + the three `schema_version` asserts bumped
+to `1.3`), +2 vitest (present + absent block); `test_use_case_sweep` artifact set +
+`feature_importance_summary.csv`. **Suites green: 253 backend pytest · 96 frontend vitest · `tsc -b` +
+`vite build` clean.** **No plan_tweak entry** — additive feature realizing a user request, not a
+deviation; the version bump is the sanctioned additive-change path for the locked contract.)
+**Prior update (same day):** Claude Code (**NEW — train-vs-test metrics (the overfit gap)**. The dashboard's
 headline numbers were *already* held-out **test** scores; there was no train-side number to compare
 against. Added one, additively. **Engine:** `ModelRunner._run_one_algorithm` now re-scores each
 fitted model on the **pre-balance** train split (`train_X`/`train_y`, threaded in as
@@ -303,6 +327,7 @@ Status legend: ⬜ Not started · 🔄 In progress · ✅ Done · ⚠️ Blocked
 | 2026-06-23 | **Phase 14**: invalid user-feature specs (missing/wrong-type column, target-as-source, unknown op at the builder, name collision) are **skipped + logged**, not raised; the config boundary (`build_config`) **hard-rejects** unknown ops/types/duplicate names | Two layers: the config boundary is the structural allowlist guard (a malformed config fails fast), while fit-time issues that depend on the actual data (column existence/type) must not abort an otherwise-valid run — "one bad spec must not kill the run", mirroring the per-algorithm robustness rule. No free-text formula is ever evaluated ([RISK]) |
 | 2026-06-21 | **Phase 11**: multilabel renders through the **unchanged locked envelope** — per-label metrics/curves/class-report populate; the single confusion matrix, MCC and log-loss are `null` (undefined for a multi-hot target), and curves carry per-label one-vs-rest entries | The contract is general enough to express multilabel honestly without a new field — `null`/empty for the genuinely-undefined pieces beats a fabricated number or a contract bump. Scope conclusion: ship "runs + renders honestly with documented limits", not full parity (per-label thresholds + imbalance weighting → v1.x). plan_tweak 34–35 |
 | 2026-06-26 | **Data Profile (EDA)**: profiling lives in a NEW pure `analysis/profile.py::profile_dataframe(df, …)`, and `inspect_file` gained an **additive** optional `profile=False` param that attaches `column_profiles`+`correlation` to the frame it already loaded (no second read). Served on the **extended `/upload` response** (not a new endpoint), consumed by a new store-driven `DataProfile.tsx` page | Owner picks (asked up front): new dedicated page · all four viz (numeric histogram+stats, categorical frequencies, missingness overview, correlation heatmap) · carried on `/upload`. The `profile=False` default keeps Section 3 byte-identical (additive rule); profiling fits nothing and reads no target, so there is **no leakage surface**. `/upload`/inspect is not the locked `/run` envelope → additive, no `schema_version` bump. Tradeoff: `/upload` recomputes profiles on every re-inspect (e.g. target change); bounded by the 50k-row sample + 30-col correlation caps. No plan_tweak — additive feature, not a deviation |
+| 2026-06-26 | **Post-training feature importance**: surfaced each model's **native** importance (the existing `feature_importance()` / `plot3`, previously PNG-only) as data — `feature_importances_` on the runner, `feature_importance_summary.csv`, and an additive `result.feature_importance` block (`{model: [{feature, importance, rank}]}`), `schema_version` `1.2 → 1.3`. Field name `feature_importance` (vs the existing `feature_impact`) follows the codebase's own impact/importance split (pre- vs post-training). Models with no native importance (RBF-SVM, GaussianNB) are **omitted**; whole block `null` when none qualify | Owner asked specifically for the per-model, model-dependent importance you "get to know post-training". Native (not permutation) per owner — cheapest path since the engine already computes it; chose to surface it rather than add a new ML pass. Omit-not-zero-fill keeps SVM/NB-only runs byte-identical to earlier schemas; additive version bump is the sanctioned path for the locked contract. No leakage (reads fitted-model internals only). No plan_tweak — additive feature, not a deviation |
 
 ---
 

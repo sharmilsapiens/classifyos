@@ -16,6 +16,7 @@ import pandas as pd
 from classifyos.config import build_config
 from classifyos.runner import (
     CLASS_REPORT_CSV_KEY,
+    FEATURE_IMPORTANCE_CSV_KEY,
     METRICS_CSV_KEY,
     RESULTS_CSV_KEY,
     RUN_PROFILE_KEY,
@@ -99,6 +100,35 @@ def test_runner_end_to_end_binary(storage) -> None:
     )
 
 
+def test_native_feature_importance_captured(storage, output_dir) -> None:
+    """Post-training native importance is captured per model and written to CSV.
+
+    A tree model (RandomForest) exposes a {feature: importance} dict over the active
+    feature columns; a model with no native importance (NaiveBayes, RBF-SVM) maps to None.
+    The CSV holds ranked rows only for the models that expose importances.
+    """
+    cfg = _lapse_config(algorithms=["RandomForest", "NaiveBayes"])
+    runner = ModelRunner(cfg, storage).run()
+
+    # RandomForest exposes importances keyed by the engineered/active feature columns.
+    rf_imp = runner.feature_importances_["RandomForest"]
+    assert isinstance(rf_imp, dict) and rf_imp
+    assert set(rf_imp) <= set(runner.active_features_)
+    assert all(isinstance(v, float) for v in rf_imp.values())
+
+    # GaussianNB exposes none → None (omitted from the CSV / API block).
+    assert runner.feature_importances_["NaiveBayes"] is None
+
+    # CSV: ranked long-form rows for RandomForest only; NaiveBayes contributes nothing.
+    imp_df = pd.read_csv(output_dir / FEATURE_IMPORTANCE_CSV_KEY)
+    assert list(imp_df.columns) == ["model", "feature", "importance", "rank"]
+    assert set(imp_df["model"].unique()) == {"RandomForest"}
+    rf_rows = imp_df[imp_df["model"] == "RandomForest"].sort_values("rank")
+    assert rf_rows["rank"].tolist() == list(range(1, len(rf_rows) + 1))
+    # ranked descending by importance
+    assert rf_rows["importance"].is_monotonic_decreasing
+
+
 def test_runner_multiclass(storage) -> None:
     """risk_tier 3-class end-to-end: metrics computed per model; 3 classes learned."""
     cfg = build_config(
@@ -175,6 +205,7 @@ def test_all_output_files(storage, output_dir) -> None:
         RESULTS_CSV_KEY,
         METRICS_CSV_KEY,
         CLASS_REPORT_CSV_KEY,
+        FEATURE_IMPORTANCE_CSV_KEY,
         RUN_PROFILE_KEY,
         SUMMARY_CSV_KEY,
         PLOT1_KEY,

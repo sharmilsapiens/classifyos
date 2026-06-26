@@ -11,11 +11,18 @@
 > `1.0`. No existing `1.0` field was renamed, retyped, or removed. Old clients ignore the new
 > field; this was the first version bump of the locked contract.
 >
-> **`1.2` (additive, current default).** Adds one new **optional** object to each
+> **`1.2` (additive).** Adds one new **optional** object to each
 > `result.models[]` row — `train` — carrying the same headline metrics computed on the
 > **pre-balance TRAIN split**, so the dashboard can show the overfit gap (`test − train`).
-> No `1.0`/`1.1` field was renamed, retyped, or removed. The response envelope now reports
-> `"schema_version": "1.2"`. Old clients ignore the new field.
+> No `1.0`/`1.1` field was renamed, retyped, or removed. Old clients ignore the new field.
+>
+> **`1.3` (additive, current default).** Adds one new **optional** block — `result.feature_importance` —
+> carrying each model's **native (built-in) post-training** feature importance (tree impurity/gain or
+> `|coef|`), keyed by model name. Models that expose none (RBF-SVM, GaussianNB) are omitted; the whole
+> block is `null`/absent when no model exposes any, so an SVM/NB-only run is byte-identical to earlier
+> schemas. This is **model-derived and post-training** — distinct from `result.feature_impact`, the
+> pre-training statistical screen of raw features. No `1.0`/`1.1`/`1.2` field was renamed, retyped, or
+> removed. The response envelope now reports `"schema_version": "1.3"`. Old clients ignore the new field.
 
 ## Conventions
 
@@ -207,9 +214,14 @@ missing/wrong-typed column is skipped and logged — it never aborts the run).
         // multiclass: one-vs-rest entry per class (ROC and PR both provided).
       }
     },
-    "artifacts": [                 // the 11 output files; PNGs fetched on demand
+    "artifacts": [                 // output files present in OUTPUT_DIR; PNGs fetched on demand
       {"name": "plot1_confusion_matrix.png", "suffix": ".png", "size_bytes": 0}
     ],
+    "feature_importance": {        // NEW in 1.3 (additive); null/absent when no model exposes any
+      "RandomForest": [            // per model; omitted for models with no native importance (SVM, NaiveBayes)
+        {"feature": "...", "importance": 0.0, "rank": 1}   // ranked desc WITHIN the model
+      ]
+    },
     "tuning": {                    // NEW in 1.1 (additive); null/absent when tuning was OFF
       "enabled": true,
       "metric": "f1_weighted",
@@ -255,6 +267,16 @@ missing/wrong-typed column is skipped and logged — it never aborts the run).
   study produced nothing). `best_params` is `{model: {param: value}}` with heterogeneous values
   (float/int/str/bool); `tuned_models` lists the models that yielded tuned params. The block is
   copied verbatim from the engine's `run_profile.json` `tuning` block — the API adds no ML.
+- **`result.feature_importance` (1.3, additive, optional)** carries each model's **native** feature
+  importance, read post-training from the fitted estimator: `{model: [{feature, importance, rank}, …]}`,
+  ranked descending **within** each model. The values are **model-dependent** (RF/XGBoost/LightGBM tree
+  impurity/gain, LogisticRegression `|coef|`) and **not comparable across models**; importances are over
+  the **engineered/active feature columns** (e.g. one-hot `region_North`), the same columns `plot3` draws.
+  Models that expose no native importance (RBF-SVM, GaussianNB) are **omitted**; the whole block is
+  `null`/absent when no model exposes any. This is the post-training counterpart to `feature_impact`
+  (the pre-training raw-data screen) — they answer different questions and can disagree. Also written as
+  `feature_importance_summary.csv`. No leakage surface: read from fitted-model internals, no test data,
+  no refit. Pure plumbing — the engine already computed the values.
 
 ### Execution model (limitation)
 
@@ -269,6 +291,8 @@ _Locked at Phase 8 sign-off. Any change to `schema_version: "1.0"` must be addit
 _`1.1` (additive): added the optional `result.tuning` block; all `1.0` fields are unchanged._
 _`1.2` (additive): added the optional `result.models[].train` block (pre-balance train headline
 metrics, for the overfit gap); all `1.0`/`1.1` fields are unchanged._
+_`1.3` (additive): added the optional `result.feature_importance` block (native per-model
+post-training importance); all `1.0`/`1.1`/`1.2` fields are unchanged._
 _2026-06-26 (default-value change only, **no schema/version change** — field shapes unchanged):
 `tuning.timeout_seconds` now defaults to `null` (no per-model wall-clock cap; `n_trials` bounds
 the study) rather than `600`. `tuning.search_space_overrides` (always present in `1.0`) is now
