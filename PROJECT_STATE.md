@@ -22,7 +22,11 @@ the `_div_` marker, which is ALSO used by the Section 7 `FeatureBuilder` ratio f
 `feature_engineering.ratios` is on, a ratio column like `a_div_b` can still surface in
 `interaction_cols`; this is pre-existing marker imprecision, unchanged by this work, and harmless
 now that the Interactions page is hidden. **To re-enable:** delete the force-disable line in
-`_engineer`, restore the plot6 call + the three UI comment blocks, and revert the test edits.)
+`_engineer`, restore the plot6 call + the three UI comment blocks, and revert the test edits.
+**This unwiring is now logged in `unwire.md`** (repo root) — the living registry of
+temporarily-disabled features, carrying for each entry a one-line summary, a short description,
+and the exact wire-back steps. Add a new section there whenever a feature is unwired; mark
+entries **Restored** with a date rather than deleting them.)
 **Prior update:** 2026-06-23
 **Updated by:** Claude Code (Phase 16 — **UI-only**: a **feature-builder panel** on the
 Configuration page where analysts build the `user_features` specs the API accepted in Phase 15 —
