@@ -236,7 +236,7 @@ export default function Configure() {
                 {CLASS_BALANCE.map((c) => <option key={c} value={c}>{c}</option>)}
               </Select>
             </Field>
-            <Field label="Missing values">
+            <Field label="Missing values" hint={missingValuesHint(form.missing_strategy)}>
               <Select value={form.missing_strategy}
                 onChange={(e) => updateForm({ missing_strategy: e.target.value })}>
                 {MISSING.map((c) => <option key={c} value={c}>{c}</option>)}
@@ -381,12 +381,41 @@ export default function Configure() {
   )
 }
 
-/** A label + control stacked vertically (used throughout the form). */
-function Field({ label, children }: { label: string; children: ReactNode }) {
+/** A label + control stacked vertically (used throughout the form). An optional
+ *  `hint` renders as muted helper text below the control. */
+function Field({
+  label,
+  hint,
+  children,
+}: {
+  label: string
+  hint?: ReactNode
+  children: ReactNode
+}) {
   return (
     <div className={cn("space-y-1.5")}>
       <Label>{label}</Label>
       {children}
+      {hint && <p className="text-xs text-muted-foreground">{hint}</p>}
     </div>
   )
+}
+
+/** Strategy-specific note for the missing-values selector. Mean/median are
+ *  numeric-only statistics, so categorical columns fall back to the most frequent
+ *  value (mode); this mirrors the engine's Preprocessor (preprocess.py). */
+function missingValuesHint(strategy: string): string | undefined {
+  switch (strategy) {
+    case "mean":
+    case "median":
+      return `Numeric columns use the ${strategy}. Categorical columns fall back to the most frequent value (mode), since a ${strategy} is undefined for them.`
+    case "ffill":
+      return "Forward-fills each column from the previous row. Categorical columns (and any leading rows with no prior value) fall back to the most frequent value (mode)."
+    case "mode":
+      return "Every column — numeric and categorical — is filled with its most frequent value (mode)."
+    case "drop":
+      return "Training rows with any missing value are dropped. At prediction time, rows are imputed with the training median (numeric) or mode (categorical) instead — rows are never dropped there."
+    default:
+      return undefined
+  }
 }
