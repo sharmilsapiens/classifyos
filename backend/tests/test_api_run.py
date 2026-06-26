@@ -87,7 +87,7 @@ def test_binary_run_envelope(binary_run_response) -> None:
     assert binary_run_response.status_code == 200
     body = binary_run_response.json()
     assert body["status"] == "ok"
-    assert body["schema_version"] == "1.1"
+    assert body["schema_version"] == "1.2"
     assert RESULT_KEYS == set(body["result"].keys())
 
 
@@ -117,6 +117,37 @@ def test_binary_models_is_list_with_failed_row(binary_run_response) -> None:
     # A succeeded model carries real metrics.
     ok = [m for m in models if m["status"] == "ok"]
     assert ok and ok[0]["f1_weighted"] is not None
+
+
+_TRAIN_KEYS = {
+    "accuracy",
+    "f1_weighted",
+    "f1_macro",
+    "precision_weighted",
+    "recall_weighted",
+    "roc_auc",
+    "pr_auc",
+    "log_loss",
+    "mcc",
+}
+
+
+def test_binary_models_carry_train_block(binary_run_response) -> None:
+    """Each model row carries the additive ``train`` block (schema 1.2) — pre-balance metrics."""
+    models = binary_run_response.json()["result"]["models"]
+    by_name = {m["name"]: m for m in models}
+
+    # A succeeded model: train block present, fully shaped, with real numbers.
+    ok = next(m for m in models if m["status"] == "ok")
+    assert ok["train"] is not None
+    assert _TRAIN_KEYS == set(ok["train"].keys())
+    train_f1 = ok["train"]["f1_weighted"]
+    assert train_f1 is not None and 0.0 <= train_f1 <= 1.0
+
+    # A failed model still has the block, all values null.
+    failed = by_name["NotAModel"]
+    assert failed["train"] is not None
+    assert all(v is None for v in failed["train"].values())
 
 
 def test_binary_predictions_sampled(binary_run_response) -> None:
@@ -264,7 +295,7 @@ def test_tuned_run_exposes_best_params(api_client) -> None:
     resp = api_client.post("/api/v1/run", json=payload)
     assert resp.status_code == 200
     body = resp.json()
-    assert body["schema_version"] == "1.1"
+    assert body["schema_version"] == "1.2"
 
     tuning = body["result"]["tuning"]
     assert tuning is not None
@@ -299,7 +330,7 @@ def test_run_with_user_features_creates_columns(api_client) -> None:
     ``single`` date-part extraction (the datetime path; the sample data has only one datetime
     column, so a two-column ``datetime_diff`` isn't expressible here). The created columns must
     appear in ``result.run.active_features`` — proving the engine built them — and the response
-    schema is UNCHANGED (request-side only, still ``1.1``).
+    schema is UNCHANGED (request-side only, still ``1.2``).
     """
     payload = {
         **_UF_BASE,
@@ -314,7 +345,7 @@ def test_run_with_user_features_creates_columns(api_client) -> None:
     assert resp.status_code == 200
     body = resp.json()
     assert body["status"] == "ok"
-    assert body["schema_version"] == "1.1"  # request-side only — no response/version change
+    assert body["schema_version"] == "1.2"  # request-side only — no response/version change
     active = body["result"]["run"]["active_features"]
     assert "premium_per_sum" in active
     assert "start_year" in active

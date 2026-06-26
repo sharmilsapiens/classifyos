@@ -191,6 +191,7 @@ class ModelRunner:
             row, preds = self._run_one_algorithm(
                 name, X_bal, y_bal, test_X, test_y, problem_type, class_weight, cfg,
                 best_params=self.tuned_params_.get(name, {}),
+                train_eval_X=train_X, train_eval_y=train_y,
             )
             metrics_rows.append(row)
             if preds is not None:
@@ -345,11 +346,22 @@ class ModelRunner:
         class_weight: dict[Any, float] | None,
         cfg: dict[str, Any],
         best_params: dict[str, Any] | None = None,
+        train_eval_X: pd.DataFrame | None = None,
+        train_eval_y: pd.Series | None = None,
     ) -> tuple[dict[str, Any], pd.DataFrame | None]:
         """Build → fit → classify → evaluate ONE algorithm; never raises.
 
         ``best_params`` (from the optional tuning stage) are splatted into ``build_model``;
         when empty the wrapper defaults are used — identical to the pre-tuning behaviour.
+
+        The headline metrics (``accuracy``/``f1_weighted``/…) are computed on the HELD-OUT
+        TEST split — they are the reported generalization performance. In addition, a parallel
+        set of ``train_*`` headline metrics is computed on ``train_eval_X``/``train_eval_y`` —
+        the PRE-balance TRAIN split (real rows at the natural class distribution, NOT the
+        SMOTE/undersampled matrix the model was fit on). Reporting train on the pre-balance
+        split keeps it the same distribution as test, so the train↔test gap is a clean
+        overfitting signal rather than one muddied by the balancing-induced distribution shift.
+        No leakage surface: the model already trained on these rows; this only reports on them.
 
         On any failure the model is logged, recorded as a ``status="failed"`` row with
         the error message, and ``None`` predictions are returned so the run continues
@@ -387,6 +399,12 @@ class ModelRunner:
                 y_pred = model.predict(X_test)
                 metrics = evaluate_model(y_test, y_pred, y_proba, problem_type, classes)
 
+            # Train-side (pre-balance) headline metrics — see docstring. Re-runs the SAME
+            # evaluate_model on the pre-balance TRAIN split so train/test are apples-to-apples.
+            train_metrics = self._evaluate_train(
+                model, train_eval_X, train_eval_y, problem_type, classes
+            )
+
             preds = classify(model, X_test, y_test, classes)
             preds.insert(0, "model", model.name)
             preds = preds.reset_index().rename(columns={"index": "sample_index"})
@@ -407,6 +425,7 @@ class ModelRunner:
                 "pr_auc": metrics.get("pr_auc"),
                 "mcc": metrics.get("mcc"),
                 "log_loss": metrics.get("log_loss"),
+                **_train_row(train_metrics),
                 "error": None,
             }
             logger.info(
@@ -431,9 +450,39 @@ class ModelRunner:
                 "pr_auc": None,
                 "mcc": None,
                 "log_loss": None,
+                **_train_row(None),
                 "error": f"{type(exc).__name__}: {exc}",
             }
             return row, None
+
+    def _evaluate_train(
+        self,
+        model: Any,
+        train_eval_X: pd.DataFrame | None,
+        train_eval_y: pd.Series | None,
+        problem_type: str,
+        classes: np.ndarray,
+    ) -> dict[str, Any] | None:
+        """Headline metrics on the PRE-balance TRAIN split (the overfit-gap reference).
+
+        Returns ``None`` (so every ``train_*`` field becomes ``None``) when the pre-balance
+        matrices were not supplied or the evaluation fails for any reason — a train-side
+        diagnostic must never abort or alter the run. ``classes`` is the fitted model's class
+        order so ``evaluate_model``/``predict_proba`` columns stay aligned with the test call.
+        """
+        if train_eval_X is None or train_eval_y is None:
+            return None
+        try:
+            proba = model.predict_proba(train_eval_X)
+            pred = model.predict(train_eval_X)
+            if problem_type == "multilabel":
+                y_true = self._mlb.transform(parse_label_sets(train_eval_y))
+            else:
+                y_true = train_eval_y
+            return evaluate_model(y_true, pred, proba, problem_type, classes)
+        except Exception:  # noqa: BLE001 — a diagnostic must never kill the run
+            logger.exception("ModelRunner: train-side evaluation failed for %r", model.name)
+            return None
 
     # ----------------------------------------------------------------- artifacts --
 
@@ -556,6 +605,28 @@ class ModelRunner:
             "models_succeeded": sorted(self.models_),
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
+
+
+#: Headline metric keys mirrored onto the train side as ``train_<key>`` columns. These are
+#: the same scalars the scoreboard shows for test; the train copy makes the overfit gap
+#: visible. Confusion matrices / per-class reports / curves stay test-only by design.
+_TRAIN_METRIC_KEYS = (
+    "accuracy",
+    "f1_weighted",
+    "f1_macro",
+    "precision_weighted",
+    "recall_weighted",
+    "roc_auc",
+    "pr_auc",
+    "mcc",
+    "log_loss",
+)
+
+
+def _train_row(train_metrics: dict[str, Any] | None) -> dict[str, Any]:
+    """Build the ``train_*`` columns from a train-side metrics dict (``None`` → all ``None``)."""
+    metrics = train_metrics or {}
+    return {f"train_{key}": metrics.get(key) for key in _TRAIN_METRIC_KEYS}
 
 
 def _fmt(value: Any) -> str:

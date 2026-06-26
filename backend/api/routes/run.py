@@ -139,6 +139,7 @@ def _models(runner: ModelRunner) -> list[dict[str, Any]]:
             {
                 "name": record.get("model"),
                 "status": record.get("status"),
+                # Headline metrics are the HELD-OUT TEST split (unchanged since 1.0).
                 "accuracy": record.get("accuracy"),
                 "f1_weighted": record.get("f1_weighted"),
                 "f1_macro": record.get("f1_macro"),
@@ -148,10 +149,37 @@ def _models(runner: ModelRunner) -> list[dict[str, Any]]:
                 "pr_auc": record.get("pr_auc"),
                 "log_loss": record.get("log_loss"),
                 "mcc": record.get("mcc"),
+                # NEW in 1.2 (additive): the same headline metrics on the PRE-balance TRAIN
+                # split, for the overfit gap (test − train). See docs/api_contract.md.
+                "train": _train_block(record),
                 "error": record.get("error"),
             }
         )
     return rows
+
+
+# Headline metric keys mirrored on the train side (engine writes them as ``train_<key>``).
+_TRAIN_METRIC_KEYS = (
+    "accuracy",
+    "f1_weighted",
+    "f1_macro",
+    "precision_weighted",
+    "recall_weighted",
+    "roc_auc",
+    "pr_auc",
+    "log_loss",
+    "mcc",
+)
+
+
+def _train_block(record: dict[str, Any]) -> dict[str, Any]:
+    """``models[].train`` — pre-balance TRAIN headline metrics (NEW in schema 1.2).
+
+    Reads the ``train_<key>`` columns the engine adds to each metrics row. Always present
+    (every value is ``None`` for a failed model, or when train evaluation was unavailable),
+    so the block's shape is stable; only the values vary.
+    """
+    return {key: record.get(f"train_{key}") for key in _TRAIN_METRIC_KEYS}
 
 
 def _predictions(runner: ModelRunner) -> dict[str, Any]:

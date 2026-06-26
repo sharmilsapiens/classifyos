@@ -273,7 +273,13 @@ export default function Overview() {
                   <th className="px-2 py-2 text-left font-medium">Model</th>
                   <th className="px-2 py-2 text-left font-medium">Status</th>
                   <th className="px-2 py-2 text-right font-medium">Accuracy</th>
-                  <th className="px-2 py-2 text-right font-medium">F1-weighted</th>
+                  <th className="px-2 py-2 text-right font-medium">F1 · test</th>
+                  <th className="px-2 py-2 text-right font-medium" title="F1-weighted on the pre-balance train split">
+                    F1 · train
+                  </th>
+                  <th className="px-2 py-2 text-right font-medium" title="Train − test F1-weighted; a large positive gap suggests overfitting">
+                    Gap
+                  </th>
                   <th className="px-2 py-2 text-right font-medium">ROC-AUC</th>
                   <th className="px-2 py-2 text-right font-medium">MCC</th>
                 </tr>
@@ -297,6 +303,8 @@ export default function Overview() {
                     </td>
                     <td className="px-2 py-2 text-right font-mono">{fmtMetric(m.accuracy)}</td>
                     <td className="px-2 py-2 text-right font-mono">{fmtMetric(m.f1_weighted)}</td>
+                    <td className="px-2 py-2 text-right font-mono">{fmtMetric(m.train?.f1_weighted)}</td>
+                    <OverfitGapCell test={m.f1_weighted} train={m.train?.f1_weighted} />
                     <td className="px-2 py-2 text-right font-mono">{fmtMetric(m.roc_auc)}</td>
                     <td className="px-2 py-2 text-right font-mono">{fmtMetric(m.mcc)}</td>
                   </tr>
@@ -304,6 +312,11 @@ export default function Overview() {
               </tbody>
             </table>
           </div>
+          <p className="mt-3 text-xs text-muted-foreground">
+            Accuracy, ROC-AUC and MCC are on the held-out <strong>test</strong> set. <strong>Gap</strong> is
+            train − test F1-weighted (train measured on the pre-balance split): a large positive gap suggests
+            the model is overfitting.
+          </p>
         </CardContent>
       </Card>
 
@@ -387,6 +400,30 @@ function StatCard({
         )}
       </CardContent>
     </Card>
+  )
+}
+
+/**
+ * Overfit-gap table cell: train − test F1-weighted. A large positive gap (train ≫ test) is the
+ * classic overfitting signature, so we tint it amber past 0.10 and red past 0.20. Renders "—"
+ * when either side is missing (failed model, or train metrics absent on an older schema).
+ */
+function OverfitGapCell({ test, train }: { test: number | null; train: number | null | undefined }) {
+  if (test == null || train == null) {
+    return <td className="px-2 py-2 text-right font-mono text-muted-foreground">—</td>
+  }
+  const gap = train - test
+  const tone =
+    gap >= 0.2 ? "text-destructive" : gap >= 0.1 ? "text-amber-600" : "text-muted-foreground"
+  const sign = gap > 0 ? "+" : ""
+  return (
+    <td
+      className={`px-2 py-2 text-right font-mono ${tone}`}
+      title={gap >= 0.1 ? "Train markedly above test — likely overfitting" : undefined}
+    >
+      {sign}
+      {fmtMetric(gap)}
+    </td>
   )
 }
 

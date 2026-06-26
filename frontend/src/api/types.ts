@@ -125,10 +125,12 @@ export interface RunMeta {
   timestamp: string // UTC ISO-8601
 }
 
-/** One row in result.models (a LIST; includes failed rows). Consumed by: Overview, Class Report. */
-export interface ModelMetrics {
-  name: string
-  status: "ok" | "failed"
+/**
+ * Headline metrics on the PRE-balance TRAIN split (schema 1.2, additive). Same scalars as
+ * the test-side fields on ModelMetrics, measured on real pre-balance train rows so the
+ * overfit gap (test − train) is meaningful. All null for a failed model. Consumed by: Overview.
+ */
+export interface TrainMetrics {
   accuracy: number | null
   f1_weighted: number | null
   f1_macro: number | null
@@ -138,6 +140,24 @@ export interface ModelMetrics {
   pr_auc: number | null
   log_loss: number | null
   mcc: number | null
+}
+
+/** One row in result.models (a LIST; includes failed rows). Consumed by: Overview, Class Report. */
+export interface ModelMetrics {
+  name: string
+  status: "ok" | "failed"
+  // Headline metrics are the HELD-OUT TEST split.
+  accuracy: number | null
+  f1_weighted: number | null
+  f1_macro: number | null
+  precision_weighted: number | null
+  recall_weighted: number | null
+  roc_auc: number | null
+  pr_auc: number | null
+  log_loss: number | null
+  mcc: number | null
+  /** schema 1.2 (additive): same headline metrics on the pre-balance train split (overfit gap). */
+  train?: TrainMetrics | null
   error: string | null // set when status === "failed"
 }
 

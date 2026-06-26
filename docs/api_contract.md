@@ -5,12 +5,17 @@
 > changes bump `schema_version` (`1.0` → `1.1`); `1.0` is never mutated in place.
 > See CLAUDE.md → "API contract is locked after Phase 8."
 >
-> **`1.1` (additive, current default).** Adds one new **optional** block — `result.tuning` —
+> **`1.1` (additive).** Adds one new **optional** block — `result.tuning` —
 > carrying the per-model tuned hyperparameters when Optuna tuning was on. It is `null`/absent
 > when tuning was OFF (or produced no tuned params), so a non-tuning run is byte-identical to
-> `1.0`. No existing `1.0` field was renamed, retyped, or removed. The response envelope now
-> reports `"schema_version": "1.1"`. Old clients ignore the new field; this is the first
-> version bump of the locked contract.
+> `1.0`. No existing `1.0` field was renamed, retyped, or removed. Old clients ignore the new
+> field; this was the first version bump of the locked contract.
+>
+> **`1.2` (additive, current default).** Adds one new **optional** object to each
+> `result.models[]` row — `train` — carrying the same headline metrics computed on the
+> **pre-balance TRAIN split**, so the dashboard can show the overfit gap (`test − train`).
+> No `1.0`/`1.1` field was renamed, retyped, or removed. The response envelope now reports
+> `"schema_version": "1.2"`. Old clients ignore the new field.
 
 ## Conventions
 
@@ -162,9 +167,16 @@ missing/wrong-typed column is skipped and logged — it never aborts the run).
       {
         "name": "RandomForest",
         "status": "ok",            // "ok" | "failed"
+        // headline metrics = HELD-OUT TEST split (1.0; unchanged)
         "accuracy": 0.0, "f1_weighted": 0.0, "f1_macro": 0.0,
         "precision_weighted": 0.0, "recall_weighted": 0.0,
         "roc_auc": 0.0, "pr_auc": 0.0, "log_loss": 0.0, "mcc": 0.0,
+        "train": {                 // NEW in 1.2 (additive): same metrics on the PRE-balance TRAIN split
+          "accuracy": 0.0, "f1_weighted": 0.0, "f1_macro": 0.0,
+          "precision_weighted": 0.0, "recall_weighted": 0.0,
+          "roc_auc": 0.0, "pr_auc": 0.0, "log_loss": 0.0, "mcc": 0.0
+          // all null for a failed model (or if train eval was unavailable); block always present
+        },
         "error": null              // string when status == "failed"
       }
     ],
@@ -221,6 +233,14 @@ missing/wrong-typed column is skipped and logged — it never aborts the run).
   changes, never silently mutate `1.0`.
 - `models` is intentionally a **list** (frontend `.map`), not a dict; it includes failed-algorithm
   rows (`status="failed"`, `error` set) so a bad model is visible, not dropped.
+- **`models[].train` (1.2, additive).** The top-level per-model metrics are the **held-out TEST**
+  split. `train` mirrors the headline scalars on the **pre-balance TRAIN** split — real rows at
+  the natural class distribution, **not** the SMOTE/undersampled matrix the model was fit on — so
+  `test − train` is a clean overfit gap (a large positive gap ⇒ memorization), not one distorted
+  by the balancing-induced distribution shift. There is no leakage surface: the model already
+  trained on these rows; this only *reports* on them. The block is always present; every value is
+  `null` for a failed model (or if train evaluation was unavailable). Confusion matrices, per-class
+  reports, and curves remain **test-only** — `train` carries headline scalars only.
 - `predictions` is **sampled by design** (≤100 rows/model) for display; `curves` and
   `confusion_matrix` are always computed on the **full test set**. The full prediction table is
   `classification_results.csv`, fetched via `/outputs/{name}`.
@@ -247,6 +267,8 @@ response. A long run can exceed a reverse-proxy/gateway timeout. A background-jo
 
 _Locked at Phase 8 sign-off. Any change to `schema_version: "1.0"` must be additive._
 _`1.1` (additive): added the optional `result.tuning` block; all `1.0` fields are unchanged._
+_`1.2` (additive): added the optional `result.models[].train` block (pre-balance train headline
+metrics, for the overfit gap); all `1.0`/`1.1` fields are unchanged._
 _2026-06-26 (default-value change only, **no schema/version change** — field shapes unchanged):
 `tuning.timeout_seconds` now defaults to `null` (no per-model wall-clock cap; `n_trials` bounds
 the study) rather than `600`. `tuning.search_space_overrides` (always present in `1.0`) is now

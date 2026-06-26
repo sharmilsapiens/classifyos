@@ -5,6 +5,29 @@
 > planning/overseer chat stays in sync with the local repo.
 
 **Last updated:** 2026-06-26
+**Updated by:** Claude Code (**NEW — train-vs-test metrics (the overfit gap)**. The dashboard's
+headline numbers were *already* held-out **test** scores; there was no train-side number to compare
+against. Added one, additively. **Engine:** `ModelRunner._run_one_algorithm` now re-scores each
+fitted model on the **pre-balance** train split (`train_X`/`train_y`, threaded in as
+`train_eval_X`/`train_eval_y`) via the SAME `evaluate_model`, and writes the headline scalars as
+`train_*` columns on the metrics row (a new `_evaluate_train` helper + `_train_row`/`_TRAIN_METRIC_KEYS`).
+Pre-balance (not the SMOTE/undersampled fit matrix) on purpose: same distribution as test → the
+`test − train` gap is a clean overfit signal, not one muddied by rebalancing. No leakage surface
+(model already trained on these rows; report-only), and a train-eval error is caught/logged and
+never aborts the run — failed models get null `train_*`. **API:** `_models` nests a `train` object
+per model row from those columns (new `TrainMetrics` Pydantic model; `_train_block` helper);
+**LOCKED contract bumped `1.1 → 1.2`, additive only** — no `1.0`/`1.1` field renamed/retyped/removed,
+old clients ignore `train`. `docs/api_contract.md` updated (header note, `models[]` example, a notes
+bullet, footer). **UI:** `Overview.tsx` scoreboard gains **F1 · test** / **F1 · train** columns + a
+colour-coded **Gap** cell (`OverfitGapCell`: amber ≥0.10, red ≥0.20) + a caption clarifying which
+split each column is; `ModelMetrics` type gains optional `train?: TrainMetrics`. Confusion matrices /
+per-class reports / curves stay **test-only** by design (train carries headline scalars only).
+**Tests:** new `test_binary_models_carry_train_block` (block shape + null-on-failed); bumped
+`schema_version` asserts `1.1 → 1.2` in `test_api_run`/`test_use_case_sweep`. **43 API+runner tests
+green, 13 sweep+explain green, 36 frontend result-page tests green, `vite build` clean.** **No
+plan_tweak entry** — additive feature realizing a user request, not a deviation; the version bump is
+the sanctioned additive-change path for the locked contract.)
+**Prior update:** 2026-06-26
 **Updated by:** Claude Code (**NEW — Data Profile (EDA) view on upload**. Added exploratory data
 analysis for an uploaded dataset, surfaced on a new **"Data Profile"** Workspace page
 (nav: Upload → **Data Profile** → Configuration). **Engine:** new pure module

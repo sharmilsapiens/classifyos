@@ -204,6 +204,27 @@ common values for category columns, a missing-data scan, and how the number colu
   when on, it profiles the file it had already loaded (no second read). Engine + API + dashboard
   page; 10 new engine tests.
 
+## Train-vs-test metrics — the overfit gap (✅ Done, 2026-06-26)
+**In one line:** Every model now reports its scores on the **training data** alongside the
+held-out **test** scores, so you can see at a glance whether a model is memorising (great on
+train, worse on test) rather than genuinely generalising.
+- **What was already true:** all the headline numbers shown in the dashboard were *already* the
+  held-out **test** scores (the model never sees the test rows while training) — there was simply
+  no train-side number to compare against.
+- **What's new:** the conductor (ModelRunner) re-scores each trained model on the **pre-balance
+  training split** — the real training rows at their natural class mix, *not* the SMOTE-balanced
+  set the model was fitted on — and reports the same headline metrics (accuracy, F1, precision,
+  recall, ROC-AUC, PR-AUC, MCC, log-loss) as a parallel `train_*` set. Measuring train on the
+  pre-balance rows keeps it the *same distribution* as test, so the train→test gap is a clean
+  overfitting signal rather than one muddied by the rebalancing.
+- **No leakage, no risk.** The model already trained on these rows; this only *reports* on them.
+  A failed model carries nulls; a train-side scoring error is logged and never aborts the run.
+- **Surfaced everywhere additively.** The API gained an optional `train` block on each model row
+  (locked contract bumped `1.1 → 1.2`, additive only — old clients ignore it) and the dashboard's
+  model scoreboard now shows **F1 · train** next to **F1 · test** plus a colour-coded **Gap**
+  column (amber/red as the gap widens). Confusion matrices, per-class reports and curves stay
+  test-only by design.
+
 ---
 
 ## How to read this project

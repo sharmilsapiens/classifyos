@@ -258,8 +258,34 @@ class RunMeta(BaseModel):
     timestamp: str
 
 
+class TrainMetrics(BaseModel):
+    """``result.models[].train`` — headline metrics on the PRE-balance TRAIN split (1.2).
+
+    Additive in ``schema_version`` 1.2. The SAME headline scalars as the test-side fields on
+    :class:`ModelMetrics`, but measured on the pre-balance TRAIN split (real rows at the
+    natural class distribution — NOT the SMOTE/undersampled matrix the model was fit on). The
+    point is the overfit gap: ``model.<metric> − model.train.<metric>``. Every field is
+    ``None`` for a failed model (or when train evaluation was unavailable), so the block's
+    shape is always present and only the values vary.
+    """
+
+    accuracy: float | None = None
+    f1_weighted: float | None = None
+    f1_macro: float | None = None
+    precision_weighted: float | None = None
+    recall_weighted: float | None = None
+    roc_auc: float | None = None
+    pr_auc: float | None = None
+    log_loss: float | None = None
+    mcc: float | None = None
+
+
 class ModelMetrics(BaseModel):
-    """One per-model row in ``result.models`` (a LIST so the frontend can ``.map``)."""
+    """One per-model row in ``result.models`` (a LIST so the frontend can ``.map``).
+
+    The top-level metric fields are the HELD-OUT TEST split (1.0). ``train`` (1.2, additive)
+    carries the same headline metrics on the pre-balance TRAIN split for the overfit gap.
+    """
 
     name: str
     status: str  # "ok" | "failed"
@@ -272,6 +298,8 @@ class ModelMetrics(BaseModel):
     pr_auc: float | None = None
     log_loss: float | None = None
     mcc: float | None = None
+    # NEW in schema 1.2 (additive): pre-balance TRAIN headline metrics. Always present.
+    train: TrainMetrics | None = None
     error: str | None = None
 
 
@@ -380,7 +408,9 @@ class RunResponse(BaseModel):
     """Top-level envelope for ``POST /api/v1/run`` (the forward-compat seam)."""
 
     status: str = "ok"  # "ok" | "error"
-    # 1.1 (additive): adds the optional ``result.tuning`` block; all 1.0 fields are unchanged.
-    schema_version: str = "1.1"
+    # 1.1 (additive): added the optional ``result.tuning`` block.
+    # 1.2 (additive): added ``result.models[].train`` (pre-balance train headline metrics).
+    # All earlier fields are unchanged across both bumps.
+    schema_version: str = "1.2"
     result: RunResult | None = None
     error: str | None = None
