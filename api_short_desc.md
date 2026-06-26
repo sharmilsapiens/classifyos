@@ -90,6 +90,14 @@ additively (`schema_version` now reports `"1.1"`).
   that have no meaning for a multi-hot target (a single confusion matrix, MCC, log-loss) come back
   empty/`null` rather than wrong — so the contract did not need a new field. The 7-use-case sweep
   test drives all seven cases (binary, multiclass, multilabel) through this endpoint.
+- **Data Profile blocks on `/upload` (2026-06-26, additive)** — `/upload` now returns, alongside
+  the usual file inspection, a per-column profile for the dashboard's Data Profile view:
+  distribution stats + a histogram for number columns, top value-frequencies for category columns,
+  date ranges for date columns, and a correlation grid over the number columns. It is computed on
+  the file the upload already loaded (no extra read), reads no target and fits nothing (no leakage),
+  and any non-numbers (`NaN`/`Infinity`) are turned into `null` so the JSON is always valid. This is
+  the upload/inspect payload, **not** the locked `/run` contract, so it is purely additive — **no
+  version bump**. Documented in `docs/api_contract.md`.
 
 ---
 

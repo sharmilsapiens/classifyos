@@ -69,6 +69,7 @@ def inspect_file(
     path: str,
     storage: StorageAdapter,
     target: str | None = None,
+    profile: bool = False,
 ) -> dict[str, Any]:
     """Profile a dataset's structure without committing to a run config.
 
@@ -77,12 +78,19 @@ def inspect_file(
         storage: Storage adapter used for all I/O.
         target: Optional target column; when given, the class distribution and a
             suggested problem type are included.
+        profile: When True, also attach per-column exploratory statistics
+            (``column_profiles``) and a numeric ``correlation`` matrix for the
+            browser's Data Profile view. Default False leaves the result
+            byte-identical to the original contract — the extra work runs on the
+            frame this function already loaded, so there is never a second read.
 
     Returns:
         A dict with keys: ``columns``, ``dtypes``, ``numeric_cols``,
         ``categorical_cols``, ``binary_cols``, ``datetime_cols``, ``n_rows``,
         ``n_missing``, ``sample`` (first 5 rows, NaN→None). When ``target`` is
         supplied, also ``class_distribution`` and ``suggested_problem_type``.
+        When ``profile`` is True, also ``column_profiles``, ``correlation``,
+        ``profile_sampled`` and ``n_rows_profiled``.
 
     Raises:
         ValueError: If ``target`` is given but not present in the file.
@@ -137,5 +145,22 @@ def inspect_file(
         }
         n_classes = int(counts.shape[0])
         result["suggested_problem_type"] = "binary" if n_classes == 2 else "multiclass"
+
+    if profile:
+        # Reuse the frame already loaded above — no second read. Pure display
+        # profiling (distributions, value counts, correlation); fits nothing.
+        from ..analysis.profile import profile_dataframe
+
+        prof = profile_dataframe(
+            df,
+            numeric_cols=numeric_cols,
+            categorical_cols=categorical_cols,
+            binary_cols=binary_cols,
+            datetime_cols=datetime_cols,
+        )
+        result["column_profiles"] = prof["column_profiles"]
+        result["correlation"] = prof["correlation"]
+        result["profile_sampled"] = prof["sampled"]
+        result["n_rows_profiled"] = prof["n_rows_profiled"]
 
     return result

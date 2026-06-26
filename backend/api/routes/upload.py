@@ -19,6 +19,7 @@ from classifyos.io.inspect import inspect_file
 from classifyos.io.storage import StorageAdapter
 
 from ..deps import get_storage
+from ..serialize import safe_jsonify
 
 router = APIRouter(tags=["upload"])
 
@@ -37,10 +38,11 @@ async def upload(
     """Save an uploaded dataset and return its inspection profile + storage key.
 
     The file is written via ``StorageAdapter.save_input`` (into ``DATA_DIR/uploads/``), then
-    profiled with the engine's ``inspect_file``. Returns the locked inspect keys (columns,
-    dtypes, the numeric/categorical/binary/datetime column groups, n_rows, n_missing, a small
-    sample, and — when ``target`` is given — class_distribution + suggested_problem_type),
-    plus ``server_path``: the logical key to pass as ``input_file`` to ``/run``.
+    profiled with the engine's ``inspect_file``. Returns the inspect keys (columns, dtypes,
+    the numeric/categorical/binary/datetime column groups, n_rows, n_missing, a small sample,
+    and — when ``target`` is given — class_distribution + suggested_problem_type), the
+    additive Data-Profile blocks (``column_profiles`` + ``correlation`` for the exploration
+    view), plus ``server_path``: the logical key to pass as ``input_file`` to ``/run``.
     """
     filename = (file.filename or "").strip()
     if not filename:
@@ -57,11 +59,14 @@ async def upload(
     storage.save_input(key, file.file)
 
     # Profile the just-saved file. A bad target (not in the file) raises ValueError → 422.
+    # profile=True attaches the per-column Data-Profile blocks for the exploration view.
     try:
-        profile = inspect_file(key, storage, target=target)
+        result = inspect_file(key, storage, target=target, profile=True)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     # server_path is the key the frontend echoes back to /run as input_file.
-    profile["server_path"] = key
-    return profile
+    result["server_path"] = key
+    # NaN/Inf → null (e.g. the std of a constant column, an undefined correlation) so the
+    # body is strict-JSON-valid for the browser parser.
+    return safe_jsonify(result)

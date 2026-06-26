@@ -28,11 +28,52 @@
 | Method | Path | Purpose |
 |---|---|---|
 | `GET`  | `/api/v1/health` | Liveness check → `{status, service, version}`. |
-| `POST` | `/api/v1/upload` | Multipart upload of a CSV/Excel/Parquet dataset → stores it under `DATA_DIR/uploads/` via the StorageAdapter and returns the `inspect_file` profile + `server_path`. |
+| `POST` | `/api/v1/upload` | Multipart upload of a CSV/Excel/Parquet dataset → stores it under `DATA_DIR/uploads/` via the StorageAdapter and returns the `inspect_file` profile + `server_path` + the additive Data-Profile blocks (`column_profiles`, `correlation`) — see below. |
 | `POST` | `/api/v1/run` | Execute the full pipeline (`ModelRunner`) → the locked envelope below. |
 | `POST` | `/api/v1/explain` | Single-row SHAP. **v1.0: structured stub** (no model persistence; deferred to v2.0). |
 | `GET`  | `/api/v1/outputs` | List output artifacts → `[{name, suffix, size_bytes}]`. |
 | `GET`  | `/api/v1/outputs/{name}` | Stream one artifact (CSV/PNG) — traversal-guarded by the StorageAdapter. |
+
+## `POST /api/v1/upload`
+
+Returns the `inspect_file` profile (`columns`, `dtypes`, the
+numeric/categorical/binary/datetime column groups, `n_rows`, `n_missing`, a 5-row `sample`,
+and — when `target` is given — `class_distribution` + `suggested_problem_type`), plus
+`server_path` (the storage key to echo back to `/run` as `input_file`).
+
+**Data-Profile blocks (additive).** The upload response also carries per-column exploratory
+statistics for the dashboard's **Data Profile** view, computed once on the frame `inspect_file`
+already loaded (no second read; fits nothing, so no leakage surface — these influence only what
+is *displayed*). This is the `/upload`/inspect payload, **not** the locked `/run` envelope, so it
+carries **no `schema_version`** and these keys are purely additive.
+
+```jsonc
+{
+  // ...the existing inspect keys + server_path...
+  "profile_sampled": false,       // true → histograms/correlation used a row sample (large file)
+  "n_rows_profiled": 3000,        // rows used for the heavy (histogram/correlation) work
+  "column_profiles": [            // one entry per column; dtype_group picks which block is filled
+    { "name": "age", "dtype_group": "numeric",        // numeric | categorical | datetime
+      "n_missing": 90, "missing_pct": 3.0, "n_unique": 49,
+      "stats": { "count": 2910, "mean": 45.0, "std": 14.2, "min": 21.0,
+                 "p25": 33.0, "median": 45.0, "p75": 57.0, "max": 69.0,
+                 "mode": 66.0, "skew": 0.01 },         // any field null when undefined/non-finite
+      "histogram": { "bin_edges": [21.0, 23.4, "..."], "counts": [170, 113, "..."] } },
+    { "name": "region", "dtype_group": "categorical", // numeric binary 0/1 cols use this too
+      "n_missing": 0, "missing_pct": 0.0, "n_unique": 5,
+      "top_values": [ { "value": "West", "count": 812, "pct": 27.1 } ],  // top_k, then →
+      "other_count": 0, "truncated": false },          // truncated=true → only top_k shown
+    { "name": "policy_start_date", "dtype_group": "datetime",
+      "n_missing": 0, "missing_pct": 0.0, "n_unique": 1200,
+      "min": "2019-01-02T00:00:00", "max": "2023-12-30T00:00:00" }
+  ],
+  "correlation": {                // Pearson over numeric cols; null when <2 numeric cols
+    "columns": ["age", "annual_premium"],
+    "matrix": [[1.0, 0.12], [0.12, 1.0]],  // NaN cells (e.g. a constant column) → null
+    "truncated": false            // true → capped to the first N numeric columns
+  }
+}
+```
 
 ## `POST /api/v1/run`
 

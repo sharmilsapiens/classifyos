@@ -275,9 +275,72 @@ export interface HealthResponse {
   version: string
 }
 
+/* ─────────────────── Data Profile (additive /upload blocks) ──────────────── */
+// Per-column exploratory statistics attached when /upload profiles a file
+// (engine: classifyos.analysis.profile.profile_dataframe). Consumed by: Data Profile.
+
+/** Summary statistics for one numeric column (non-null values only). */
+export interface NumericStats {
+  count: number
+  mean: number | null
+  std: number | null
+  min: number | null
+  p25: number | null
+  median: number | null
+  p75: number | null
+  max: number | null
+  mode: number | null
+  skew: number | null
+}
+
+/** A binned distribution: `counts[i]` falls in `[bin_edges[i], bin_edges[i+1])`. */
+export interface Histogram {
+  bin_edges: Array<number | null>
+  counts: number[]
+}
+
+/** One row of a categorical column's value-frequency breakdown. */
+export interface TopValue {
+  value: string
+  count: number
+  pct: number | null
+}
+
+/**
+ * One column's profile. `dtype_group` drives which block is populated:
+ *  • "numeric"     → `stats` + `histogram`
+ *  • "categorical" → `top_values` + `other_count` + `truncated` (also numeric binary 0/1)
+ *  • "datetime"    → `min` + `max` (ISO strings)
+ */
+export interface ColumnProfile {
+  name: string
+  dtype_group: "numeric" | "categorical" | "datetime"
+  n_missing: number
+  missing_pct: number | null
+  n_unique: number
+  // numeric:
+  stats?: NumericStats | null
+  histogram?: Histogram | null
+  // categorical / binary:
+  top_values?: TopValue[] | null
+  other_count?: number | null
+  truncated?: boolean
+  // datetime:
+  min?: string | null
+  max?: string | null
+}
+
+/** Pearson correlation over numeric columns; `null` when <2 numeric cols. */
+export interface CorrelationMatrix {
+  columns: string[]
+  matrix: Array<Array<number | null>>
+  truncated: boolean
+}
+
 /**
  * POST /api/v1/upload → the inspect_file profile + server_path.
- * Mirrors classifyos.io.inspect.inspect_file. Consumed by: Upload, Configuration.
+ * Mirrors classifyos.io.inspect.inspect_file. Consumed by: Upload, Configuration,
+ * Data Profile.
  */
 export interface InspectProfile {
   columns: string[]
@@ -294,6 +357,11 @@ export interface InspectProfile {
   suggested_problem_type?: ProblemType
   // added by the upload route — the key to echo back to /run as input_file:
   server_path: string
+  // additive Data-Profile blocks (present when /upload profiled the file):
+  column_profiles?: ColumnProfile[]
+  correlation?: CorrelationMatrix | null
+  profile_sampled?: boolean
+  n_rows_profiled?: number
 }
 
 /** POST /api/v1/explain → v1.0 structured stub. Consumed by: Explainability. */

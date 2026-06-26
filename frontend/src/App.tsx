@@ -9,6 +9,7 @@ import { Navigate, Route, Routes } from "react-router-dom"
 import { AppLayout } from "@/components/layout/AppLayout"
 import Overview from "@/pages/Overview"
 import UploadPage from "@/pages/Upload"
+import DataProfile from "@/pages/DataProfile"
 import Configure from "@/pages/Configure"
 import FeatureImpact from "@/pages/FeatureImpact"
 // TEMPORARILY HIDDEN — interaction features unwired from the backend.
@@ -30,6 +31,7 @@ function App() {
         {/* Workspace screens */}
         <Route path="/" element={<Overview />} />
         <Route path="/upload" element={<UploadPage />} />
+        <Route path="/data-profile" element={<DataProfile />} />
         <Route path="/configure" element={<Configure />} />
         {/* 9c: Pipeline merged into Overview — keep the old link working. */}
         <Route path="/pipeline" element={<Navigate to="/" replace />} />

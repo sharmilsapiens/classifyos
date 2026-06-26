@@ -15,6 +15,7 @@ import {
   LayoutDashboard,
   LineChart,
   Lightbulb,
+  ScanSearch,
   Settings2,
   ShieldAlert,
   SlidersHorizontal,
@@ -33,6 +34,7 @@ export interface NavItem {
 export const NAV_ITEMS: NavItem[] = [
   { path: "/", label: "Overview", icon: LayoutDashboard, group: "Workspace" },
   { path: "/upload", label: "Upload Data", icon: Upload, group: "Workspace" },
+  { path: "/data-profile", label: "Data Profile", icon: ScanSearch, group: "Workspace" },
   { path: "/configure", label: "Configuration", icon: Settings2, group: "Workspace" },
 
   { path: "/feature-impact", label: "Feature Impact", icon: BarChart3, group: "Results" },

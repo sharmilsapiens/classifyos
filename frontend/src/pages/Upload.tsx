@@ -8,7 +8,7 @@
 
 import { useRef, useState } from "react"
 import { Link } from "react-router-dom"
-import { FileUp, UploadCloud } from "lucide-react"
+import { FileUp, ScanSearch, UploadCloud } from "lucide-react"
 
 import { ApiError, upload } from "@/api/client"
 import { useApp } from "@/store/AppStore"
@@ -172,6 +172,13 @@ export default function UploadPage() {
                     <Badge>{inspect.suggested_problem_type}</Badge>
                   </div>
                 )}
+                <Link
+                  to="/data-profile"
+                  className={cn(buttonVariants({ variant: "outline", size: "sm" }), "mt-1 w-full")}
+                >
+                  <ScanSearch className="h-4 w-4" />
+                  Explore data profile
+                </Link>
               </CardContent>
             </Card>
 

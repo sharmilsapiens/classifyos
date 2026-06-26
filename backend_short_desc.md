@@ -186,6 +186,24 @@ flattened JSON (e.g. `covers[0].insuranceAmount`); they now train fine.
   usually means a column is giving away the answer (target leakage). That's logged as a separate
   open item for a data review — it is *not* a model bug.
 
+## Data Profile — exploratory views on upload (✅ Done, 2026-06-26)
+**In one line:** When you upload a dataset, the app now profiles every column so the dashboard
+can show its distribution and key numbers — averages and spread for number columns, the most
+common values for category columns, a missing-data scan, and how the number columns relate.
+- **`analysis/profile.py` (`profile_dataframe`):** a new read-only helper that summarises each
+  column — for **numbers**: count, mean, median, mode, standard deviation, min/max, the 25th/75th
+  percentiles, skew, and a histogram (the shape of the distribution); for **categories** (and
+  yes/no columns): the most common values with their counts and a leftover "other" bucket; for
+  **dates**: the earliest and latest value. It also computes a **correlation grid** showing how
+  strongly the number columns move together.
+- **No peeking, no leakage.** It runs on the raw uploaded file, ignores the target entirely, and
+  learns nothing that feeds a model — it only decides what to *display*. For very large files it
+  profiles a random sample for the heavy charts (the missing-value counts still use every row).
+- **Bolted on cleanly.** The existing file-inspector (`inspect_file`) gained an optional
+  "also profile this" switch that is **off by default**, so nothing that already used it changes;
+  when on, it profiles the file it had already loaded (no second read). Engine + API + dashboard
+  page; 10 new engine tests.
+
 ---
 
 ## How to read this project

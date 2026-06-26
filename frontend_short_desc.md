@@ -238,6 +238,22 @@ per-label rows and the predicted product SET. A captured multilabel `/run` envel
 
 (See `RUN_FULL_SYSTEM.md` for starting the two servers by hand.)
 
+## Data Profile page — explore your data after upload (✅ Done, 2026-06-26)
+**In one line:** A new "Data Profile" screen (between Upload and Configuration) that shows what's
+in your uploaded file at a glance — distributions for number columns, common values for category
+columns, a missing-data scan, and how the number columns correlate.
+- **For number columns:** a histogram (the shape of the data) plus a stats card — mean, median,
+  mode, standard deviation, min/max, the 25th/75th percentiles, and skew.
+- **For category columns (and yes/no columns):** a bar chart of the most common values, with an
+  "other" bucket and a note of how many distinct values there are and the most frequent one.
+- **For date columns:** the earliest and latest dates.
+- **Across the whole file:** a "missing values" chart (which columns have gaps, and how big) and a
+  colour-coded **correlation heatmap** over the number columns (a quick way to spot redundant or
+  suspiciously-related columns before configuring a run).
+- **How it works:** the page reads the profile the upload already returned (no extra server call),
+  so it loads instantly. Charts use Recharts; the correlation grid is a lightweight coloured table
+  (the same technique as the Confusion Matrix). 3 new render tests.
+
 ---
 
 ## How to read this project

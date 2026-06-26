@@ -53,6 +53,11 @@ def test_upload_returns_inspect_keys_and_server_path(api_client, name, target) -
     assert "suggested_problem_type" in body
     # server_path is the key /run uses; the upload landed under uploads/.
     assert body["server_path"] == f"uploads/{name}"
+    # Data-Profile blocks (additive) are attached for the exploration view.
+    assert "column_profiles" in body
+    assert len(body["column_profiles"]) == len(body["columns"])
+    assert "correlation" in body  # numeric matrix or null
+    assert all("dtype_group" in c for c in body["column_profiles"])
 
 
 def test_upload_server_path_is_runnable(api_client) -> None:

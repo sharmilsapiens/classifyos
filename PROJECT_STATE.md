@@ -5,6 +5,30 @@
 > planning/overseer chat stays in sync with the local repo.
 
 **Last updated:** 2026-06-26
+**Updated by:** Claude Code (**NEW — Data Profile (EDA) view on upload**. Added exploratory data
+analysis for an uploaded dataset, surfaced on a new **"Data Profile"** Workspace page
+(nav: Upload → **Data Profile** → Configuration). **Engine:** new pure module
+`analysis/profile.py::profile_dataframe(df, …)` — per-column stats: numeric → summary
+(count/mean/median/mode/std/min/p25/p75/max/skew) + a `numpy.histogram` distribution;
+categorical/binary → top-K value frequencies (+ an `other` bucket, `truncated` flag);
+datetime → min/max range; plus a dataset-level Pearson `correlation` matrix over numeric cols.
+Large files (>50k rows) sample for the heavy histogram/correlation work; per-column counts use
+every row. Fits nothing, reads no target → **no leakage surface** (display-only). `inspect_file`
+gained an **additive** optional `profile: bool = False` param (default leaves the result
+byte-identical; existing tests prove this) that attaches `column_profiles` + `correlation` to the
+frame it already loaded — no second read. **API:** `/upload` now calls `inspect_file(profile=True)`
+and wraps the body in `safe_jsonify` (NaN/Inf → null). This is the `/upload`/inspect payload,
+**NOT** the locked `/run` envelope — **no `schema_version` bump**; documented in `api_contract.md`.
+**UI:** new `pages/DataProfile.tsx` reads the profile from the store (no new network call, like
+TuningResults) — Recharts histograms / frequency / missingness bars + a CSS-grid correlation
+heatmap (same pattern as Confusion Matrix); `InspectProfile` extended with `ColumnProfile`/
+`NumericStats`/`Histogram`/`TopValue`/`CorrelationMatrix`; nav + route + an "Explore data profile"
+link on Upload. **Tests:** +10 backend (`test_profile.py`) + upload/inspect asserts →
+**250 backend pytest**; +3 frontend (`dataProfile.test.tsx`) → **94 vitest**; `tsc -b` + build
+clean. Hallucination check ✅ (pandas 2.3.3 / numpy 2.4.6: `Series.mode/skew/quantile`,
+`numpy.histogram`, `df.corr(numeric_only=True)`). **No plan_tweak entry** — additive feature
+realizing a user request, not a deviation; logged as a Decisions-log row instead.)
+**Prior update:** 2026-06-26
 **Updated by:** Claude Code (**TEMPORARY — feature engineering unwired**. By request (pre-demo),
 Section 7 derived features (ratio / binning / polynomial) were temporarily removed from training
 and the "Feature engineering" config card hidden (NOT deleted — fully reversible). **Engine:**
@@ -255,6 +279,7 @@ Status legend: ⬜ Not started · 🔄 In progress · ✅ Done · ⚠️ Blocked
 | 2026-06-23 | **Phase 14**: `UserFeatureBuilder` reads its source columns from the **RAW post-split frame**, not the preprocessed frame, even though its output columns are injected at the prompt's specified position (after FeatureBuilder, before interactions) | The Preprocessor **scales** numerics and **encodes/drops** datetime columns, so post-preprocessing a `datetime_diff` (`end − start`) is impossible (the datetime columns are gone) and numeric ops would run on scaled values. Reading from raw is the only design that makes the prompt's headline use case (`duration = end_time − start_time`) work; outputs are made NaN-free (numeric→0.0, coded→−1) and joined by index so the preprocessing "drop" strategy stays aligned. plan_tweak 40 |
 | 2026-06-23 | **Phase 14**: invalid user-feature specs (missing/wrong-type column, target-as-source, unknown op at the builder, name collision) are **skipped + logged**, not raised; the config boundary (`build_config`) **hard-rejects** unknown ops/types/duplicate names | Two layers: the config boundary is the structural allowlist guard (a malformed config fails fast), while fit-time issues that depend on the actual data (column existence/type) must not abort an otherwise-valid run — "one bad spec must not kill the run", mirroring the per-algorithm robustness rule. No free-text formula is ever evaluated ([RISK]) |
 | 2026-06-21 | **Phase 11**: multilabel renders through the **unchanged locked envelope** — per-label metrics/curves/class-report populate; the single confusion matrix, MCC and log-loss are `null` (undefined for a multi-hot target), and curves carry per-label one-vs-rest entries | The contract is general enough to express multilabel honestly without a new field — `null`/empty for the genuinely-undefined pieces beats a fabricated number or a contract bump. Scope conclusion: ship "runs + renders honestly with documented limits", not full parity (per-label thresholds + imbalance weighting → v1.x). plan_tweak 34–35 |
+| 2026-06-26 | **Data Profile (EDA)**: profiling lives in a NEW pure `analysis/profile.py::profile_dataframe(df, …)`, and `inspect_file` gained an **additive** optional `profile=False` param that attaches `column_profiles`+`correlation` to the frame it already loaded (no second read). Served on the **extended `/upload` response** (not a new endpoint), consumed by a new store-driven `DataProfile.tsx` page | Owner picks (asked up front): new dedicated page · all four viz (numeric histogram+stats, categorical frequencies, missingness overview, correlation heatmap) · carried on `/upload`. The `profile=False` default keeps Section 3 byte-identical (additive rule); profiling fits nothing and reads no target, so there is **no leakage surface**. `/upload`/inspect is not the locked `/run` envelope → additive, no `schema_version` bump. Tradeoff: `/upload` recomputes profiles on every re-inspect (e.g. target change); bounded by the 50k-row sample + 30-col correlation caps. No plan_tweak — additive feature, not a deviation |
 
 ---
 
