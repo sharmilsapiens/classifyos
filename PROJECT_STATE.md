@@ -4,7 +4,33 @@
 > A copy is uploaded to the ClassifyOS Claude Project knowledge after each update so the
 > planning/overseer chat stays in sync with the local repo.
 
-**Last updated:** 2026-06-26
+**Last updated:** 2026-06-27
+**Updated by:** Claude Code (**NEW — missing-value treatment split by feature type + KNN/iterative/bfill imputers**.
+The single global `missing_strategy` was applied to every column, so picking `mean` silently fell back to
+mode on categorical columns — a footgun. Split the control **by feature type** and added imputers.
+**Engine:** `config.py` gains `missing_strategy_numeric` / `missing_strategy_categorical` (default `None` →
+inherit the legacy global) validated against two new allowlists — `MISSING_STRATEGIES_NUMERIC`
+(`median/mean/mode/ffill/bfill/knn/iterative/drop`) and `MISSING_STRATEGIES_CATEGORICAL`
+(`mode/ffill/bfill/drop`); the global `MISSING_STRATEGIES` gains `bfill`. The `Preprocessor` resolves the
+two strategies (`_resolve_strategies`: per-type key, else global, else mode for a numeric-only global on
+categoricals — exactly the old behaviour) and runs them via a shared `_impute()` used by both fit and
+transform: directional fill (ffill/**bfill**) per type → a TRAIN-fitted numeric imputer (sklearn
+`KNNImputer` / `IterativeImputer`, `keep_empty_features=True`, [RISK]-marked leakage boundary) → per-column
+statistic fallback. `drop` is now **per-type row-level** (`drop_cols_`) — fit/fit_transform drop only on the
+types set to drop, transform still NEVER drops. **No leakage** (imputers learn from train only — proven by a
+poisoned-test test). Backward-compatible: a run setting only the global is byte-identical to before.
+**API:** `RunConfig` gains the two optional `str | None` fields, forwarded through `to_engine_config` →
+`build_config` (the authoritative validator); request-side only, **no `schema_version` bump** (response
+envelope unchanged), `api_contract.md` request example updated. **UI:** the single "Missing values" selector
+on Configuration became two — *numeric* (8 options incl. knn/iterative/bfill) and *categorical* (4 options) —
+each with a strategy-specific hint; `ConfigFormState`/`DEFAULT_FORM_STATE`/`buildPayload` + `RunConfig` TS
+type carry the two keys (defaults median/mode). **Tests:** +6 preprocess (per-type matrix 8×4, categorical
+independence, KNN no-leakage, partial drop, validation, global inheritance), +2 API (accept per-type; bad
+per-type → 422), +1 vitest. **Suites green: 293 backend pytest · 97 frontend vitest · `tsc -b` + `vite build`
+clean.** Hallucination check ✅ (sklearn 1.9.0: `KNNImputer`/`IterativeImputer` via
+`sklearn.experimental.enable_iterative_imputer`, `keep_empty_features` param confirmed). **No plan_tweak
+entry** — additive feature realizing a user request; logged as a Decisions-log row instead.)
+**Prior update:** 2026-06-26
 **Updated by:** Claude Code (**NEW — post-training feature importance (full stack, additive `1.2 → 1.3`)**.
 Added a *post-training, per-model* native feature-importance view, distinct from the pre-training
 `feature_impact` raw-data screen — different question: "what the trained model relied on" vs "which raw
@@ -327,6 +353,7 @@ Status legend: ⬜ Not started · 🔄 In progress · ✅ Done · ⚠️ Blocked
 | 2026-06-23 | **Phase 14**: invalid user-feature specs (missing/wrong-type column, target-as-source, unknown op at the builder, name collision) are **skipped + logged**, not raised; the config boundary (`build_config`) **hard-rejects** unknown ops/types/duplicate names | Two layers: the config boundary is the structural allowlist guard (a malformed config fails fast), while fit-time issues that depend on the actual data (column existence/type) must not abort an otherwise-valid run — "one bad spec must not kill the run", mirroring the per-algorithm robustness rule. No free-text formula is ever evaluated ([RISK]) |
 | 2026-06-21 | **Phase 11**: multilabel renders through the **unchanged locked envelope** — per-label metrics/curves/class-report populate; the single confusion matrix, MCC and log-loss are `null` (undefined for a multi-hot target), and curves carry per-label one-vs-rest entries | The contract is general enough to express multilabel honestly without a new field — `null`/empty for the genuinely-undefined pieces beats a fabricated number or a contract bump. Scope conclusion: ship "runs + renders honestly with documented limits", not full parity (per-label thresholds + imbalance weighting → v1.x). plan_tweak 34–35 |
 | 2026-06-26 | **Data Profile (EDA)**: profiling lives in a NEW pure `analysis/profile.py::profile_dataframe(df, …)`, and `inspect_file` gained an **additive** optional `profile=False` param that attaches `column_profiles`+`correlation` to the frame it already loaded (no second read). Served on the **extended `/upload` response** (not a new endpoint), consumed by a new store-driven `DataProfile.tsx` page | Owner picks (asked up front): new dedicated page · all four viz (numeric histogram+stats, categorical frequencies, missingness overview, correlation heatmap) · carried on `/upload`. The `profile=False` default keeps Section 3 byte-identical (additive rule); profiling fits nothing and reads no target, so there is **no leakage surface**. `/upload`/inspect is not the locked `/run` envelope → additive, no `schema_version` bump. Tradeoff: `/upload` recomputes profiles on every re-inspect (e.g. target change); bounded by the 50k-row sample + 30-col correlation caps. No plan_tweak — additive feature, not a deviation |
+| 2026-06-27 | **Missing-value treatment split by feature type**: replaced the single global `missing_strategy` (still kept as a back-compat default) with per-type `missing_strategy_numeric` / `missing_strategy_categorical` (default `None` → inherit), and added `bfill` + sklearn `KNNImputer`/`IterativeImputer` (numeric-only). `Preprocessor` resolves the two strategies + runs them via one shared `_impute()` (fit+transform); `drop` is now per-type row-level. Additive request-side API fields (no `schema_version` bump); UI shows two selectors. | Owner asked for per-type control so e.g. `mean` is never applied to a non-numeric column (it silently fell back to mode before). KNN/iterative are numeric-only statistics, so they're absent from the categorical allowlist; imputers are fit on TRAIN only (leakage boundary, [RISK]-marked). Back-compat preserved: a run setting only the global behaves exactly as before, so no contract/version change is warranted (request config is not the locked response). No plan_tweak — additive feature, not a deviation |
 | 2026-06-26 | **Post-training feature importance**: surfaced each model's **native** importance (the existing `feature_importance()` / `plot3`, previously PNG-only) as data — `feature_importances_` on the runner, `feature_importance_summary.csv`, and an additive `result.feature_importance` block (`{model: [{feature, importance, rank}]}`), `schema_version` `1.2 → 1.3`. Field name `feature_importance` (vs the existing `feature_impact`) follows the codebase's own impact/importance split (pre- vs post-training). Models with no native importance (RBF-SVM, GaussianNB) are **omitted**; whole block `null` when none qualify | Owner asked specifically for the per-model, model-dependent importance you "get to know post-training". Native (not permutation) per owner — cheapest path since the engine already computes it; chose to surface it rather than add a new ML pass. Omit-not-zero-fill keeps SVM/NB-only runs byte-identical to earlier schemas; additive version bump is the sanctioned path for the locked contract. No leakage (reads fitted-model internals only). No plan_tweak — additive feature, not a deviation |
 
 ---

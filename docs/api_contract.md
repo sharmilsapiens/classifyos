@@ -108,7 +108,9 @@ problem there is returned as HTTP 422.
   "time_split_col": null,
   "algorithms": ["LogisticRegression", "RandomForest", "XGBoost"],
   "class_balance": "smote",           // smote | undersample | class_weight | none
-  "missing_strategy": "median",
+  "missing_strategy": "median",       // LEGACY GLOBAL default (back-compat); per-type keys below override it
+  "missing_strategy_numeric": null,   // null → inherit global. else: median|mean|mode|ffill|bfill|knn|iterative|drop
+  "missing_strategy_categorical": null, // null → inherit (mode if global is numeric-only). else: mode|ffill|bfill|drop
   "encoding_method": "onehot",
   "scaling_method": "standard",
   "outlier_method": "iqr",

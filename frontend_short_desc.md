@@ -270,6 +270,20 @@ ranks raw features *before* any model is trained.
   older run without it simply shows the "no native importance" state — no crash. New render tests
   cover the present and absent cases.
 
+## Missing-value controls split by feature type on Configuration (✅ Done, 2026-06-27)
+**In one line:** The single "Missing values" dropdown on the Configuration page became **two** —
+one for number columns and one for category columns — so you can fill blanks differently for each,
+and number columns get smarter new options.
+- **Two selectors.** *Missing values · numeric* offers median, mean, most-common, forward-fill,
+  **backward-fill**, **k-nearest-neighbours**, **iterative/model-based**, and drop. *Missing
+  values · categorical* offers most-common, forward-fill, **backward-fill**, and drop — the
+  number-only statistics aren't shown there because they don't apply to text.
+- **Helpful hints.** Each selector shows a one-line note explaining what the chosen strategy does
+  (e.g. KNN "estimates values from the most similar rows"; drop "only ever drops training rows").
+- **Sends both to the API.** The form now carries `missing_strategy_numeric` (default median) and
+  `missing_strategy_categorical` (default mode) and includes them in the run request; the old global
+  field stays as a hidden back-compat default. A new build-payload test covers the split.
+
 ---
 
 ## How to read this project

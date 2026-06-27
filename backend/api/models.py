@@ -177,7 +177,13 @@ class RunConfig(BaseModel):
         default_factory=lambda: ["LogisticRegression", "RandomForest", "XGBoost"]
     )
     class_balance: str = "smote"
+    # Missing-value treatment, split by feature type. ``missing_strategy`` is the legacy
+    # GLOBAL default (back-compat); the two per-type keys override it when set. None → inherit
+    # the global (a numeric-only global falls back to mode for categorical in the engine). The
+    # engine's ``build_config`` is the authoritative validator of the allowed per-type values.
     missing_strategy: str = "median"
+    missing_strategy_numeric: str | None = None
+    missing_strategy_categorical: str | None = None
     encoding_method: str = "onehot"
     scaling_method: str = "standard"
     outlier_method: str = "iqr"

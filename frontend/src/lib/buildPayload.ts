@@ -21,7 +21,12 @@ export interface ConfigFormState {
   time_split_col: string | null
   algorithms: string[]
   class_balance: ClassBalance
+  /** Legacy global default; kept for back-compat (the two per-type keys drive behaviour). */
   missing_strategy: string
+  /** Missing-value strategy for numeric columns (median/mean/mode/ffill/bfill/knn/iterative/drop). */
+  missing_strategy_numeric: string
+  /** Missing-value strategy for non-numeric columns (mode/ffill/bfill/drop). */
+  missing_strategy_categorical: string
   encoding_method: string
   scaling_method: string
   outlier_method: string
@@ -66,6 +71,8 @@ export const DEFAULT_FORM_STATE: ConfigFormState = {
   algorithms: ["LogisticRegression", "RandomForest", "XGBoost"],
   class_balance: "smote",
   missing_strategy: "median",
+  missing_strategy_numeric: "median",
+  missing_strategy_categorical: "mode",
   encoding_method: "onehot",
   scaling_method: "standard",
   outlier_method: "iqr",
@@ -123,6 +130,8 @@ export function buildPayload(form: ConfigFormState): RunConfig {
     algorithms: form.algorithms,
     class_balance: form.class_balance,
     missing_strategy: form.missing_strategy,
+    missing_strategy_numeric: form.missing_strategy_numeric,
+    missing_strategy_categorical: form.missing_strategy_categorical,
     encoding_method: form.encoding_method,
     scaling_method: form.scaling_method,
     outlier_method: form.outlier_method,

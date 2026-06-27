@@ -30,7 +30,12 @@ import TuningOverridesPanel from "@/components/config/TuningOverridesPanel"
 // Allowed values — mirror config.py's tuples exactly.
 const PROBLEM_TYPES = ["binary", "multiclass", "multilabel"] as const
 const CLASS_BALANCE = ["smote", "undersample", "class_weight", "none"] as const
-const MISSING = ["median", "mean", "mode", "ffill", "drop"] as const
+// Missing-value strategy is split by feature type — numeric columns can use the model-based
+// imputers (knn/iterative) and the numeric statistics; non-numeric columns cannot.
+const MISSING_NUMERIC = [
+  "median", "mean", "mode", "ffill", "bfill", "knn", "iterative", "drop",
+] as const
+const MISSING_CATEGORICAL = ["mode", "ffill", "bfill", "drop"] as const
 const ENCODING = ["onehot", "label", "ordinal", "target"] as const
 const SCALING = ["standard", "minmax", "robust", "none"] as const
 const OUTLIER = ["iqr", "zscore", "none"] as const
@@ -236,10 +241,18 @@ export default function Configure() {
                 {CLASS_BALANCE.map((c) => <option key={c} value={c}>{c}</option>)}
               </Select>
             </Field>
-            <Field label="Missing values" hint={missingValuesHint(form.missing_strategy)}>
-              <Select value={form.missing_strategy}
-                onChange={(e) => updateForm({ missing_strategy: e.target.value })}>
-                {MISSING.map((c) => <option key={c} value={c}>{c}</option>)}
+            <Field label="Missing values · numeric"
+              hint={missingNumericHint(form.missing_strategy_numeric)}>
+              <Select value={form.missing_strategy_numeric}
+                onChange={(e) => updateForm({ missing_strategy_numeric: e.target.value })}>
+                {MISSING_NUMERIC.map((c) => <option key={c} value={c}>{c}</option>)}
+              </Select>
+            </Field>
+            <Field label="Missing values · categorical"
+              hint={missingCategoricalHint(form.missing_strategy_categorical)}>
+              <Select value={form.missing_strategy_categorical}
+                onChange={(e) => updateForm({ missing_strategy_categorical: e.target.value })}>
+                {MISSING_CATEGORICAL.map((c) => <option key={c} value={c}>{c}</option>)}
               </Select>
             </Field>
             <Field label="Encoding">
@@ -401,20 +414,44 @@ function Field({
   )
 }
 
-/** Strategy-specific note for the missing-values selector. Mean/median are
- *  numeric-only statistics, so categorical columns fall back to the most frequent
- *  value (mode); this mirrors the engine's Preprocessor (preprocess.py). */
-function missingValuesHint(strategy: string): string | undefined {
+/** Strategy-specific note for the NUMERIC missing-values selector. The strategy is
+ *  applied only to numeric columns (categorical has its own selector), mirroring the
+ *  engine's Preprocessor (preprocess.py). */
+function missingNumericHint(strategy: string): string | undefined {
   switch (strategy) {
     case "mean":
     case "median":
-      return `Numeric columns use the ${strategy}. Categorical columns fall back to the most frequent value (mode), since a ${strategy} is undefined for them.`
-    case "ffill":
-      return "Forward-fills each column from the previous row. Categorical columns (and any leading rows with no prior value) fall back to the most frequent value (mode)."
+      return `Each numeric column is filled with its training ${strategy}.`
     case "mode":
-      return "Every column — numeric and categorical — is filled with its most frequent value (mode)."
+      return "Each numeric column is filled with its most frequent value (mode)."
+    case "ffill":
+      return "Forward-fills each numeric column from the previous row; leading rows with no prior value fall back to the training median."
+    case "bfill":
+      return "Backward-fills each numeric column from the next row; trailing rows with no later value fall back to the training median."
+    case "knn":
+      return "k-nearest-neighbours imputation (sklearn KNNImputer, k=5) fitted on the training numeric columns; values are estimated from the most similar rows."
+    case "iterative":
+      return "Iterative (model-based) imputation (sklearn IterativeImputer) fitted on the training numeric columns; each column is modelled from the others."
     case "drop":
-      return "Training rows with any missing value are dropped. At prediction time, rows are imputed with the training median (numeric) or mode (categorical) instead — rows are never dropped there."
+      return "Training rows with a missing numeric value are dropped. At prediction time rows are imputed with the training median instead — rows are never dropped there."
+    default:
+      return undefined
+  }
+}
+
+/** Strategy-specific note for the CATEGORICAL (non-numeric) missing-values selector.
+ *  Numeric statistics (mean/median) and the model-based imputers are intentionally
+ *  not offered here — they are undefined for categorical values. */
+function missingCategoricalHint(strategy: string): string | undefined {
+  switch (strategy) {
+    case "mode":
+      return "Each categorical column is filled with its most frequent value (mode)."
+    case "ffill":
+      return "Forward-fills each categorical column from the previous row; leading rows with no prior value fall back to the mode."
+    case "bfill":
+      return "Backward-fills each categorical column from the next row; trailing rows with no later value fall back to the mode."
+    case "drop":
+      return "Training rows with a missing categorical value are dropped. At prediction time rows are imputed with the training mode instead — rows are never dropped there."
     default:
       return undefined
   }

@@ -79,6 +79,22 @@ def test_run_bad_enum_is_422(api_client) -> None:
     assert api_client.post("/api/v1/run", json=body).status_code == 422
 
 
+def test_run_accepts_per_type_missing_strategies(api_client) -> None:
+    """The new per-type missing-value keys are accepted on the /run request."""
+    body = {
+        **_VALID,
+        "missing_strategy_numeric": "knn",
+        "missing_strategy_categorical": "ffill",
+    }
+    assert api_client.post("/api/v1/run", json=body).status_code == 200
+
+
+def test_run_bad_per_type_missing_strategy_is_422(api_client) -> None:
+    """A numeric-only strategy on the categorical key is rejected (422, not 500)."""
+    body = {**_VALID, "missing_strategy_categorical": "knn"}
+    assert api_client.post("/api/v1/run", json=body).status_code == 422
+
+
 # --------------------------------------------------------------------------- #
 # locked schema (binary)                                                      #
 # --------------------------------------------------------------------------- #

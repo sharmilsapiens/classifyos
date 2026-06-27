@@ -251,6 +251,31 @@ how much each input column actually drove that model's decisions — surfaced as
   a per-model ranked bar + the `plot3` chart beneath the pre-training screen, with a note that
   SVM/Naive Bayes are omitted and values aren't cross-comparable.
 
+## Missing-value treatment split by feature type (✅ Done, 2026-06-27)
+**In one line:** The "what to do about blanks" setting is now chosen **separately for number
+columns and category columns**, and there are more (and smarter) options to choose from — so an
+average can never be wrongly applied to a text column.
+- **Why:** there used to be a single global "missing values" setting. Picking "mean" filled every
+  blank with the average — which is meaningless for a text/category column, so those quietly fell
+  back to the most common value. Splitting the control makes the right behaviour explicit and lets
+  you, say, use the median for numbers and forward-fill for categories at the same time.
+- **Two controls now:** *Missing values · numeric* and *Missing values · categorical*.
+  - **Numbers** can use: median, mean, most-common (mode), forward-fill, **backward-fill (new)**,
+    **k-nearest-neighbours (new)**, **iterative/model-based (new)**, or drop-the-row.
+  - **Categories** can use: most-common (mode), forward-fill, **backward-fill (new)**, or
+    drop-the-row. The number-only options (mean/median/KNN/iterative) aren't offered here because
+    they're undefined for text.
+- **The two new "smart" imputers (numbers only):** *KNN* fills a blank by looking at the most
+  similar rows; *iterative* models each column from the others. Both are **learned from the
+  training rows only** and applied unchanged to the test rows (the core no-leakage rule —
+  scikit-learn's `KNNImputer` / `IterativeImputer`). **Backward-fill** is the mirror of the
+  existing forward-fill (carry the next row's value back instead of the previous row's forward).
+- **Backward-compatible.** The old single setting still exists as a legacy default; a run that only
+  sets it behaves exactly as before (numbers use it; categories fall back to most-common when it's a
+  number-only statistic). "Drop" stays row-level and, as always, only drops training rows — at
+  prediction time every row is kept and filled instead. Engine + API + dashboard; new tests across
+  all three (293 backend pytest · 97 frontend vitest).
+
 ---
 
 ## How to read this project

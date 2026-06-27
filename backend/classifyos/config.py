@@ -18,7 +18,28 @@ from typing import Any
 # --- allowed value sets (kept next to the defaults so validation can't drift) ---
 PROBLEM_TYPES = ("binary", "multiclass", "multilabel")
 CLASS_BALANCE = ("smote", "undersample", "class_weight", "none")
-MISSING_STRATEGIES = ("median", "mean", "mode", "ffill", "drop")
+#: Legacy GLOBAL missing-value strategy (back-compat). Applies to a column type only when
+#: no per-type override is set (see ``missing_strategy_numeric``/``missing_strategy_categorical``).
+#: ``mean``/``median`` are numeric statistics; on a categorical column they fall back to mode
+#: in the Preprocessor. ``knn``/``iterative`` are numeric-only and are therefore NOT global —
+#: they can only be selected via ``missing_strategy_numeric``.
+MISSING_STRATEGIES = ("median", "mean", "mode", "ffill", "bfill", "drop")
+#: Strategies selectable for NUMERIC columns via ``missing_strategy_numeric``. Superset of the
+#: global set plus the two model-based imputers (sklearn ``KNNImputer`` / ``IterativeImputer``).
+MISSING_STRATEGIES_NUMERIC = (
+    "median",
+    "mean",
+    "mode",
+    "ffill",
+    "bfill",
+    "knn",
+    "iterative",
+    "drop",
+)
+#: Strategies selectable for NON-NUMERIC (categorical) columns via
+#: ``missing_strategy_categorical``. Statistic-based numeric imputers (mean/median/knn/iterative)
+#: are intentionally excluded — they are undefined for categorical values.
+MISSING_STRATEGIES_CATEGORICAL = ("mode", "ffill", "bfill", "drop")
 ENCODING_METHODS = ("onehot", "label", "ordinal", "target")
 SCALING_METHODS = ("standard", "minmax", "robust", "none")
 OUTLIER_METHODS = ("iqr", "zscore", "none")
@@ -73,7 +94,14 @@ DEFAULT_CONFIG: dict[str, Any] = {
     # --- modelling ---
     "algorithms": ["LogisticRegression", "RandomForest", "XGBoost"],
     "class_balance": "smote",
+    # Missing-value treatment is split BY FEATURE TYPE. ``missing_strategy`` is the legacy
+    # GLOBAL default kept for back-compat; the two per-type keys override it when set (non-None).
+    # A run that sets only ``missing_strategy`` behaves exactly as before. The UI drives the two
+    # per-type selectors (median for numeric, mode for categorical by default), so e.g. "mean" is
+    # never wrongly applied to a non-numeric column.
     "missing_strategy": "median",
+    "missing_strategy_numeric": None,  # None → inherit the global; else a MISSING_STRATEGIES_NUMERIC value
+    "missing_strategy_categorical": None,  # None → inherit (mode if the global is numeric-only)
     "encoding_method": "onehot",
     "scaling_method": "standard",
     "outlier_method": "iqr",
@@ -223,6 +251,16 @@ def _validate_config(config: dict[str, Any]) -> None:
     _require_choice(config["problem_type"], PROBLEM_TYPES, "problem_type")
     _require_choice(config["class_balance"], CLASS_BALANCE, "class_balance")
     _require_choice(config["missing_strategy"], MISSING_STRATEGIES, "missing_strategy")
+    num_strategy = config.get("missing_strategy_numeric")
+    if num_strategy is not None:
+        _require_choice(
+            num_strategy, MISSING_STRATEGIES_NUMERIC, "missing_strategy_numeric"
+        )
+    cat_strategy = config.get("missing_strategy_categorical")
+    if cat_strategy is not None:
+        _require_choice(
+            cat_strategy, MISSING_STRATEGIES_CATEGORICAL, "missing_strategy_categorical"
+        )
     _require_choice(config["encoding_method"], ENCODING_METHODS, "encoding_method")
     _require_choice(config["scaling_method"], SCALING_METHODS, "scaling_method")
     _require_choice(config["outlier_method"], OUTLIER_METHODS, "outlier_method")

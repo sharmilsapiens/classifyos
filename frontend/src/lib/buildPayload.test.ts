@@ -42,6 +42,20 @@ describe("buildPayload", () => {
     })
   })
 
+  it("splits the missing-value strategy by feature type", () => {
+    const payload = buildPayload({
+      ...form,
+      missing_strategy_numeric: "knn",
+      missing_strategy_categorical: "ffill",
+    })
+    expect(payload.missing_strategy_numeric).toBe("knn")
+    expect(payload.missing_strategy_categorical).toBe("ffill")
+    // Defaults: median for numeric, mode for categorical.
+    const defaults = buildPayload(form)
+    expect(defaults.missing_strategy_numeric).toBe("median")
+    expect(defaults.missing_strategy_categorical).toBe("mode")
+  })
+
   it("includes every required key the API expects", () => {
     const payload = buildPayload(form)
     for (const key of ["input_file", "target", "feature_cols"]) {

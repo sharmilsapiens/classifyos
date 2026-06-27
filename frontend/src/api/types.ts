@@ -90,7 +90,12 @@ export interface RunConfig {
   // modelling / preprocessing
   algorithms: string[]
   class_balance: ClassBalance
+  /** Legacy GLOBAL missing-value strategy (back-compat default). */
   missing_strategy: string
+  /** Per-type override for NUMERIC columns; null → inherit the global. */
+  missing_strategy_numeric: string | null
+  /** Per-type override for NON-NUMERIC columns; null → inherit (mode if global is numeric-only). */
+  missing_strategy_categorical: string | null
   encoding_method: string
   scaling_method: string
   outlier_method: string

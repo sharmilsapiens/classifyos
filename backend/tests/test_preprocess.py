@@ -12,7 +12,12 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from classifyos.config import MISSING_STRATEGIES, build_config
+from classifyos.config import (
+    MISSING_STRATEGIES,
+    MISSING_STRATEGIES_CATEGORICAL,
+    MISSING_STRATEGIES_NUMERIC,
+    build_config,
+)
 from classifyos.io.loader import data_loader
 from classifyos.io.storage import StorageAdapter
 from classifyos.preprocessing.preprocess import TARGET_SMOOTHING_M, Preprocessor
@@ -170,6 +175,131 @@ def test_missing_strategies(
     assert not test_out[pp.feature_names_out_].isna().any().any()
     if strategy == "drop":
         assert len(train_out) < len(train)  # complete-case training did drop
+
+
+@pytest.mark.parametrize("numeric_strategy", MISSING_STRATEGIES_NUMERIC)
+@pytest.mark.parametrize("categorical_strategy", MISSING_STRATEGIES_CATEGORICAL)
+def test_per_type_missing_strategies(
+    storage: StorageAdapter,
+    lapse_csv: str,
+    numeric_strategy: str,
+    categorical_strategy: str,
+) -> None:
+    """Every (numeric, categorical) strategy combination runs and never drops a test row.
+
+    This is the core of the per-type split: a numeric-only imputer like ``mean``/``knn``/
+    ``iterative`` is applied ONLY to numeric columns, while the categorical strategy is
+    applied independently to non-numeric columns.
+    """
+    cfg = _lapse_config(
+        lapse_csv,
+        missing_strategy_numeric=numeric_strategy,
+        missing_strategy_categorical=categorical_strategy,
+    )
+    train, test = _load_split(cfg, storage)
+    # Leading NaN in a numeric and a categorical column exercises the ffill edge fallback.
+    test = test.copy()
+    test.loc[test.index[0], "age"] = np.nan
+    test.loc[test.index[0], "occupation"] = np.nan
+
+    pp = Preprocessor(cfg)
+    train_out = pp.fit_transform(train)
+    test_out = pp.transform(test)
+
+    assert pp.numeric_strategy_ == numeric_strategy
+    assert pp.categorical_strategy_ == categorical_strategy
+    # knn/iterative materialise a fitted sklearn imputer; the others do not.
+    if numeric_strategy in ("knn", "iterative"):
+        assert pp.numeric_imputer_ is not None
+    else:
+        assert pp.numeric_imputer_ is None
+
+    assert len(test_out) == len(test), "transform dropped test rows"
+    assert not train_out[pp.feature_names_out_].isna().any().any()
+    assert not test_out[pp.feature_names_out_].isna().any().any()
+
+
+def test_categorical_strategy_independent_of_numeric(
+    storage: StorageAdapter, lapse_csv: str
+) -> None:
+    """A numeric strategy never touches categorical columns (the headline bug fix).
+
+    With numeric=mean, the categorical 'occupation' must still be imputed by its mode —
+    "mean" is never wrongly applied to a non-numeric column.
+    """
+    cfg = _lapse_config(
+        lapse_csv,
+        missing_strategy_numeric="mean",
+        missing_strategy_categorical="mode",
+    )
+    train, test = _load_split(cfg, storage)
+    pp = Preprocessor(cfg).fit(train)
+
+    assert "occupation" in pp.categorical_cols_
+    train_no_na = train["occupation"].dropna()
+    expected_mode = train_no_na.mode().iloc[0]
+    assert pp.impute_values_["occupation"] == expected_mode
+    # Numeric 'age' fill value is the train mean (numeric strategy), not the mode.
+    assert pp.impute_values_["age"] == pytest.approx(float(train["age"].mean()))
+
+
+def test_knn_imputer_no_leakage(storage: StorageAdapter, lapse_csv: str) -> None:
+    """A poisoned test set must not move the train-fitted KNN imputer statistics."""
+    cfg = _lapse_config(lapse_csv, missing_strategy_numeric="knn")
+    train, test = _load_split(cfg, storage)
+    pp = Preprocessor(cfg).fit(train)
+
+    # KNNImputer stores the fitted training matrix in _fit_X; poisoning test can't change it.
+    fit_x_before = pp.numeric_imputer_._fit_X.copy()
+    poisoned = test.copy()
+    poisoned["annual_premium"] = poisoned["annual_premium"] * 1000
+    poisoned.loc[poisoned.index[0], "age"] = np.nan
+    pp.transform(poisoned)
+    assert np.array_equal(
+        pp.numeric_imputer_._fit_X, fit_x_before, equal_nan=True
+    )
+
+
+def test_partial_drop_strategy(storage: StorageAdapter, lapse_csv: str) -> None:
+    """numeric=drop + categorical=mode drops train rows only on numeric NaNs."""
+    cfg = _lapse_config(
+        lapse_csv,
+        missing_strategy_numeric="drop",
+        missing_strategy_categorical="mode",
+    )
+    train, test = _load_split(cfg, storage)
+    pp = Preprocessor(cfg)
+    train_out = pp.fit_transform(train)
+
+    # Only numeric columns drive the complete-case drop.
+    assert set(pp.drop_cols_) == set(pp.numeric_cols_)
+    expected_kept = train.dropna(subset=pp.numeric_cols_)
+    assert len(train_out) == len(expected_kept)
+    # transform still never drops a test row.
+    assert len(pp.transform(test)) == len(test)
+
+
+def test_per_type_keys_validated(lapse_csv: str) -> None:
+    """The per-type keys default to None (inherit) and reject out-of-set values."""
+    cfg = _lapse_config(lapse_csv)
+    assert cfg["missing_strategy_numeric"] is None
+    assert cfg["missing_strategy_categorical"] is None
+    # knn/iterative are numeric-only — rejected for categorical.
+    with pytest.raises(ValueError, match="missing_strategy_categorical"):
+        _lapse_config(lapse_csv, missing_strategy_categorical="knn")
+    with pytest.raises(ValueError, match="missing_strategy_categorical"):
+        _lapse_config(lapse_csv, missing_strategy_categorical="mean")
+    with pytest.raises(ValueError, match="missing_strategy_numeric"):
+        _lapse_config(lapse_csv, missing_strategy_numeric="bogus")
+
+
+def test_global_strategy_still_inherited(storage: StorageAdapter, lapse_csv: str) -> None:
+    """With only the legacy global set, numeric inherits it and categorical falls back to mode."""
+    cfg = _lapse_config(lapse_csv, missing_strategy="mean")
+    train, _ = _load_split(cfg, storage)
+    pp = Preprocessor(cfg).fit(train)
+    assert pp.numeric_strategy_ == "mean"
+    assert pp.categorical_strategy_ == "mode"  # numeric-only global → mode for categorical
 
 
 def test_outlier_capping(storage: StorageAdapter, lapse_csv: str) -> None:

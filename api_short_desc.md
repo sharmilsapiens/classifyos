@@ -109,6 +109,16 @@ additively (`schema_version` now reports `"1.1"`).
   `feature_importance_summary.csv`. Pure plumbing of values the engine already computed (the API
   adds no ML); documented in `docs/api_contract.md` (the contract's third additive bump).
 
+- **Per-type missing-value strategy on `/run` (2026-06-27, additive, request-side)** — the `/run`
+  request gained two optional fields, `missing_strategy_numeric` and `missing_strategy_categorical`
+  (both default `null` → inherit the legacy global `missing_strategy`). They let a caller pick a
+  different blank-filling strategy for number columns vs category columns — and unlock the new
+  number-only options (k-nearest-neighbours, iterative/model-based, backward-fill). A bad value
+  (e.g. a number-only strategy on the categorical field) is rejected with a precise 422 by the
+  engine's `build_config`, same as every other enum. This is **request-side only** — the response
+  envelope is unchanged, so there is **no `schema_version` bump**; the request example in
+  `docs/api_contract.md` was updated.
+
 ---
 
 ## How to read this project
