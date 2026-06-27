@@ -96,6 +96,18 @@ def test_run_bad_per_type_missing_strategy_is_422(api_client) -> None:
     assert api_client.post("/api/v1/run", json=body).status_code == 422
 
 
+def test_run_accepts_permutation_metric(api_client) -> None:
+    """The permutation_metric request field is accepted (request-side, no schema change)."""
+    body = {**_VALID, "permutation_metric": "roc_auc"}
+    assert api_client.post("/api/v1/run", json=body).status_code == 200
+
+
+def test_run_bad_permutation_metric_is_422(api_client) -> None:
+    """An unknown permutation_metric is rejected at the boundary (422, not 500)."""
+    body = {**_VALID, "permutation_metric": "not_a_metric"}
+    assert api_client.post("/api/v1/run", json=body).status_code == 422
+
+
 # --------------------------------------------------------------------------- #
 # locked schema (binary)                                                      #
 # --------------------------------------------------------------------------- #

@@ -126,6 +126,9 @@ problem there is returned as HTTP 422.
   "threshold": 0.5,
   "calibrate_probs": true,
   "random_state": 42,
+  "permutation_metric": "f1_weighted",  // metric the post-training permutation importance scores the drop in;
+                                         // f1_weighted|f1_macro|accuracy|precision_weighted|precision_macro|
+                                         // recall_weighted|recall_macro|roc_auc|pr_auc|mcc|log_loss
   "feature_engineering": { "enabled": true, "polynomial": false, "ratios": true,
                            "binning": true, "max_poly_features": 8 },
   "interaction_features": { "enabled": true, "interaction_pairs": {},
@@ -294,8 +297,10 @@ missing/wrong-typed column is skipped and logged — it never aborts the run).
   no refit. Pure plumbing — the engine already computed the values.
 - **`result.permutation_importance` (1.4, additive, optional)** carries each model's **permutation**
   importance: `{model: [{feature, importance, rank}, …]}`, ranked descending **within** each model, where
-  `importance` is the **drop in F1-weighted on the held-out test split** when that feature's values are
-  shuffled (averaged over repeats; may be slightly negative — shuffle noise). Because it only needs
+  `importance` is the **drop in the configured metric on the held-out test split** when that feature's
+  values are shuffled (averaged over repeats; may be slightly negative — shuffle noise). The metric is the
+  request-side `permutation_metric` field (default `f1_weighted`; **request-only — no `schema_version`
+  bump**, the response shape is unchanged). Because it only needs
   `predict`, it is **model-agnostic** — present for **every** model, including the RBF-SVM and GaussianNB
   that have no native importance — and is in one consistent unit, so it **is** comparable across models
   (unlike `feature_importance`). Over the **engineered/active feature columns**. A model whose measure

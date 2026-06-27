@@ -26,6 +26,7 @@ import {
 import { AlertTriangle } from "lucide-react"
 
 import type { FeatureImpactRow, FeatureImportanceRow, PermutationImportanceRow } from "@/api/types"
+import { useApp } from "@/store/AppStore"
 import { fmtMetric } from "@/lib/format"
 import { ResultGate } from "@/components/results/ResultGate"
 import { PngArtifact } from "@/components/results/PngArtifact"
@@ -73,6 +74,10 @@ function FeatureImpactBody({
   permutation: Record<string, PermutationImportanceRow[]> | null
 }) {
   const [metric, setMetric] = useState<MetricKey>("composite_score")
+  // The permutation-importance scoring metric the run was configured with (the form persists
+  // in the store after a run). Falls back to the default if the form isn't available.
+  const { form } = useApp()
+  const permutationMetric = form?.permutation_metric ?? "f1_weighted"
   const flagged = rows.filter((r) => r.id_like)
 
   // Chart data: keep the contract's rank order, show the top 20 for readability.
@@ -236,7 +241,7 @@ function FeatureImpactBody({
 
       {/* Permutation importance — the model-agnostic counterpart, covering EVERY model
           (incl. SVM / NaiveBayes which have no native importance). */}
-      <PermutationImportance permutation={permutation} />
+      <PermutationImportance permutation={permutation} metric={permutationMetric} />
     </div>
   )
 }
@@ -352,8 +357,10 @@ function PostTrainingImportance({
 
 function PermutationImportance({
   permutation,
+  metric,
 }: {
   permutation: Record<string, PermutationImportanceRow[]> | null
+  metric: string
 }) {
   const models = useMemo(
     () => Object.keys(permutation ?? {}).filter((m) => (permutation?.[m]?.length ?? 0) > 0),
@@ -377,11 +384,12 @@ function PermutationImportance({
       </CardHeader>
       <CardContent>
         <p className="mb-4 text-sm text-muted-foreground">
-          How much the model's <strong>test-set F1 drops when each feature is shuffled</strong> —
-          a model-agnostic measure that works for <em>every</em> model, including SVM and Naive
+          How much the model's <strong>test-set {metric} drops when each feature is shuffled</strong>{" "}
+          — a model-agnostic measure that works for <em>every</em> model, including SVM and Naive
           Bayes (which have no native importance). Higher = the model relied on it more; a small
           negative value is shuffle noise. Measured in one consistent unit, so unlike the native
-          importances above these <strong>are comparable across models</strong>.{" "}
+          importances above these <strong>are comparable across models</strong>. The scoring metric
+          is set on the Configuration page.{" "}
           <span className="italic">
             Note: two correlated features can both look unimportant (the model leans on the
             untouched twin).

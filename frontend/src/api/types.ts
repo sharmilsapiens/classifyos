@@ -103,6 +103,8 @@ export interface RunConfig {
   threshold: number
   calibrate_probs: boolean
   random_state: number
+  /** metric the post-training permutation importance scores the drop in (default f1_weighted). */
+  permutation_metric: string
   // nested capability configs
   feature_engineering: FeatureEngineeringConfig
   interaction_features: InteractionFeaturesConfig

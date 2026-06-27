@@ -34,6 +34,8 @@ export interface ConfigFormState {
   threshold: number
   calibrate_probs: boolean
   random_state: number
+  /** metric the post-training permutation importance scores the drop in. */
+  permutation_metric: string
   // feature engineering
   fe_enabled: boolean
   fe_polynomial: boolean
@@ -80,6 +82,7 @@ export const DEFAULT_FORM_STATE: ConfigFormState = {
   threshold: 0.5,
   calibrate_probs: true,
   random_state: 42,
+  permutation_metric: "f1_weighted",
   fe_enabled: true,
   fe_polynomial: false,
   fe_ratios: true,
@@ -139,6 +142,7 @@ export function buildPayload(form: ConfigFormState): RunConfig {
     threshold: form.threshold,
     calibrate_probs: form.calibrate_probs,
     random_state: form.random_state,
+    permutation_metric: form.permutation_metric,
     feature_engineering: {
       enabled: form.fe_enabled,
       polynomial: form.fe_polynomial,

@@ -159,6 +159,21 @@ def test_permutation_importance_captured_for_all_models(storage, output_dir) -> 
         assert rows["importance"].is_monotonic_decreasing
 
 
+def test_permutation_importance_honours_configured_metric(storage) -> None:
+    """A probability-based permutation metric (roc_auc) drives the proba path end-to-end.
+
+    Exercises predict_proba scoring (not just label-based F1) and confirms the configured
+    metric flows config -> runner -> permutation_importance and yields a real dict.
+    """
+    cfg = _lapse_config(algorithms=["RandomForest"], permutation_metric="roc_auc")
+    runner = ModelRunner(cfg, storage).run()
+
+    perm = runner.permutation_importances_["RandomForest"]
+    assert isinstance(perm, dict) and perm
+    assert set(perm) <= set(runner.active_features_)
+    assert all(isinstance(v, float) for v in perm.values())
+
+
 def test_runner_multiclass(storage) -> None:
     """risk_tier 3-class end-to-end: metrics computed per model; 3 classes learned."""
     cfg = build_config(

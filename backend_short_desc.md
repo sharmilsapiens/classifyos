@@ -278,7 +278,16 @@ each model's accuracy drops when a feature is scrambled.
   couldn't be computed, so old runs are unchanged), and the dashboard's Feature Impact page now
   shows a "Permutation importance · per model" card — covering all models, with a model picker, a
   ranked bar, and a note about the correlated-feature caveat — beneath the native-importance card.
-  Tests across all three (295 backend pytest · 99 frontend vitest).
+- **The scoring metric is selectable from the UI** (follow-up, same day). Rather than hardcoding
+  F1-weighted, a "Permutation importance metric" selector on the Configuration page lets you choose
+  what the shuffle-drop is measured in — any of the engine's reported metrics: accuracy, F1
+  (weighted/macro), precision/recall, MCC, and the probability-based ROC-AUC, PR-AUC and log-loss.
+  The scorer reuses the engine's one `evaluate_model` so the permutation score is computed
+  *identically* to the metric shown elsewhere (no second definition to drift); log-loss is negated
+  so "more drop = more important" still holds, and a metric undefined for the problem type (e.g.
+  PR-AUC on multiclass) simply yields no importances rather than a fabricated number. It's a
+  request-side config field (`permutation_metric`, default F1-weighted) — **no contract/version
+  change** — and the chart labels itself with the chosen metric.
 
 ## Missing-value treatment split by feature type (✅ Done, 2026-06-27)
 **In one line:** The "what to do about blanks" setting is now chosen **separately for number

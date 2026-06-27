@@ -59,6 +59,14 @@ TUNING_METRICS = (
     "mcc",
     "log_loss",
 )
+#: Metric the post-training PERMUTATION importance measures the drop in (the feature is
+#: shuffled, the model is re-scored, importance = baseline − permuted). These are the SAME
+#: ``evaluate_model`` keys as the tuning metrics — label-based ones (accuracy/F1/precision/
+#: recall/MCC) need only ``predict``; probability-based ones (roc_auc/pr_auc/log_loss) need
+#: ``predict_proba``. All are higher-is-better except ``log_loss`` (negated internally so the
+#: drop stays positive for an important feature). A metric undefined for a problem type (e.g.
+#: ``pr_auc`` on multiclass, ``log_loss`` on multilabel) yields no importances for that run.
+PERMUTATION_METRICS = TUNING_METRICS
 
 # --- user-defined feature engineering (UserFeatureBuilder) ---------------------------
 # Fixed allowlists for STRUCTURED user features. The user picks
@@ -108,6 +116,10 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "high_cardinality_threshold": 20,
     "threshold": 0.5,
     "calibrate_probs": True,
+    # Metric the post-training PERMUTATION importance scores the drop in (see
+    # PERMUTATION_METRICS). Default F1-weighted = the engine's primary metric. Selectable from
+    # the UI; the native importance is unaffected (it has no metric).
+    "permutation_metric": "f1_weighted",
     # --- feature engineering (Section 7; FeatureBuilder) ---
     # Each capability is individually toggleable. Polynomial defaults OFF: squared
     # terms are usually redundant with tree models and risk column explosion.
@@ -264,6 +276,9 @@ def _validate_config(config: dict[str, Any]) -> None:
     _require_choice(config["encoding_method"], ENCODING_METHODS, "encoding_method")
     _require_choice(config["scaling_method"], SCALING_METHODS, "scaling_method")
     _require_choice(config["outlier_method"], OUTLIER_METHODS, "outlier_method")
+    _require_choice(
+        config["permutation_metric"], PERMUTATION_METRICS, "permutation_metric"
+    )
 
     threshold = config["high_cardinality_threshold"]
     if not isinstance(threshold, int) or isinstance(threshold, bool) or threshold < 1:

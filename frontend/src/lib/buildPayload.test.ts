@@ -67,6 +67,11 @@ describe("buildPayload", () => {
     expect(buildPayload(form).user_features).toEqual([])
   })
 
+  it("carries the permutation_metric (default f1_weighted; override respected)", () => {
+    expect(buildPayload(form).permutation_metric).toBe("f1_weighted")
+    expect(buildPayload({ ...form, permutation_metric: "roc_auc" }).permutation_metric).toBe("roc_auc")
+  })
+
   it("carries user-defined feature specs through to the payload verbatim", () => {
     const specs = [
       { name: "premium_per_sum", type: "numeric" as const, op: "divide", col_a: "premium", col_b: "sum_assured" },

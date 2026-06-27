@@ -60,6 +60,15 @@ def test_build_config_unknown_key_raises() -> None:
         build_config("f.csv", "will_lapse", ["age"], not_a_key=1)
 
 
+def test_build_config_permutation_metric() -> None:
+    """permutation_metric defaults to f1_weighted, accepts a valid metric, rejects junk."""
+    assert build_config("f.csv", "will_lapse", ["age"])["permutation_metric"] == "f1_weighted"
+    cfg = build_config("f.csv", "will_lapse", ["age"], permutation_metric="roc_auc")
+    assert cfg["permutation_metric"] == "roc_auc"
+    with pytest.raises(ValueError, match="permutation_metric"):
+        build_config("f.csv", "will_lapse", ["age"], permutation_metric="not_a_metric")
+
+
 def test_default_config_not_mutated() -> None:
     snapshot = copy.deepcopy(DEFAULT_CONFIG)
     cfg = build_config("f.csv", "will_lapse", ["age"], scaling_method="robust")

@@ -280,6 +280,20 @@ export default function Configure() {
           </CardContent>
         </Card>
 
+        {/* Post-training analysis */}
+        <Card>
+          <CardHeader><CardTitle>Post-training analysis</CardTitle></CardHeader>
+          <CardContent className="grid grid-cols-2 gap-4">
+            <Field label="Permutation importance metric"
+              hint="The score whose drop-when-shuffled measures each feature's importance (all models, incl. SVM/Naive Bayes).">
+              <Select value={form.permutation_metric}
+                onChange={(e) => updateForm({ permutation_metric: e.target.value })}>
+                {TUNING_METRICS.map((m) => <option key={m} value={m}>{m}</option>)}
+              </Select>
+            </Field>
+          </CardContent>
+        </Card>
+
         {/* Feature engineering — TEMPORARILY HIDDEN (Section 7 derived features unwired
             from the backend). Restore this card to re-expose the controls. The engine
             force-disables feature_engineering regardless, so leaving the form defaults

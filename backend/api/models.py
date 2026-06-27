@@ -191,6 +191,10 @@ class RunConfig(BaseModel):
     threshold: float = 0.5
     calibrate_probs: bool = True
     random_state: int = 42
+    # Metric the post-training permutation importance scores the drop in (request-side only;
+    # the response shape is unchanged, so NO schema_version bump). build_config is the
+    # authoritative validator of the allowed value (config.PERMUTATION_METRICS).
+    permutation_metric: str = "f1_weighted"
 
     # --- nested capability configs ---
     feature_engineering: FeatureEngineeringConfig = Field(default_factory=FeatureEngineeringConfig)

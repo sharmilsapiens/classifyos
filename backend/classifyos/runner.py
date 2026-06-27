@@ -239,7 +239,9 @@ class ModelRunner:
         # model's failure (or the whole step) never aborts the run (report-only).
         # [RISK] cost — scales with n_features × n_repeats predict passes per model.
         self.permutation_importances_ = self._compute_permutation_importances(
-            problem_type, random_state=cfg.get("random_state", 42)
+            problem_type,
+            metric=cfg.get("permutation_metric", "f1_weighted"),
+            random_state=cfg.get("random_state", 42),
         )
 
         n_ok = len(self.models_)
@@ -601,16 +603,18 @@ class ModelRunner:
         return pd.DataFrame(rows, columns=columns)
 
     def _compute_permutation_importances(
-        self, problem_type: str, *, random_state: int
+        self, problem_type: str, *, metric: str, random_state: int
     ) -> dict[str, dict[str, float] | None]:
         """Permutation importance for every fitted model on the held-out TEST split.
 
-        Model-agnostic (uses only ``predict``), so it covers all six models — including the
-        RBF-SVM / GaussianNB that expose no native importance. For multilabel the truth is
-        the binary indicator matrix (matching the OvR ``predict`` output); binary/multiclass
-        use the 1-D label series. Each model is computed in its own try/except: a failure is
-        logged and recorded as ``None`` so one bad model (or the whole report-only step)
-        never aborts the run.
+        Model-agnostic (uses only ``predict``/``predict_proba``), so it covers all six models —
+        including the RBF-SVM / GaussianNB that expose no native importance. ``metric`` (the
+        configurable scoring metric, e.g. ``f1_weighted``) is the quantity whose drop is
+        measured; each model's own ``classes_`` is forwarded so the score matches the reported
+        metric exactly. For multilabel the truth is the binary indicator matrix (matching the
+        OvR ``predict`` output); binary/multiclass use the 1-D label series. Each model is
+        computed in its own try/except: a failure is logged and recorded as ``None`` so one bad
+        model (or the whole report-only step) never aborts the run.
         """
         from .analysis.permutation_importance import permutation_importance
 
@@ -624,7 +628,13 @@ class ModelRunner:
         for name, model in self.models_.items():
             try:
                 out[name] = permutation_importance(
-                    model, self.X_test_, y_true, problem_type, random_state=random_state
+                    model,
+                    self.X_test_,
+                    y_true,
+                    problem_type,
+                    model.classes_,
+                    metric=metric,
+                    random_state=random_state,
                 )
             except Exception:  # noqa: BLE001 — report-only; never abort the run
                 logger.exception("ModelRunner: permutation importance failed for %r", name)

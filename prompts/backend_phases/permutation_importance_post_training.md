@@ -86,3 +86,36 @@ changed only additively with a version bump · all I/O via `StorageAdapter` · n
 test predictions only, no refit, no mutation) · hallucination check ✅ (sklearn 1.9.0 `f1_score`
 `average`/`zero_division`; numpy 2.4.6 `random.default_rng().permutation`). Additive feature realizing
 a user request, not a plan deviation — **no plan_tweak entry** (logged as a Decisions-log row).
+
+---
+
+## Follow-up (same day) — make the scoring metric selectable from the UI
+
+### Request (verbatim)
+
+> we can also pick the metric permutation from ui right?
+> it dosen't have to be hardcoded f1_weighted
+>
+> [scope question answered] metric set = "Label + probability-based" (the full set)
+
+### What changed
+
+- **Engine:** `config.py` gains `PERMUTATION_METRICS` (= `TUNING_METRICS`, the same `evaluate_model`
+  keys) + a top-level `permutation_metric` default (`"f1_weighted"`), validated in `_validate_config`.
+  `analysis/permutation_importance.py` gains `metric` + `classes` params and now **reuses
+  `evaluate_model`** as the scorer (single source of metric truth — no re-implementation of the
+  binary positive-class / multiclass-OvR ROC-AUC / multilabel logic). `predict_proba` is called only
+  for the probability-based metrics (roc_auc/pr_auc/log_loss); label metrics pass a uniform proba
+  array (avoids `evaluate_model`'s log-loss/ROC-AUC sum-to-one warning). `log_loss` is negated so the
+  drop stays positive for an important feature; a metric undefined for the problem type → baseline
+  `None` → `None` importances (honest). `ModelRunner` reads `cfg["permutation_metric"]` and forwards
+  it + each model's own `classes_`.
+- **API:** `RunConfig.permutation_metric` (auto-forwarded by `to_engine_config` → `build_config`).
+  **Request-side only — NO `schema_version` bump** (response shape unchanged).
+- **UI:** a "Permutation importance metric" selector (new "Post-training analysis" card on
+  Configuration) → `permutation_metric` form field; the Feature Impact permutation card labels its
+  blurb with the chosen metric (read from the persisted store form, safe default).
+- **Tests:** +1 config, +2 API (accept; bad → 422), +1 runner (roc_auc proba path), +1 vitest.
+  Green: 299 backend pytest · 100 frontend vitest · `tsc -b` + `vite build` clean. Hallucination check
+  ✅ (no new library calls — reuses `evaluate_model` / `predict_proba` / `default_rng`). No plan_tweak
+  (additive; request field → no contract bump, same precedent as `user_features`).
