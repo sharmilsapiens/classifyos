@@ -251,6 +251,35 @@ how much each input column actually drove that model's decisions — surfaced as
   a per-model ranked bar + the `plot3` chart beneath the pre-training screen, with a note that
   SVM/Naive Bayes are omitted and values aren't cross-comparable.
 
+## Permutation feature importance — the model-agnostic counterpart (✅ Done, 2026-06-27)
+**In one line:** Added a second post-training importance measure that works for **every**
+model — including SVM and Naive Bayes, which have no native importance — by measuring how much
+each model's accuracy drops when a feature is scrambled.
+- **Why:** the native importance above is blank for two of the six models (the RBF-kernel SVM and
+  Naive Bayes genuinely expose no per-feature number). This fills that gap so the post-training
+  story is complete for all six.
+- **What it is:** for each trained model, the engine scores it on the held-out **test** data, then
+  shuffles one feature's values at a time and re-scores. The drop in score (F1-weighted, the
+  engine's primary metric, averaged over a few shuffles) is that feature's importance — a big drop
+  means the model leaned on it heavily. Because it only needs the model's *predictions*, it works
+  for any model, and it's measured in one consistent unit, so unlike the native importances these
+  values **are** comparable across models.
+- **New engine module (`analysis/permutation_importance.py`):** a pure, model-agnostic function.
+  It's leakage-safe — it reads the held-out test predictions only, fits nothing, re-trains nothing,
+  and never alters the test data (it shuffles a private copy). A fixed random seed makes it
+  reproducible. [RISK] noted: two correlated features can both look unimportant because the model
+  leans on whichever twin wasn't shuffled; and it costs extra compute (many prediction passes).
+- **What's new in the conductor:** ModelRunner collects these into `permutation_importances_`
+  (one entry per model — now including SVM/Naive Bayes) and writes a ranked
+  `permutation_importance_summary.csv`. Each model is computed in its own safety net, so a failure
+  there never aborts the run.
+- **Surfaced everywhere additively.** The API gained an optional `result.permutation_importance`
+  block keyed by model (locked contract bumped `1.3 → 1.4`, additive only — `null`/omitted when it
+  couldn't be computed, so old runs are unchanged), and the dashboard's Feature Impact page now
+  shows a "Permutation importance · per model" card — covering all models, with a model picker, a
+  ranked bar, and a note about the correlated-feature caveat — beneath the native-importance card.
+  Tests across all three (295 backend pytest · 99 frontend vitest).
+
 ## Missing-value treatment split by feature type (✅ Done, 2026-06-27)
 **In one line:** The "what to do about blanks" setting is now chosen **separately for number
 columns and category columns**, and there are more (and smarter) options to choose from — so an

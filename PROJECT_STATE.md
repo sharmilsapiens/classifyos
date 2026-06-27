@@ -5,6 +5,37 @@
 > planning/overseer chat stays in sync with the local repo.
 
 **Last updated:** 2026-06-27
+**Updated by:** Claude Code (**NEW — permutation feature importance (full stack, additive `1.3 → 1.4`)**.
+Added a *post-training, model-AGNOSTIC* permutation importance, the complement to the native
+`feature_importance` (1.3): it covers **all six** models — including the RBF-SVM and GaussianNB that
+expose no native importance (the user's question: importance shows for only 4/6 models). **Engine:**
+new pure module `analysis/permutation_importance.py::permutation_importance(model, X, y, problem_type, …)`
+— shuffles one feature column at a time on the HELD-OUT test split and measures the drop in F1-weighted
+(`average="weighted"`, the engine's primary metric; `n_repeats=5`, seeded `np.random.default_rng`).
+Model-agnostic (uses only `predict`), so SVM/NaiveBayes get a real importance; values may be slightly
+negative (shuffle noise) and ARE cross-model comparable (one unit). Leakage-safe: reads test predictions
+only, fits/refits nothing, shuffles a private copy (the test matrix is never mutated). [RISK]-marked:
+correlated features can both look unimportant; cost scales with n_features × n_repeats predicts.
+`ModelRunner` collects per-model results into a new `permutation_importances_` attr (own try/except per
+model — report-only, never aborts the run) and writes a ranked `permutation_importance_summary.csv`
+(`model, feature, importance, rank`; all models contribute, header-only if none). **API:** new optional
+`result.permutation_importance` block keyed by model (`{model: [{feature, importance, rank}]}`),
+`null`/omitted when none → byte-identical to earlier schemas otherwise; `schema_version` bumped
+`1.3 → 1.4` (fourth additive bump, same pattern as tuning/train/feature_importance);
+`permutation_importance_summary.csv` added to the artifacts allowlist; new `PermutationImportanceRow`
+Pydantic model + `_permutation_importance` route helper; `docs/api_contract.md` updated additively
+(header note, example, notes bullet, footer). **UI:** Feature Impact page gained a "Permutation
+importance · per model" card (model selector → ranked Recharts bar, covering ALL models incl. SVM/NB)
+below the native-importance card, with the correlated-feature caveat + a graceful "not computed" state;
+new `PermutationImportanceRow` type + optional `permutation_importance` on `RunResult`. **Tests:** +1
+runner test (permutation captured for NaiveBayes too; CSV ranked desc; both models present), +1 API test
+(`result.permutation_importance` ranked, superset of `feature_importance` keys), bumped the three
+`schema_version` asserts `1.3 → 1.4`; +1 vitest present + 1 absent; `test_use_case_sweep` artifact set +
+`permutation_importance_summary.csv`. **Suites green: 295 backend pytest · 99 frontend vitest · `tsc -b` +
+`vite build` clean.** Hallucination check ✅ (sklearn 1.9.0 `f1_score` `average`/`zero_division`; numpy
+2.4.6 `random.default_rng().permutation`). **No plan_tweak entry** — additive feature realizing a user
+request; the version bump is the sanctioned additive-change path; logged as a Decisions-log row instead.)
+**Prior update:** 2026-06-27
 **Updated by:** Claude Code (**NEW — missing-value treatment split by feature type + KNN/iterative/bfill imputers**.
 The single global `missing_strategy` was applied to every column, so picking `mean` silently fell back to
 mode on categorical columns — a footgun. Split the control **by feature type** and added imputers.
@@ -355,6 +386,7 @@ Status legend: ⬜ Not started · 🔄 In progress · ✅ Done · ⚠️ Blocked
 | 2026-06-26 | **Data Profile (EDA)**: profiling lives in a NEW pure `analysis/profile.py::profile_dataframe(df, …)`, and `inspect_file` gained an **additive** optional `profile=False` param that attaches `column_profiles`+`correlation` to the frame it already loaded (no second read). Served on the **extended `/upload` response** (not a new endpoint), consumed by a new store-driven `DataProfile.tsx` page | Owner picks (asked up front): new dedicated page · all four viz (numeric histogram+stats, categorical frequencies, missingness overview, correlation heatmap) · carried on `/upload`. The `profile=False` default keeps Section 3 byte-identical (additive rule); profiling fits nothing and reads no target, so there is **no leakage surface**. `/upload`/inspect is not the locked `/run` envelope → additive, no `schema_version` bump. Tradeoff: `/upload` recomputes profiles on every re-inspect (e.g. target change); bounded by the 50k-row sample + 30-col correlation caps. No plan_tweak — additive feature, not a deviation |
 | 2026-06-27 | **Missing-value treatment split by feature type**: replaced the single global `missing_strategy` (still kept as a back-compat default) with per-type `missing_strategy_numeric` / `missing_strategy_categorical` (default `None` → inherit), and added `bfill` + sklearn `KNNImputer`/`IterativeImputer` (numeric-only). `Preprocessor` resolves the two strategies + runs them via one shared `_impute()` (fit+transform); `drop` is now per-type row-level. Additive request-side API fields (no `schema_version` bump); UI shows two selectors. | Owner asked for per-type control so e.g. `mean` is never applied to a non-numeric column (it silently fell back to mode before). KNN/iterative are numeric-only statistics, so they're absent from the categorical allowlist; imputers are fit on TRAIN only (leakage boundary, [RISK]-marked). Back-compat preserved: a run setting only the global behaves exactly as before, so no contract/version change is warranted (request config is not the locked response). No plan_tweak — additive feature, not a deviation |
 | 2026-06-26 | **Post-training feature importance**: surfaced each model's **native** importance (the existing `feature_importance()` / `plot3`, previously PNG-only) as data — `feature_importances_` on the runner, `feature_importance_summary.csv`, and an additive `result.feature_importance` block (`{model: [{feature, importance, rank}]}`), `schema_version` `1.2 → 1.3`. Field name `feature_importance` (vs the existing `feature_impact`) follows the codebase's own impact/importance split (pre- vs post-training). Models with no native importance (RBF-SVM, GaussianNB) are **omitted**; whole block `null` when none qualify | Owner asked specifically for the per-model, model-dependent importance you "get to know post-training". Native (not permutation) per owner — cheapest path since the engine already computes it; chose to surface it rather than add a new ML pass. Omit-not-zero-fill keeps SVM/NB-only runs byte-identical to earlier schemas; additive version bump is the sanctioned path for the locked contract. No leakage (reads fitted-model internals only). No plan_tweak — additive feature, not a deviation |
+| 2026-06-27 | **Permutation feature importance** (complement to the native 1.3 block): new pure `analysis/permutation_importance.py` (shuffle one feature on the held-out test split, measure the F1-weighted drop, `n_repeats=5`, seeded), collected into `permutation_importances_` + `permutation_importance_summary.csv`, surfaced as an additive `result.permutation_importance` block, `schema_version` `1.3 → 1.4`. **Manual implementation** (not sklearn's `permutation_importance`) so it drives our `ModelWrapper.predict` directly — the wrappers aren't sklearn estimators (no `score`/`get_params`) and XGBoost/LightGBM need the DataFrame's `_safe_X` rename path, which a numpy-array round-trip through sklearn would break. **Scored on F1-weighted** (the engine's primary metric) and **on the test split** (genuine generalisation reliance, consistent with reported metrics). Covers **all six** models incl. SVM/NaiveBayes — the whole point, answering the user's "why only 4/6" | User asked for permutation importance "alongside" native, to compare then drop one later. Model-agnostic measure fills the SVM/NaiveBayes gap that native can't; values are cross-model comparable (one unit) unlike native. Leakage-safe (reads test predictions only, no refit, private-copy shuffle); per-model try/except keeps it report-only. [RISK]: correlated features can both look unimportant; cost = n_features × n_repeats predicts. Omit-not-zero-fill + `null`-when-none keeps old runs byte-identical; additive version bump is the sanctioned locked-contract path. No plan_tweak — additive feature, not a deviation |
 
 ---
 

@@ -227,6 +227,20 @@ export interface FeatureImportanceRow {
   rank: number | null
 }
 
+/**
+ * One ranked feature in result.permutation_importance[model] (schema 1.4, additive).
+ * The model's PERMUTATION importance for one feature — the drop in F1-weighted on the
+ * held-out test split when that feature is shuffled — ranked descending WITHIN the model.
+ * Model-AGNOSTIC, so present for EVERY model (incl. SVM / NaiveBayes), and comparable
+ * across models (one unit: F1-weighted drop). May be slightly negative. Consumed by:
+ * Feature Impact.
+ */
+export interface PermutationImportanceRow {
+  feature: string
+  importance: number | null
+  rank: number | null
+}
+
 /** One ROC curve (one-vs-rest per class). Consumed by: ROC / PR Curves. */
 export interface RocCurve {
   fpr: number[]
@@ -299,6 +313,12 @@ export interface RunResult {
    * model exposes any. Distinct from feature_impact (the pre-training raw-data screen).
    */
   feature_importance?: Record<string, FeatureImportanceRow[]> | null
+  /**
+   * schema 1.4 (additive): per-model PERMUTATION importance, keyed by model. Model-agnostic,
+   * so it covers ALL models (SVM / NaiveBayes included) — the complement to feature_importance.
+   * null/absent when it could not be computed for any model.
+   */
+  permutation_importance?: Record<string, PermutationImportanceRow[]> | null
 }
 
 /** Top-level envelope for POST /api/v1/run (the forward-compat seam). */

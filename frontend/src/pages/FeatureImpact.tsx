@@ -25,7 +25,7 @@ import {
 } from "recharts"
 import { AlertTriangle } from "lucide-react"
 
-import type { FeatureImpactRow, FeatureImportanceRow } from "@/api/types"
+import type { FeatureImpactRow, FeatureImportanceRow, PermutationImportanceRow } from "@/api/types"
 import { fmtMetric } from "@/lib/format"
 import { ResultGate } from "@/components/results/ResultGate"
 import { PngArtifact } from "@/components/results/PngArtifact"
@@ -54,6 +54,7 @@ export default function FeatureImpact() {
           rows={run.feature_impact}
           artifacts={run.artifacts}
           importance={run.feature_importance ?? null}
+          permutation={run.permutation_importance ?? null}
         />
       )}
     </ResultGate>
@@ -64,10 +65,12 @@ function FeatureImpactBody({
   rows,
   artifacts,
   importance,
+  permutation,
 }: {
   rows: FeatureImpactRow[]
   artifacts: import("@/api/types").ArtifactEntry[]
   importance: Record<string, FeatureImportanceRow[]> | null
+  permutation: Record<string, PermutationImportanceRow[]> | null
 }) {
   const [metric, setMetric] = useState<MetricKey>("composite_score")
   const flagged = rows.filter((r) => r.id_like)
@@ -230,6 +233,10 @@ function FeatureImpactBody({
       {/* Post-training (native, per-model) importance — a MODEL property, distinct from
           the raw pre-training screen above. */}
       <PostTrainingImportance importance={importance} artifacts={artifacts} />
+
+      {/* Permutation importance — the model-agnostic counterpart, covering EVERY model
+          (incl. SVM / NaiveBayes which have no native importance). */}
+      <PermutationImportance permutation={permutation} />
     </div>
   )
 }
@@ -336,6 +343,96 @@ function PostTrainingImportance({
         ) : (
           <p className="text-sm text-muted-foreground">
             No model in this run exposes a native feature importance. {NO_NATIVE_IMPORTANCE}
+          </p>
+        )}
+      </CardContent>
+    </Card>
+  )
+}
+
+function PermutationImportance({
+  permutation,
+}: {
+  permutation: Record<string, PermutationImportanceRow[]> | null
+}) {
+  const models = useMemo(
+    () => Object.keys(permutation ?? {}).filter((m) => (permutation?.[m]?.length ?? 0) > 0),
+    [permutation],
+  )
+  const [model, setModel] = useState<string | null>(null)
+  const selected = model && models.includes(model) ? model : (models[0] ?? null)
+
+  const chartData = useMemo(() => {
+    if (!selected || !permutation) return []
+    return permutation[selected]
+      .slice(0, 20)
+      .map((r) => ({ feature: r.feature, value: r.importance ?? 0 }))
+  }, [permutation, selected])
+  const chartHeight = Math.max(220, chartData.length * 28)
+
+  return (
+    <Card className="mt-5">
+      <CardHeader>
+        <CardTitle>Permutation importance · per model</CardTitle>
+      </CardHeader>
+      <CardContent>
+        <p className="mb-4 text-sm text-muted-foreground">
+          How much the model's <strong>test-set F1 drops when each feature is shuffled</strong> —
+          a model-agnostic measure that works for <em>every</em> model, including SVM and Naive
+          Bayes (which have no native importance). Higher = the model relied on it more; a small
+          negative value is shuffle noise. Measured in one consistent unit, so unlike the native
+          importances above these <strong>are comparable across models</strong>.{" "}
+          <span className="italic">
+            Note: two correlated features can both look unimportant (the model leans on the
+            untouched twin).
+          </span>
+        </p>
+
+        {selected ? (
+          <>
+            <div className="mb-3 flex items-center gap-2">
+              <Label htmlFor="perm-model" className="text-xs text-muted-foreground">
+                Model
+              </Label>
+              <Select
+                id="perm-model"
+                value={selected}
+                onChange={(e) => setModel(e.target.value)}
+                className="h-8 w-auto"
+              >
+                {models.map((m) => (
+                  <option key={m} value={m}>
+                    {m}
+                  </option>
+                ))}
+              </Select>
+            </div>
+
+            <ResponsiveContainer width="100%" height={chartHeight}>
+              <BarChart
+                layout="vertical"
+                data={chartData}
+                margin={{ top: 4, right: 16, bottom: 4, left: 8 }}
+              >
+                <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" horizontal={false} />
+                <XAxis type="number" tick={{ fontSize: 11, fill: "#64748b" }} />
+                <YAxis
+                  type="category"
+                  dataKey="feature"
+                  width={150}
+                  tick={{ fontSize: 11, fill: "#64748b" }}
+                />
+                <Tooltip
+                  formatter={(value) => fmtMetric(Number(value))}
+                  contentStyle={{ fontSize: 12, borderRadius: 8, border: "1px solid #e2e8f0" }}
+                />
+                <Bar dataKey="value" radius={[0, 4, 4, 0]} fill="#10b981" />
+              </BarChart>
+            </ResponsiveContainer>
+          </>
+        ) : (
+          <p className="text-sm text-muted-foreground">
+            Permutation importance was not computed for this run.
           </p>
         )}
       </CardContent>

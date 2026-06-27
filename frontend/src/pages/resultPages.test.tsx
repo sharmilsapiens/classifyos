@@ -144,6 +144,34 @@ describe("Feature Impact", () => {
     renderPage(<FeatureImpact />, binary)
     expect(screen.getByText(/No model in this run exposes a native feature importance/i)).toBeInTheDocument()
   })
+
+  it("renders the permutation importance section (incl. SVM/NB) when the 1.4 block is present", () => {
+    // Inject a schema-1.4 permutation_importance block — model-agnostic, so SVM appears
+    // even though it has NO native importance.
+    const withPermutation = {
+      ...binary,
+      result: {
+        ...binary.result!,
+        permutation_importance: {
+          SVM: [
+            { feature: "tenure_months", importance: 0.12, rank: 1 },
+            { feature: "premium_amount", importance: -0.01, rank: 2 },
+          ],
+        },
+      },
+    } as unknown as RunResponse
+
+    renderPage(<FeatureImpact />, withPermutation)
+    expect(screen.getByText(/Permutation importance/i)).toBeInTheDocument()
+    // SVM (no native importance) shows up here — the whole point of the model-agnostic measure.
+    expect(screen.getByRole("option", { name: "SVM" })).toBeInTheDocument()
+  })
+
+  it("shows the 'not computed' state when the 1.4 permutation block is absent", () => {
+    // The binary fixture carries no permutation_importance → friendly explanation, no crash.
+    renderPage(<FeatureImpact />, binary)
+    expect(screen.getByText(/Permutation importance was not computed for this run/i)).toBeInTheDocument()
+  })
 })
 
 describe("Predictions Table", () => {

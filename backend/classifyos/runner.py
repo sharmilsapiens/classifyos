@@ -73,6 +73,7 @@ RESULTS_CSV_KEY = "classification_results.csv"
 METRICS_CSV_KEY = "metrics_comparison.csv"
 CLASS_REPORT_CSV_KEY = "class_report.csv"
 FEATURE_IMPORTANCE_CSV_KEY = "feature_importance_summary.csv"
+PERMUTATION_IMPORTANCE_CSV_KEY = "permutation_importance_summary.csv"
 RUN_PROFILE_KEY = "run_profile.json"
 
 
@@ -122,6 +123,15 @@ class ModelRunner:
         #: NOT comparable across models — distinct from the pre-training ``feature_impact_``
         #: screen, which ranks RAW features by their statistical association with the target.
         self.feature_importances_: dict[str, dict[str, float] | None] = {}
+        #: {model_name: {feature: importance} or None} — each successful model's PERMUTATION
+        #: importance, measured post-training on the held-out TEST split as the drop in
+        #: F1-weighted when each feature is shuffled (see
+        #: :mod:`classifyos.analysis.permutation_importance`). Model-AGNOSTIC, so unlike the
+        #: native importances above it covers ALL six models — including the RBF-SVM and
+        #: GaussianNB that expose no native importance. ``None`` only when the measure could
+        #: not be computed (no feature columns / scoring error). Leakage-safe: reads test
+        #: predictions only, fits nothing, never mutates the test matrix.
+        self.permutation_importances_: dict[str, dict[str, float] | None] = {}
         self.X_test_: pd.DataFrame | None = None
         self.y_test_: pd.Series | None = None
         #: For multilabel runs only: the test target as a binary indicator matrix
@@ -220,6 +230,17 @@ class ModelRunner:
         self.feature_importances_ = {
             name: model.feature_importance() for name, model in self.models_.items()
         }
+
+        # Post-training PERMUTATION importance — the model-AGNOSTIC counterpart. Measured on
+        # the held-out TEST split as the drop in F1-weighted when each feature is shuffled, so
+        # it covers EVERY model (including the RBF-SVM / GaussianNB that have no native
+        # importance above). Leakage-safe: it reads test predictions only — fits nothing,
+        # refits nothing, never mutates the test matrix. Per-model try/except so a single
+        # model's failure (or the whole step) never aborts the run (report-only).
+        # [RISK] cost — scales with n_features × n_repeats predict passes per model.
+        self.permutation_importances_ = self._compute_permutation_importances(
+            problem_type, random_state=cfg.get("random_state", 42)
+        )
 
         n_ok = len(self.models_)
         logger.info(
@@ -529,6 +550,13 @@ class ModelRunner:
         with self.storage.open_write(FEATURE_IMPORTANCE_CSV_KEY) as fh:
             importance_df.to_csv(fh, index=False)
 
+        # post-training PERMUTATION importance, one (model, feature, importance, rank) row
+        # per model (covers ALL models, SVM/NaiveBayes included). Always written (header-only
+        # if none) so the artifact set stays stable across problem types / model mixes.
+        permutation_df = self._build_permutation_importance_df()
+        with self.storage.open_write(PERMUTATION_IMPORTANCE_CSV_KEY) as fh:
+            permutation_df.to_csv(fh, index=False)
+
         # run profile
         self.run_profile_ = self._build_run_profile(cfg, class_weight)
         with self.storage.open_write(RUN_PROFILE_KEY) as fh:
@@ -572,6 +600,37 @@ class ModelRunner:
         columns = ["model", "class", "precision", "recall", "f1_score", "support"]
         return pd.DataFrame(rows, columns=columns)
 
+    def _compute_permutation_importances(
+        self, problem_type: str, *, random_state: int
+    ) -> dict[str, dict[str, float] | None]:
+        """Permutation importance for every fitted model on the held-out TEST split.
+
+        Model-agnostic (uses only ``predict``), so it covers all six models — including the
+        RBF-SVM / GaussianNB that expose no native importance. For multilabel the truth is
+        the binary indicator matrix (matching the OvR ``predict`` output); binary/multiclass
+        use the 1-D label series. Each model is computed in its own try/except: a failure is
+        logged and recorded as ``None`` so one bad model (or the whole report-only step)
+        never aborts the run.
+        """
+        from .analysis.permutation_importance import permutation_importance
+
+        if self.X_test_ is None or not self.models_:
+            return {name: None for name in self.models_}
+
+        y_true = (
+            self.y_test_indicator_ if problem_type == "multilabel" else self.y_test_
+        )
+        out: dict[str, dict[str, float] | None] = {}
+        for name, model in self.models_.items():
+            try:
+                out[name] = permutation_importance(
+                    model, self.X_test_, y_true, problem_type, random_state=random_state
+                )
+            except Exception:  # noqa: BLE001 — report-only; never abort the run
+                logger.exception("ModelRunner: permutation importance failed for %r", name)
+                out[name] = None
+        return out
+
     def _build_feature_importance_df(self) -> pd.DataFrame:
         """Flatten each model's native feature importance into ranked long-form rows.
 
@@ -585,6 +644,35 @@ class ModelRunner:
         rows: list[dict[str, Any]] = []
         for name, importances in self.feature_importances_.items():
             if not importances:  # None (no native importance) or empty dict
+                continue
+            ranked = sorted(importances.items(), key=lambda kv: kv[1], reverse=True)
+            for rank, (feature, value) in enumerate(ranked, start=1):
+                rows.append(
+                    {
+                        "model": name,
+                        "feature": feature,
+                        "importance": float(value),
+                        "rank": rank,
+                    }
+                )
+        return pd.DataFrame(rows, columns=columns)
+
+    def _build_permutation_importance_df(self) -> pd.DataFrame:
+        """Flatten each model's PERMUTATION importance into ranked long-form rows.
+
+        Same shape as :meth:`_build_feature_importance_df` (``model, feature, importance,
+        rank``; 1-based ``rank`` descending within each model), but the values are the
+        model-agnostic permutation drop in F1-weighted — so every model contributes rows,
+        including the SVM / NaiveBayes that produce nothing natively. Importances may be
+        slightly negative (shuffle noise); ranking by raw value is still correct. A model
+        whose measure could not be computed (``None``) contributes no rows; an empty frame
+        with the locked columns is returned when no model has any, so the CSV always has a
+        stable header.
+        """
+        columns = ["model", "feature", "importance", "rank"]
+        rows: list[dict[str, Any]] = []
+        for name, importances in self.permutation_importances_.items():
+            if not importances:  # None (not computed) or empty dict
                 continue
             ranked = sorted(importances.items(), key=lambda kv: kv[1], reverse=True)
             for rank, (feature, value) in enumerate(ranked, start=1):

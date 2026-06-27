@@ -30,6 +30,7 @@ EXPECTED_ARTIFACTS = {
     "class_report.csv",
     "feature_impact_summary.csv",
     "feature_importance_summary.csv",  # native per-model importance, post-training (schema 1.3)
+    "permutation_importance_summary.csv",  # model-agnostic permutation importance (schema 1.4)
     "run_profile.json",
     "plot1_confusion_matrix.png",
     "plot2_roc_pr_curves.png",
@@ -96,7 +97,7 @@ def test_use_case_runs_and_renders(sweep_responses, uid, problem_type, n_classes
     assert resp.status_code == 200, f"{uid}: HTTP {resp.status_code}"
     body = resp.json()
     assert body["status"] == "ok", f"{uid}: {body.get('error')}"
-    assert body["schema_version"] == "1.3"
+    assert body["schema_version"] == "1.4"
 
     result = body["result"]
     assert result["run"]["problem_type"] == problem_type

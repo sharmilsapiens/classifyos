@@ -379,6 +379,23 @@ class FeatureImportanceRow(BaseModel):
     rank: int | None = None
 
 
+class PermutationImportanceRow(BaseModel):
+    """One ranked feature in ``result.permutation_importance[model]`` (NEW in schema 1.4).
+
+    The model's PERMUTATION importance for one feature — the drop in F1-weighted on the
+    held-out TEST split when that feature's values are shuffled — with a 1-based ``rank``
+    descending within that model. Unlike ``feature_importance`` (native, only the tree/linear
+    models), this is **model-agnostic** so it is present for EVERY model, including the
+    RBF-SVM and GaussianNB that expose no native importance. ``importance`` may be slightly
+    negative (shuffle noise). Measured in one consistent unit (F1-weighted drop), so it is
+    comparable across models — unlike the native importances.
+    """
+
+    feature: str
+    importance: float | None = None
+    rank: int | None = None
+
+
 class ArtifactEntry(BaseModel):
     """One output file in ``result.artifacts`` (PNGs fetched on demand via /outputs)."""
 
@@ -426,6 +443,11 @@ class RunResult(BaseModel):
     # model name. Models with no native importance (RBF-SVM, GaussianNB) are omitted; ``None``
     # when no model exposes any, so an SVM/NB-only run is byte-identical to earlier schemas.
     feature_importance: dict[str, list[FeatureImportanceRow]] | None = None
+    # NEW in schema 1.4 (additive, optional): per-model PERMUTATION importance, keyed by model
+    # name. Model-agnostic, so it covers ALL models (SVM/NaiveBayes included) — the complement
+    # to the native ``feature_importance`` above. ``None`` when it could not be computed for
+    # any model, so a run that produced none is byte-identical to earlier schemas.
+    permutation_importance: dict[str, list[PermutationImportanceRow]] | None = None
 
 
 class RunResponse(BaseModel):
@@ -435,7 +457,9 @@ class RunResponse(BaseModel):
     # 1.1 (additive): added the optional ``result.tuning`` block.
     # 1.2 (additive): added ``result.models[].train`` (pre-balance train headline metrics).
     # 1.3 (additive): added the optional ``result.feature_importance`` block (native
-    #     per-model post-training importance). All earlier fields are unchanged across bumps.
-    schema_version: str = "1.3"
+    #     per-model post-training importance).
+    # 1.4 (additive): added the optional ``result.permutation_importance`` block (model-agnostic
+    #     per-model permutation importance, covering all models). All earlier fields unchanged.
+    schema_version: str = "1.4"
     result: RunResult | None = None
     error: str | None = None

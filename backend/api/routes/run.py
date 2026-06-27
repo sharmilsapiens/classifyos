@@ -104,6 +104,7 @@ def _build_result(runner: ModelRunner, storage: StorageAdapter) -> dict[str, Any
         "artifacts": collect_artifacts(storage),
         "tuning": _tuning(runner),
         "feature_importance": _feature_importance(runner),
+        "permutation_importance": _permutation_importance(runner),
     }
 
 
@@ -287,6 +288,32 @@ def _feature_importance(
     out: dict[str, list[dict[str, Any]]] = {}
     for name, importances in by_model.items():
         if not importances:  # None (no native importance) or empty dict
+            continue
+        ranked = sorted(importances.items(), key=lambda kv: kv[1], reverse=True)
+        out[name] = [
+            {"feature": feature, "importance": float(value), "rank": rank}
+            for rank, (feature, value) in enumerate(ranked, start=1)
+        ]
+    return out or None
+
+
+def _permutation_importance(
+    runner: ModelRunner,
+) -> dict[str, list[dict[str, Any]]] | None:
+    """``result.permutation_importance`` — model-agnostic permutation importance (NEW in 1.4, additive).
+
+    Reshapes the runner's ``permutation_importances_`` ({model: {feature: value} | None}) into
+    ``{model: [{feature, importance, rank}, …]}``, ranked descending within each model. Unlike
+    ``feature_importance`` this is present for EVERY model (it only needs ``predict``), so the
+    SVM and NaiveBayes that produce no native importance DO appear here. A model whose measure
+    could not be computed (``None``) is omitted; returns ``None`` when none could be computed,
+    so a run that produced none matches the earlier schema. No ML here — pure plumbing of values
+    the engine already computed (post-training, on held-out test predictions; no refit).
+    """
+    by_model = getattr(runner, "permutation_importances_", None) or {}
+    out: dict[str, list[dict[str, Any]]] = {}
+    for name, importances in by_model.items():
+        if not importances:  # None (not computed) or empty dict
             continue
         ranked = sorted(importances.items(), key=lambda kv: kv[1], reverse=True)
         out[name] = [

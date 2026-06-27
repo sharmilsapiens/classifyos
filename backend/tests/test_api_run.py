@@ -25,6 +25,7 @@ RESULT_KEYS = {
     "artifacts",
     "tuning",  # NEW in schema 1.1 (additive); null on a non-tuning run
     "feature_importance",  # NEW in schema 1.3 (additive); per-model native importance
+    "permutation_importance",  # NEW in schema 1.4 (additive); model-agnostic permutation importance
 }
 
 RUN_KEYS = {
@@ -104,7 +105,7 @@ def test_binary_run_envelope(binary_run_response) -> None:
     assert binary_run_response.status_code == 200
     body = binary_run_response.json()
     assert body["status"] == "ok"
-    assert body["schema_version"] == "1.3"
+    assert body["schema_version"] == "1.4"
     assert RESULT_KEYS == set(body["result"].keys())
 
 
@@ -120,6 +121,24 @@ def test_binary_run_feature_importance_block(binary_run_response) -> None:
     assert [r["rank"] for r in rf] == list(range(1, len(rf) + 1))
     importances = [r["importance"] for r in rf]
     assert importances == sorted(importances, reverse=True)  # ranked desc within the model
+
+
+def test_binary_run_permutation_importance_block(binary_run_response) -> None:
+    """``result.permutation_importance`` (1.4) is model-AGNOSTIC — present for every model.
+
+    The binary fixture trains LogisticRegression + RandomForest; both appear (and so would
+    SVM/NaiveBayes, which expose no native importance) because permutation only needs predict.
+    Rows are ranked descending within each model.
+    """
+    pi = binary_run_response.json()["result"]["permutation_importance"]
+    assert isinstance(pi, dict) and pi
+    # Every model that ran is present (unlike feature_importance, which omits SVM/NB).
+    fi = binary_run_response.json()["result"]["feature_importance"]
+    assert set(pi) >= set(fi)
+    for rows in pi.values():
+        assert [r["rank"] for r in rows] == list(range(1, len(rows) + 1))
+        importances = [r["importance"] for r in rows]
+        assert importances == sorted(importances, reverse=True)  # ranked desc within the model
 
 
 def test_non_tuning_run_has_null_tuning(binary_run_response) -> None:
@@ -326,7 +345,7 @@ def test_tuned_run_exposes_best_params(api_client) -> None:
     resp = api_client.post("/api/v1/run", json=payload)
     assert resp.status_code == 200
     body = resp.json()
-    assert body["schema_version"] == "1.3"
+    assert body["schema_version"] == "1.4"
 
     tuning = body["result"]["tuning"]
     assert tuning is not None
@@ -377,8 +396,8 @@ def test_run_with_user_features_creates_columns(api_client) -> None:
     body = resp.json()
     assert body["status"] == "ok"
     # user_features is request-side only — it adds no response field of its own; the version
-    # reflects the current contract default (1.3).
-    assert body["schema_version"] == "1.3"
+    # reflects the current contract default (1.4).
+    assert body["schema_version"] == "1.4"
     active = body["result"]["run"]["active_features"]
     assert "premium_per_sum" in active
     assert "start_year" in active

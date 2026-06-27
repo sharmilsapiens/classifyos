@@ -18,6 +18,7 @@ from classifyos.runner import (
     CLASS_REPORT_CSV_KEY,
     FEATURE_IMPORTANCE_CSV_KEY,
     METRICS_CSV_KEY,
+    PERMUTATION_IMPORTANCE_CSV_KEY,
     RESULTS_CSV_KEY,
     RUN_PROFILE_KEY,
     ModelRunner,
@@ -127,6 +128,35 @@ def test_native_feature_importance_captured(storage, output_dir) -> None:
     assert rf_rows["rank"].tolist() == list(range(1, len(rf_rows) + 1))
     # ranked descending by importance
     assert rf_rows["importance"].is_monotonic_decreasing
+
+
+def test_permutation_importance_captured_for_all_models(storage, output_dir) -> None:
+    """Permutation importance is model-AGNOSTIC: it is produced even for NaiveBayes/SVM.
+
+    The whole point of the permutation measure is to cover the models that expose no native
+    importance. NaiveBayes returns ``None`` from ``feature_importance()`` but DOES get a
+    permutation importance dict; both are keyed by the active feature columns.
+    """
+    cfg = _lapse_config(algorithms=["RandomForest", "NaiveBayes"])
+    runner = ModelRunner(cfg, storage).run()
+
+    # NaiveBayes has no NATIVE importance ...
+    assert runner.feature_importances_["NaiveBayes"] is None
+    # ... but it DOES get a permutation importance (model-agnostic).
+    for name in ("RandomForest", "NaiveBayes"):
+        perm = runner.permutation_importances_[name]
+        assert isinstance(perm, dict) and perm
+        assert set(perm) <= set(runner.active_features_)
+        assert all(isinstance(v, float) for v in perm.values())
+
+    # CSV: ranked long-form rows for BOTH models (unlike the native CSV, which omits NB).
+    perm_df = pd.read_csv(output_dir / PERMUTATION_IMPORTANCE_CSV_KEY)
+    assert list(perm_df.columns) == ["model", "feature", "importance", "rank"]
+    assert set(perm_df["model"].unique()) == {"RandomForest", "NaiveBayes"}
+    for name in ("RandomForest", "NaiveBayes"):
+        rows = perm_df[perm_df["model"] == name].sort_values("rank")
+        assert rows["rank"].tolist() == list(range(1, len(rows) + 1))
+        assert rows["importance"].is_monotonic_decreasing
 
 
 def test_runner_multiclass(storage) -> None:
