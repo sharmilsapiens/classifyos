@@ -54,6 +54,7 @@ const DETAIL_LINKS = [
   { to: "/class-report", label: "Class Report" },
   { to: "/curves", label: "ROC / PR Curves" },
   { to: "/predictions", label: "Predictions" },
+  { to: "/diagnostics", label: "Train vs Test" },
   { to: "/interactions", label: "Interactions" },
 ]
 
@@ -285,7 +286,11 @@ export default function Overview() {
                 </tr>
               </thead>
               <tbody>
-                {run.models.map((m) => (
+                {/* Best-first by F1-weighted (test) — the project's primary metric.
+                    Failed/missing-metric models (null F1) sort to the bottom. */}
+                {[...run.models]
+                  .sort((a, b) => (b.f1_weighted ?? -1) - (a.f1_weighted ?? -1))
+                  .map((m) => (
                   <tr
                     key={m.name}
                     className={`border-b last:border-0 ${m.status === "failed" ? "text-muted-foreground" : ""}`}
@@ -313,7 +318,8 @@ export default function Overview() {
             </table>
           </div>
           <p className="mt-3 text-xs text-muted-foreground">
-            Accuracy, ROC-AUC and MCC are on the held-out <strong>test</strong> set. <strong>Gap</strong> is
+            Sorted best-first by <strong>F1 · test</strong> (failed models last). Accuracy, ROC-AUC and MCC
+            are on the held-out <strong>test</strong> set. <strong>Gap</strong> is
             train − test F1-weighted (train measured on the pre-balance split): a large positive gap suggests
             the model is overfitting.
           </p>

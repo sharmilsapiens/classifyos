@@ -108,7 +108,25 @@ function Heatmap({ entry, normalise }: { entry: ConfusionMatrixEntry; normalise:
   return (
     <div className="overflow-auto">
       <div className="inline-block min-w-full">
-        <div className="mb-1 text-center text-xs font-medium text-muted-foreground">Predicted →</div>
+        {/* "Predicted →" title, aligned over the prediction columns only (not the
+            left "True ↓" strip + row-label gutter), so it sits above the columns it labels. */}
+        <div className="flex">
+          <div className="invisible flex items-center pr-1" aria-hidden>
+            <span className="text-xs font-medium [writing-mode:vertical-rl] rotate-180">True ↓</span>
+          </div>
+          <div
+            className="grid gap-px"
+            style={{ gridTemplateColumns: `minmax(72px,auto) repeat(${n}, ${cell}px)` }}
+          >
+            <div />
+            <div
+              className="mb-1 text-center text-xs font-medium text-muted-foreground"
+              style={{ gridColumn: `span ${n}` }}
+            >
+              Predicted →
+            </div>
+          </div>
+        </div>
         <div className="flex">
           {/* rotated "True" axis label */}
           <div className="flex items-center pr-1">
