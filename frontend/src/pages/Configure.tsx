@@ -273,7 +273,8 @@ export default function Configure() {
                 {OUTLIER.map((c) => <option key={c} value={c}>{c}</option>)}
               </Select>
             </Field>
-            <Field label="High-cardinality threshold">
+            <Field label="High-cardinality threshold"
+              hint={highCardinalityHint(form.problem_type)}>
               <Input type="number" min={2} value={form.high_cardinality_threshold}
                 onChange={(e) => updateForm({ high_cardinality_threshold: Number(e.target.value) })} />
             </Field>
@@ -426,6 +427,19 @@ function Field({
       {hint && <p className="text-xs text-muted-foreground">{hint}</p>}
     </div>
   )
+}
+
+/** Explains what the engine does to categorical columns whose unique-value count
+ *  exceeds the threshold. Such columns skip one-hot/ordinal encoding (which would
+ *  explode width or impose a fake order) and fall back to target encoding on binary
+ *  problems, or frequency encoding on multiclass/multilabel — mirroring the engine's
+ *  Preprocessor (preprocess.py). */
+function highCardinalityHint(problemType: string): string {
+  const fallback =
+    problemType === "binary"
+      ? "target encoding (category → mean of the target)"
+      : "frequency encoding (category → its training frequency)"
+  return `Categorical columns with more unique values than this skip one-hot/ordinal encoding and use ${fallback} instead.`
 }
 
 /** Strategy-specific note for the NUMERIC missing-values selector. The strategy is
