@@ -183,6 +183,11 @@ The final slice finished the dashboard and merged two pages into one.
   test-row index and hit **Explain**, which calls the real endpoint and renders its structured
   reply (status + the server's own reason/message). The region where the SHAP waterfall will go is
   clearly reserved so v2.0 only has to fill in the values, not rebuild the page.
+  **⚠ TEMPORARILY HIDDEN (2026-06-28, unwire.md #3):** because the backend explanation is not yet
+  implemented, this page is hidden from the nav and `/explainability` redirects to Overview. The
+  page component, the `explain` client, and the `/api/v1/explain` stub endpoint are all left intact
+  — UI-only change, trivially reversible. So the live nav is currently **11 visible items** (the
+  hidden Interaction Features entry already dropped it from 12).
 - **Setup Guide** is a static getting-started reference authored from the real docs (API_RUNBOOK,
   RUNBOOK, the locked contract): an architecture diagram (React → FastAPI → engine), the run flow
   (start uvicorn → upload → configure → run → explore/download), a 6-endpoint API reference, and an

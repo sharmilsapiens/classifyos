@@ -14,7 +14,7 @@ import {
   Grid3x3,
   LayoutDashboard,
   LineChart,
-  Lightbulb,
+  // Lightbulb,  // unused while the Explainability nav entry is hidden (backend not implemented)
   ScanSearch,
   Settings2,
   ShieldAlert,
@@ -45,7 +45,9 @@ export const NAV_ITEMS: NavItem[] = [
   { path: "/curves", label: "ROC / PR Curves", icon: LineChart, group: "Results" },
   { path: "/predictions", label: "Predictions Table", icon: Table2, group: "Results" },
   { path: "/tuning", label: "Tuning Results", icon: SlidersHorizontal, group: "Results" },
-  { path: "/explainability", label: "Explainability", icon: Lightbulb, group: "Results" },
+  // TEMPORARILY HIDDEN — explainability not yet implemented in the backend (single-row
+  // SHAP needs model persistence, deferred to v2.0). Re-enable when the backend lands.
+  // { path: "/explainability", label: "Explainability", icon: Lightbulb, group: "Results" },
 
   { path: "/setup", label: "Setup Guide", icon: BookOpen, group: "Reference" },
   { path: "/risks", label: "Risk Register", icon: ShieldAlert, group: "Reference" },

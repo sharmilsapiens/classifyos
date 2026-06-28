@@ -87,18 +87,21 @@ function renderPage(ui: ReactElement) {
 }
 
 describe("Navigation (post-merge)", () => {
-  it("has exactly 13 items and no Pipeline entry", () => {
-    // 12 after the 9c merge + the Phase 12 "Tuning Results" page = 13.
-    expect(NAV_ITEMS).toHaveLength(13)
+  it("has exactly 12 items and no Pipeline entry", () => {
+    // 12 after the 9c merge + the Phase 12 "Tuning Results" page = 13, minus the
+    // temporarily-hidden Explainability entry (unwire.md #3, backend not implemented) = 12.
+    expect(NAV_ITEMS).toHaveLength(12)
     expect(NAV_ITEMS.some((i) => i.path === "/pipeline")).toBe(false)
     expect(NAV_ITEMS.some((i) => i.label === "Pipeline")).toBe(false)
   })
 
-  it("includes the three 9c pages as real routes", () => {
+  it("includes the reference pages as real routes", () => {
     const paths = NAV_ITEMS.map((i) => i.path)
-    expect(paths).toContain("/explainability")
     expect(paths).toContain("/setup")
     expect(paths).toContain("/risks")
+    // TEMPORARILY HIDDEN — explainability is unwired from the nav until the backend
+    // lands (see unwire.md #3). The page component + /explain client stay intact.
+    expect(paths).not.toContain("/explainability")
   })
 })
 

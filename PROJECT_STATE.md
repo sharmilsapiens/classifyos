@@ -4,7 +4,29 @@
 > A copy is uploaded to the ClassifyOS Claude Project knowledge after each update so the
 > planning/overseer chat stays in sync with the local repo.
 
-**Last updated:** 2026-06-27
+**Last updated:** 2026-06-28
+**Updated by:** Claude Code (**TEMPORARY — Explainability page unwired from the UI**. By owner
+request, the **Explainability** Results page is hidden from the dashboard until the **backend**
+explanation is actually implemented (it was always a v1.0 stub — the API is stateless with no model
+registry, so `/explain` returns a structured `status:"unavailable"` payload; real single-row SHAP is
+a v2.0 / model-persistence item). **This is UI-only — no engine or API code changed**; the
+`/api/v1/explain` endpoint + stub response, the typed `explain` client, and the `ExplainResponse`
+type are all untouched. **UI** (commented out, files/types left intact + unreferenced for a trivial
+restore, same pattern as the hidden Interaction Features entry): `frontend/src/lib/nav.ts` — the
+`/explainability` `NavItem` + its now-unused `Lightbulb` import; `frontend/src/App.tsx` — the
+`Explainability` import + its `<Route>`, with `/explainability` now `<Navigate to="/" replace />`.
+`Explainability.tsx` is left intact but unreferenced; `SetupGuide.tsx` still documents the `/explain`
+endpoint (accurate API reference for an endpoint that still exists — left as-is, consistent with the
+Section 7 unwiring leaving the Overview stage label). **Tests** (`referencePages.test.tsx`): nav
+count `13 → 12`; the routes test now asserts `/explainability` is **not** in the nav; the
+`describe("Explainability (v1.0 stub)")` block still renders the component directly (intact) so it
+stays green. **Suites green: 100 frontend vitest · `tsc -b` + `vite build` clean** (backend
+untouched — no pytest impact). Hallucination check N/A (no library calls added; only commented-out
+imports + a React-Router `<Navigate>` already used for `/pipeline` and `/interactions`). **Logged as
+entry #3 in `unwire.md`** with full wire-back steps. **No plan_tweak entry** — a temporary,
+reversible UI toggle realizing an owner request, not a plan deviation. **To re-enable:** uncomment
+the nav item + route/import, delete the `/explainability` redirect, and revert the two test edits.)
+**Prior update:** 2026-06-27
 **Updated by:** Claude Code (**NEW — permutation-importance metric is selectable from the UI (no contract change)**.
 Follow-up to the permutation-importance feature below: the scoring metric was hardcoded to F1-weighted;
 it is now a run config dial. **Engine:** new `PERMUTATION_METRICS` allowlist in `config.py` (= the

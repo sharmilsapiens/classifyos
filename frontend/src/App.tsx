@@ -19,7 +19,8 @@ import ClassReport from "@/pages/ClassReport"
 import Curves from "@/pages/Curves"
 import Predictions from "@/pages/Predictions"
 import TuningResults from "@/pages/TuningResults"
-import Explainability from "@/pages/Explainability"
+// TEMPORARILY HIDDEN — explainability not yet implemented in the backend.
+// import Explainability from "@/pages/Explainability"
 import SetupGuide from "@/pages/SetupGuide"
 import RiskRegister from "@/pages/RiskRegister"
 import NotFound from "@/pages/NotFound"
@@ -46,7 +47,9 @@ function App() {
         <Route path="/curves" element={<Curves />} />
         <Route path="/predictions" element={<Predictions />} />
         <Route path="/tuning" element={<TuningResults />} />
-        <Route path="/explainability" element={<Explainability />} />
+        {/* TEMPORARILY HIDDEN — explainability unwired (backend not implemented). Redirect stale links. */}
+        {/* <Route path="/explainability" element={<Explainability />} /> */}
+        <Route path="/explainability" element={<Navigate to="/" replace />} />
 
         {/* Reference pages (9c) */}
         <Route path="/setup" element={<SetupGuide />} />

@@ -114,3 +114,56 @@ active pipeline:
    `"_div_"` clause) so Section 7 ratio columns are allowed again.
 4. Run `pytest tests/ -v` (backend) and `tsc -b` / `npm run build` (frontend) to confirm green.
 5. Update `PROJECT_STATE.md` and this file: mark entry #2 **Restored** with the date.
+
+---
+
+## 3. Explainability (single-row SHAP) page
+
+**One-line:** Temporarily hid the "Explainability" Results page from the dashboard (nav entry +
+route commented out, stale links redirect to Overview) because the backend explanation is not yet
+implemented; nothing deleted.
+
+**Status:** Unwired 2026-06-28 · still unwired.
+
+### Short description
+
+The Explainability page was always a **v1.0 stub** — the API is stateless and has no model
+registry, so `/explain` returns a structured `status:"unavailable"` payload and real single-row
+SHAP is deferred to v2.0 (model persistence / MLflow). By owner request it is now hidden from the
+UI until the backend explanation actually lands, so users aren't shown a feature that can't produce
+a result. **This is UI-only** — no engine or API code changed; the `/api/v1/explain` endpoint and
+its stub response are untouched, as is the typed `explain` client and `ExplainResponse` type.
+
+- **UI** (commented out, files/types left intact and unreferenced for a trivial restore):
+  - `frontend/src/lib/nav.ts` — the `/explainability` nav `NavItem` (and its now-unused `Lightbulb`
+    icon import).
+  - `frontend/src/App.tsx` — the `import Explainability from "@/pages/Explainability"` line and the
+    `<Route path="/explainability" element={<Explainability />} />`; `/explainability` now redirects
+    to `/` via `<Navigate to="/" replace />` (same pattern as the hidden `/interactions` route).
+  - `frontend/src/pages/Explainability.tsx` is **left intact** but unreferenced by the nav/router.
+- **Left as-is (intentional):** `frontend/src/pages/SetupGuide.tsx` still documents the
+  `/api/v1/explain` endpoint and its "v2.0 stub" limitation — that is accurate API reference for an
+  endpoint that still exists, not the hidden UI feature (consistent with entry #2 leaving the
+  Overview pipeline-stage label alone). The `explain` client / `ExplainResponse` type / the engine's
+  `/explain` route are unchanged.
+- **Tests** updated to match (`frontend/src/pages/referencePages.test.tsx`): the nav-count assertion
+  `13 → 12`, and the "reference pages as real routes" test now asserts `/explainability` is **not**
+  in the nav paths. The `describe("Explainability (v1.0 stub)")` block still renders the
+  `<Explainability />` component **directly** (component intact), so it stays green and untouched.
+
+### How to wire back
+
+1. **UI** — uncomment the three blocks:
+   - `nav.ts`: the `Lightbulb` import and the `/explainability` nav item.
+   - `App.tsx`: the `import Explainability from "@/pages/Explainability"` line and the
+     `<Route path="/explainability" element={<Explainability />} />`; delete the `Navigate` redirect
+     route for `/explainability`.
+2. **Tests** — in `referencePages.test.tsx`, revert the nav-count assertion to `13`, restore
+   `expect(paths).toContain("/explainability")`, and drop the `not.toContain` line.
+3. Run `tsc -b` / `npm run build` and `npx vitest run` (frontend) to confirm green.
+4. Update `PROJECT_STATE.md` and this file: mark entry #3 **Restored** with the date.
+
+> When the **backend** explanation is implemented, that is a separate (v2.0) piece of work — fill in
+> the real `method` / `shap_values` / `base_value` on the `/explain` response and swap
+> `Explainability.tsx`'s `<WaterfallPlaceholder>` for the real Recharts waterfall; this entry only
+> covers re-showing the page in the nav.
