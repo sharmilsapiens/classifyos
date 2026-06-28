@@ -70,6 +70,7 @@ const PROFILE: InspectProfile = {
       n_missing: 0,
       missing_pct: 0,
       n_unique: 4,
+      flags: ["identifier"],
       top_values: [
         { value: "N", count: 3, pct: 50 },
         { value: "S", count: 1, pct: 16.7 },
@@ -119,6 +120,9 @@ describe("DataProfile", () => {
     // Categorical: most-frequent value + truncation note.
     expect(screen.getByText(/Most frequent:/)).toBeInTheDocument()
     expect(screen.getByText(/Showing top 2 of/)).toBeInTheDocument()
+
+    // Degenerate-column advisory badge renders for a flagged column.
+    expect(screen.getByText("Identifier-like")).toBeInTheDocument()
 
     // Datetime range.
     expect(screen.getByText("2020-01-01")).toBeInTheDocument()

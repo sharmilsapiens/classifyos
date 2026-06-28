@@ -203,6 +203,13 @@ common values for category columns, a missing-data scan, and how the number colu
   "also profile this" switch that is **off by default**, so nothing that already used it changes;
   when on, it profiles the file it had already loaded (no second read). Engine + API + dashboard
   page; 10 new engine tests.
+- **Update (2026-06-29) — flags two kinds of "watch out" columns.** Each column now carries a
+  small list of advisories the dashboard shows as a badge: **"single value"** when a column holds
+  only one value (it's the same for every row, so it teaches a model nothing — its spread/skew and
+  correlations are blank), and **"identifier-like"** when nearly every row is a different value
+  (it looks like an ID or reference number — high churn that won't generalise and can leak the
+  answer). Uses the same "near-unique" threshold as the Feature Impact screen so the two agree.
+  +2 engine tests.
 
 ## Train-vs-test metrics — the overfit gap (✅ Done, 2026-06-26)
 **In one line:** Every model now reports its scores on the **training data** alongside the

@@ -4,7 +4,26 @@
 > A copy is uploaded to the ClassifyOS Claude Project knowledge after each update so the
 > planning/overseer chat stays in sync with the local repo.
 
-**Last updated:** 2026-06-28
+**Last updated:** 2026-06-29
+**Updated by:** Claude Code (**NEW — degenerate-column advisories on the Data Profile (no contract
+bump)**. Every Data-Profile column now carries an additive `flags` array surfacing the two
+columns analysts kept asking about: **`"constant"`** (a single distinct value — or all-missing —
+so zero variance: its std/skew and correlation cells are `null` and it has no predictive signal)
+and **`"identifier"`** (`n_unique / n_rows >= 0.99` — near-unique, ID/free-text-key, leakage-bait).
+**Engine:** `analysis/profile.py` gained `_quality_flags(n_unique, n_rows)` + an `ID_LIKE_FRACTION
+= 0.99` constant mirroring `feature_impact._ID_LIKE_FRACTION` so the two screens agree on what looks
+like an ID; each `column_profiles[]` entry now includes `flags` (empty for clean columns). Pure
+display logic — fits nothing, no leakage surface. **API:** rides the existing `/upload` payload
+(NOT the locked `/run` envelope) → **no `schema_version` bump**; documented in `api_contract.md`.
+**UI:** `DataProfile.tsx` renders a `ColumnFlags` badge (amber "Single value" / rose
+"Identifier-like") with an explanatory tooltip at the top of every numeric/categorical/datetime
+card; `ColumnProfile` type extended with `flags?: string[]`. **Verified on the demo file
+`arizona_buyingpropensity.csv`:** flags `billingType`/`depositPaid`/`Decision_Year` (constant) and
+`quoteNumber` (identifier). **Tests:** +2 backend (`test_profile.py`: constant/identifier/normal +
+a flag assert on the existing constant test) → all green; +1 frontend assert (`dataProfile.test.tsx`
+badge renders); `tsc --noEmit` clean. **No plan_tweak entry** — additive feature realizing a user
+request, not a deviation.)
+**Prior update:** 2026-06-28
 **Updated by:** Claude Code (**TEMPORARY — Explainability page unwired from the UI**. By owner
 request, the **Explainability** Results page is hidden from the dashboard until the **backend**
 explanation is actually implemented (it was always a v1.0 stub — the API is stateless with no model

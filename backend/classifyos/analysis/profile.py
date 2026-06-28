@@ -44,6 +44,10 @@ DEFAULT_MAX_ROWS = 50_000
 # Cap the correlation matrix width so a very wide file can't produce an O(c^2)
 # matrix that dwarfs the rest of the payload.
 DEFAULT_MAX_CORR_COLS = 30
+# A column whose distinct-value fraction reaches this is flagged "identifier"
+# (near-unique, like a policy_id). Mirrors ``feature_impact._ID_LIKE_FRACTION`` so
+# the Data-Profile and Feature-Impact screens agree on what looks like an ID.
+ID_LIKE_FRACTION = 0.99
 
 
 def _finite_or_none(value: Any) -> float | None:
@@ -68,6 +72,32 @@ def _json_scalar(value: Any) -> Any:
     if isinstance(value, float) and not math.isfinite(value):
         return None
     return value
+
+
+def _quality_flags(n_unique: int, n_rows: int) -> list[str]:
+    """Display advisories for degenerate columns the analyst should notice.
+
+    Returns a (possibly empty) list of flag strings; the Data Profile screen turns
+    each into a badge with an explanation. The two cases:
+
+    * ``"constant"`` — a single distinct value (or an all-missing column,
+      ``n_unique == 0``). Zero variance, so it carries NO predictive signal: its
+      std/skew are undefined and its correlation cells come back ``None``. A
+      candidate to drop before training.
+    * ``"identifier"`` — nearly every row is a distinct value
+      (``n_unique / n_rows >= ID_LIKE_FRACTION``). Looks like an ID or free-text
+      key: very high cardinality that won't generalise and is classic
+      leakage-bait. Mirrors ``feature_impact``'s ``id_like`` flag so the two
+      screens agree.
+
+    The two are mutually exclusive (a constant column cannot also be near-unique),
+    so at most one flag is returned today; the list shape leaves room for more.
+    """
+    if n_unique <= 1:
+        return ["constant"]
+    if n_rows > 0 and n_unique / n_rows >= ID_LIKE_FRACTION:
+        return ["identifier"]
+    return []
 
 
 def _numeric_profile(series: pd.Series, max_bins: int) -> dict[str, Any]:
@@ -194,7 +224,9 @@ def profile_dataframe(
         ``{"column_profiles": [...], "correlation": {...}|None, "sampled": bool,
         "n_rows_profiled": int}``. Each column profile carries ``name``,
         ``dtype_group`` (``numeric``|``categorical``|``datetime``), ``n_missing``,
-        ``missing_pct``, ``n_unique``, plus group-specific blocks: numeric →
+        ``missing_pct``, ``n_unique``, ``flags`` (a list of degenerate-column
+        advisories — ``"constant"`` / ``"identifier"`` — empty for normal
+        columns), plus group-specific blocks: numeric →
         ``stats`` + ``histogram``; categorical/binary → ``top_values`` +
         ``other_count`` + ``truncated``; datetime → ``min`` + ``max``.
     """
@@ -213,11 +245,14 @@ def profile_dataframe(
     for col in df.columns:
         series = df[col]
         n_missing = int(series.isna().sum())
+        n_unique = int(series.dropna().nunique())
         base: dict[str, Any] = {
             "name": col,
             "n_missing": n_missing,
             "missing_pct": _finite_or_none(n_missing / n_rows * 100) if n_rows else None,
-            "n_unique": int(series.dropna().nunique()),
+            "n_unique": n_unique,
+            # Degenerate-column advisories (constant / identifier) for the UI.
+            "flags": _quality_flags(n_unique, n_rows),
         }
 
         if col in datetime_set:

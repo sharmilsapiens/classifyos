@@ -24,7 +24,7 @@ import {
   XAxis,
   YAxis,
 } from "recharts"
-import { ArrowRight, Hash, Type as TypeIcon } from "lucide-react"
+import { AlertTriangle, ArrowRight, Hash, Type as TypeIcon } from "lucide-react"
 
 import type { ColumnProfile, CorrelationMatrix, InspectProfile } from "@/api/types"
 import { useApp } from "@/store/AppStore"
@@ -46,6 +46,47 @@ function fmtNum(value: number | null | undefined): string {
 function fmtPct(value: number | null | undefined): string {
   if (value === null || value === undefined || Number.isNaN(value)) return "—"
   return `${value.toFixed(1)}%`
+}
+
+/* Human-readable copy for the degenerate-column advisories the engine flags
+   (ColumnProfile.flags). The tooltip explains why the column needs attention. */
+const FLAG_INFO: Record<string, { label: string; tip: string; tone: string }> = {
+  constant: {
+    label: "Single value",
+    tip: "Every row holds the same value — zero variance. It carries no predictive signal (std, skew, and correlations are undefined here), so it's a candidate to drop before training.",
+    tone: "border-amber-300 bg-amber-50 text-amber-700",
+  },
+  identifier: {
+    label: "Identifier-like",
+    tip: "Nearly every row is a distinct value, so this looks like an ID or free-text key. High-cardinality columns like this don't generalise and can leak the target — usually excluded from the features.",
+    tone: "border-rose-300 bg-rose-50 text-rose-700",
+  },
+}
+
+/** Badges for a column's degenerate-data advisories; renders nothing when clean. */
+function ColumnFlags({ flags }: { flags?: string[] }) {
+  if (!flags || flags.length === 0) return null
+  return (
+    <div className="mb-3 flex flex-wrap gap-1.5">
+      {flags.map((f) => {
+        const info = FLAG_INFO[f]
+        if (!info) return null
+        return (
+          <span
+            key={f}
+            title={info.tip}
+            className={cn(
+              "inline-flex cursor-help items-center gap-1 rounded-md border px-1.5 py-0.5 text-[11px] font-medium",
+              info.tone,
+            )}
+          >
+            <AlertTriangle className="h-3 w-3" />
+            {info.label}
+          </span>
+        )
+      })}
+    </div>
+  )
 }
 
 export default function DataProfile() {
@@ -251,6 +292,7 @@ function NumericCard({ col }: { col: ColumnProfile }) {
         </CardTitle>
       </CardHeader>
       <CardContent>
+        <ColumnFlags flags={col.flags} />
         {data.length > 0 ? (
           <ResponsiveContainer width="100%" height={180}>
             <BarChart data={data} margin={{ top: 4, right: 8, bottom: 4, left: 0 }}>
@@ -312,6 +354,7 @@ function CategoricalCard({ col }: { col: ColumnProfile }) {
         </CardTitle>
       </CardHeader>
       <CardContent>
+        <ColumnFlags flags={col.flags} />
         {data.length > 0 ? (
           <ResponsiveContainer width="100%" height={Math.max(140, data.length * 26)}>
             <BarChart
@@ -372,6 +415,7 @@ function DatetimeCard({ col }: { col: ColumnProfile }) {
         <CardTitle className="font-mono text-base">{col.name}</CardTitle>
       </CardHeader>
       <CardContent className="space-y-1.5 text-sm">
+        <ColumnFlags flags={col.flags} />
         <div className="flex justify-between">
           <span className="text-muted-foreground">Earliest</span>
           <span className="font-mono">{fmtDate(col.min)}</span>

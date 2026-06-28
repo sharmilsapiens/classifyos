@@ -383,6 +383,8 @@ export interface ColumnProfile {
   n_missing: number
   missing_pct: number | null
   n_unique: number
+  // degenerate-column advisories ("constant" | "identifier"); [] for normal columns.
+  flags?: string[]
   // numeric:
   stats?: NumericStats | null
   histogram?: Histogram | null

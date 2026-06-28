@@ -75,6 +75,7 @@ carries **no `schema_version`** and these keys are purely additive.
   "column_profiles": [            // one entry per column; dtype_group picks which block is filled
     { "name": "age", "dtype_group": "numeric",        // numeric | categorical | datetime
       "n_missing": 90, "missing_pct": 3.0, "n_unique": 49,
+      "flags": [],                                    // degenerate-column advisories (see below); [] = clean
       "stats": { "count": 2910, "mean": 45.0, "std": 14.2, "min": 21.0,
                  "p25": 33.0, "median": 45.0, "p75": 57.0, "max": 69.0,
                  "mode": 66.0, "skew": 0.01 },         // any field null when undefined/non-finite
@@ -94,6 +95,16 @@ carries **no `schema_version`** and these keys are purely additive.
   }
 }
 ```
+
+Each `column_profiles[]` entry carries a `flags` array (additive) — degenerate-column
+advisories for the Data Profile screen, empty for ordinary columns. Values:
+
+* `"constant"` — a single distinct value (or an all-missing column). Zero variance, so it
+  carries no predictive signal (its std/skew and correlation cells are `null`); a candidate
+  to drop before training.
+* `"identifier"` — nearly every row is distinct (`n_unique / n_rows >= 0.99`). Looks like an
+  ID or free-text key: high cardinality that won't generalise and is leakage-bait. Uses the
+  same threshold as `feature_impact`'s `id_like`, so the two screens agree.
 
 ## `POST /api/v1/run`
 

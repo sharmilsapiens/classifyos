@@ -61,9 +61,33 @@ def test_constant_numeric_is_finite_and_degenerate(toy_df) -> None:
     # std/skew of a constant column must not leak NaN into the payload.
     assert const["stats"]["std"] == 0.0
     assert const["stats"]["skew"] in (0.0, None)
+    # and it is surfaced to the UI as a degenerate (zero-variance) column.
+    assert const["flags"] == ["constant"]
     # degenerate histogram: a single bin spanning [v, v].
     assert const["histogram"]["counts"] == [6]
     assert const["histogram"]["bin_edges"] == [5.0, 5.0]
+
+
+def test_quality_flags_constant_identifier_and_normal() -> None:
+    """A constant column flags 'constant'; an all-distinct one flags 'identifier'."""
+    df = pd.DataFrame(
+        {
+            "const": [7, 7, 7, 7, 7],            # one unique value → constant
+            "policy_id": ["A1", "B2", "C3", "D4", "E5"],  # all distinct → identifier
+            "region": ["N", "N", "S", "E", "W"],  # ordinary categorical → no flag
+        }
+    )
+    prof = profile_dataframe(
+        df,
+        numeric_cols=["const"],
+        categorical_cols=["policy_id", "region"],
+        binary_cols=[],
+        datetime_cols=[],
+    )
+    flags = {c["name"]: c["flags"] for c in prof["column_profiles"]}
+    assert flags["const"] == ["constant"]
+    assert flags["policy_id"] == ["identifier"]
+    assert flags["region"] == []
 
 
 def test_categorical_top_values_and_truncation(toy_df) -> None:
