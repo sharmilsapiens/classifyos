@@ -24,7 +24,7 @@ import {
   XAxis,
   YAxis,
 } from "recharts"
-import { AlertTriangle, ArrowRight, Hash, Type as TypeIcon } from "lucide-react"
+import { AlertTriangle, ArrowRight, ArrowUp, Hash, Type as TypeIcon } from "lucide-react"
 
 import type { ColumnProfile, CorrelationMatrix, InspectProfile } from "@/api/types"
 import { useApp } from "@/store/AppStore"
@@ -192,6 +192,20 @@ function DataProfileBody({ inspect }: { inspect: InspectProfile }) {
           <CorrelationCard corr={inspect.correlation} />
         </section>
       )}
+
+      {/* Footer: continue once you've seen everything, or jump back to the top. */}
+      <div className="mt-8 flex flex-wrap items-center justify-between gap-3 border-t pt-6">
+        <button
+          type="button"
+          onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}
+          className={cn(buttonVariants({ variant: "outline", size: "sm" }))}
+        >
+          <ArrowUp className="h-4 w-4" /> Back to top
+        </button>
+        <Link to="/configure" className={cn(buttonVariants({ size: "sm" }))}>
+          Continue to Configuration <ArrowRight className="h-4 w-4" />
+        </Link>
+      </div>
     </div>
   )
 }
