@@ -87,10 +87,11 @@ function renderPage(ui: ReactElement) {
 }
 
 describe("Navigation (post-merge)", () => {
-  it("has exactly 12 items and no Pipeline entry", () => {
+  it("has exactly 13 items and no Pipeline entry", () => {
     // 12 after the 9c merge + the Phase 12 "Tuning Results" page = 13, minus the
-    // temporarily-hidden Explainability entry (unwire.md #3, backend not implemented) = 12.
-    expect(NAV_ITEMS).toHaveLength(12)
+    // temporarily-hidden Explainability entry (unwire.md #3, backend not implemented) = 12,
+    // plus the "Train vs Test" (Fit Diagnostics) page = 13.
+    expect(NAV_ITEMS).toHaveLength(13)
     expect(NAV_ITEMS.some((i) => i.path === "/pipeline")).toBe(false)
     expect(NAV_ITEMS.some((i) => i.label === "Pipeline")).toBe(false)
   })

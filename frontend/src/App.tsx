@@ -18,6 +18,7 @@ import ConfusionMatrix from "@/pages/ConfusionMatrix"
 import ClassReport from "@/pages/ClassReport"
 import Curves from "@/pages/Curves"
 import Predictions from "@/pages/Predictions"
+import FitDiagnostics from "@/pages/FitDiagnostics"
 import TuningResults from "@/pages/TuningResults"
 // TEMPORARILY HIDDEN — explainability not yet implemented in the backend.
 // import Explainability from "@/pages/Explainability"
@@ -46,6 +47,7 @@ function App() {
         <Route path="/class-report" element={<ClassReport />} />
         <Route path="/curves" element={<Curves />} />
         <Route path="/predictions" element={<Predictions />} />
+        <Route path="/diagnostics" element={<FitDiagnostics />} />
         <Route path="/tuning" element={<TuningResults />} />
         {/* TEMPORARILY HIDDEN — explainability unwired (backend not implemented). Redirect stale links. */}
         {/* <Route path="/explainability" element={<Explainability />} /> */}

@@ -15,6 +15,7 @@ import {
   LayoutDashboard,
   LineChart,
   // Lightbulb,  // unused while the Explainability nav entry is hidden (backend not implemented)
+  Scale,
   ScanSearch,
   Settings2,
   ShieldAlert,
@@ -44,6 +45,7 @@ export const NAV_ITEMS: NavItem[] = [
   { path: "/class-report", label: "Class Report", icon: ClipboardList, group: "Results" },
   { path: "/curves", label: "ROC / PR Curves", icon: LineChart, group: "Results" },
   { path: "/predictions", label: "Predictions Table", icon: Table2, group: "Results" },
+  { path: "/diagnostics", label: "Train vs Test", icon: Scale, group: "Results" },
   { path: "/tuning", label: "Tuning Results", icon: SlidersHorizontal, group: "Results" },
   // TEMPORARILY HIDDEN — explainability not yet implemented in the backend (single-row
   // SHAP needs model persistence, deferred to v2.0). Re-enable when the backend lands.

@@ -5,7 +5,24 @@
 > planning/overseer chat stays in sync with the local repo.
 
 **Last updated:** 2026-06-29
-**Updated by:** Claude Code (**NEW — degenerate-column advisories on the Data Profile (no contract
+**Updated by:** Claude Code (**NEW — dedicated "Train vs Test" (Fit Diagnostics) result page — UI-only,
+no contract change**. The train↔test overfit gap was already computed end-to-end (engine `train_*`
+columns → API `models[].train`, schema 1.2) but the dashboard surfaced only **F1** (one column + a gap
+cell on Overview). Added a dedicated **Results** page that surfaces the FULL picture across all nine
+headline train metrics. **UI:** new `pages/FitDiagnostics.tsx` (reads `models[].train` from the store —
+no new network call, like TuningResults): (1) a cross-model **fit-verdict** table — Test F1 / Train F1 /
+gap + a heuristic verdict badge (Good fit / Mild overfitting ≥0.10 / Overfitting ≥0.20 / Underfitting when
+train-F1 <0.70 — thresholds match Overview's `OverfitGapCell`); (2) a per-model detail — a grouped
+train-vs-test Recharts bar across the bounded 0–1 metrics + a full metric table (test · train ·
+**direction-aware** gap, log-loss included where lower-is-better flips the gap sign). Graceful fallback
+when no `train` block is present (schema <1.2) + the standard `ResultGate` no-run state. Route
+`/diagnostics` + sidebar entry "Train vs Test" (`Scale` icon; nav **12 → 13**) + an Overview quick-link.
+**Zero engine/API/contract change** — purely consumes the existing 1.2 field. **Tests:** new
+`fitDiagnostics.test.tsx` (overfit/good-fit/underfit verdicts, per-metric breakdown, no-train fallback,
+no-run state, nav+route); `referencePages.test.tsx` nav-count assert `12 → 13`. **All 108 frontend vitest
+green · `tsc --noEmit` clean** (backend untouched). **No plan_tweak entry** — additive UI realizing a user
+request, not a deviation.)
+**Prior update (same day):** Claude Code (**NEW — degenerate-column advisories on the Data Profile (no contract
 bump)**. Every Data-Profile column now carries an additive `flags` array surfacing the two
 columns analysts kept asking about: **`"constant"`** (a single distinct value — or all-missing —
 so zero variance: its std/skew and correlation cells are `null` and it has no predictive signal)
