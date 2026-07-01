@@ -248,6 +248,8 @@ function NumericCard({ col, nRows }: { col: ColumnProfile; nRows: number }) {
 
   // Unique gradient id per card (many NumericCards share the DOM).
   const gradId = `density-${col.name.replace(/[^a-zA-Z0-9_-]/g, "-")}`
+  // A near-unique (identifier-like) column has no meaningful distribution to plot.
+  const isIdentifier = (col.flags ?? []).includes("identifier")
 
   const STAT_ROWS: Array<[string, number | null | undefined]> = [
     ["Mean", stats?.mean],
@@ -271,7 +273,11 @@ function NumericCard({ col, nRows }: { col: ColumnProfile; nRows: number }) {
       </CardHeader>
       <CardContent>
         <ColumnFlags flags={col.flags} className="mb-3" profile={col} nRows={nRows} />
-        {data.length > 1 ? (
+        {isIdentifier ? (
+          <p className="py-6 text-center text-sm text-muted-foreground">
+            Near-unique values (identifier-like) — a distribution isn't meaningful here.
+          </p>
+        ) : data.length > 1 ? (
           <ResponsiveContainer width="100%" height={180}>
             <AreaChart data={data} margin={{ top: 4, right: 8, bottom: 4, left: 0 }}>
               <defs>

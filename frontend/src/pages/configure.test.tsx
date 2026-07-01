@@ -23,14 +23,14 @@ vi.mock("@/store/AppStore", () => ({ useApp: () => mockApp }))
 import Configure from "./Configure"
 
 const PROFILE: InspectProfile = {
-  columns: ["age", "policy_id", "region", "plan_year"],
-  dtypes: { age: "float64", policy_id: "object", region: "object", plan_year: "object" },
-  numeric_cols: ["age"],
+  columns: ["age", "policy_id", "region", "plan_year", "record_no"],
+  dtypes: { age: "float64", policy_id: "object", region: "object", plan_year: "object", record_no: "int64" },
+  numeric_cols: ["age", "record_no"],
   categorical_cols: ["policy_id", "region", "plan_year"],
   binary_cols: [],
   datetime_cols: [],
   n_rows: 6,
-  n_missing: { age: 0, policy_id: 0, region: 0, plan_year: 0 },
+  n_missing: { age: 0, policy_id: 0, region: 0, plan_year: 0, record_no: 0 },
   sample: [],
   server_path: "uploads/policy_lapse.csv",
   column_profiles: [
@@ -78,6 +78,21 @@ const PROFILE: InspectProfile = {
       other_count: 0,
       truncated: false,
     },
+    {
+      // A numeric column that is near-unique → identifier-like: it has stats + a
+      // histogram, but a distribution curve over near-unique values is meaningless,
+      // so the picker must NOT draw one for it.
+      name: "record_no",
+      dtype_group: "numeric",
+      n_missing: 0,
+      missing_pct: 0,
+      n_unique: 6,
+      flags: ["identifier"],
+      stats: {
+        count: 6, mean: 1003, std: 2, min: 1000, p25: 1001, median: 1003, p75: 1005, max: 1006, mode: 1000, skew: 0,
+      },
+      histogram: { bin_edges: [1000, 1002, 1004, 1006], counts: [2, 2, 2] },
+    },
   ],
 }
 
@@ -110,9 +125,9 @@ describe("Configure — feature picker enrichment", () => {
 
   it("flags an identifier-like column with its unique-of-total count", () => {
     renderConfigure()
-    // policy_id: 6 distinct of 6 rows → "Identifier-like · 6 of 6 unique".
-    expect(screen.getByText(/Identifier-like/)).toBeInTheDocument()
-    expect(screen.getByText(/6 of 6 unique/)).toBeInTheDocument()
+    // policy_id + record_no: 6 distinct of 6 rows → "Identifier-like · 6 of 6 unique".
+    expect(screen.getAllByText(/Identifier-like/).length).toBeGreaterThan(0)
+    expect(screen.getAllByText(/6 of 6 unique/).length).toBeGreaterThan(0)
   })
 
   it("shows the single value for a constant column", () => {
@@ -126,6 +141,15 @@ describe("Configure — feature picker enrichment", () => {
     expect(screen.getByText("North")).toBeInTheDocument()
     expect(screen.getByText("South")).toBeInTheDocument()
     expect(screen.getByText("East")).toBeInTheDocument()
+  })
+
+  it("does not draw a distribution curve for an identifier-like numeric column", () => {
+    renderConfigure()
+    // Only `age` (a normal numeric column) gets a curve; `record_no` is
+    // identifier-like, so no curve — exactly one distribution graph in the picker.
+    expect(screen.getAllByRole("img", { name: "Value distribution" })).toHaveLength(1)
+    // record_no is still listed and flagged with its unique count.
+    expect(screen.getByText("record_no", { selector: "span" })).toBeInTheDocument()
   })
 
   it("does not show numeric stats for a plain categorical column", () => {

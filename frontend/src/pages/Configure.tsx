@@ -495,12 +495,11 @@ function FeatureRow({
   const iqr = stats && stats.p75 != null && stats.p25 != null ? stats.p75 - stats.p25 : null
   const variance = stats && stats.std != null ? stats.std * stats.std : null
   const flags = profile?.flags ?? []
+  const isIdentifier = flags.includes("identifier")
   // A normal categorical column lists its values; skip for constant/identifier
   // (the flag badge already shows the single value / the unique count there).
   const showCategories =
-    profile?.dtype_group === "categorical" &&
-    !flags.includes("constant") &&
-    !flags.includes("identifier")
+    profile?.dtype_group === "categorical" && !flags.includes("constant") && !isIdentifier
 
   return (
     <label className="flex cursor-pointer items-start gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-muted/60">
@@ -520,7 +519,7 @@ function FeatureRow({
           )}
           <ColumnFlags flags={profile?.flags} profile={profile} nRows={nRows} />
         </div>
-        {stats && (
+        {stats && !isIdentifier && (
           <div className="mt-1 flex items-center gap-3">
             <MiniDensityCurve histogram={profile?.histogram} idSuffix={col} />
             <dl className="flex gap-3 font-mono text-[11px] text-muted-foreground">

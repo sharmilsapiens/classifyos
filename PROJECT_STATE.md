@@ -5,7 +5,15 @@
 > planning/overseer chat stays in sync with the local repo.
 
 **Last updated:** 2026-07-01
-**Updated by:** Claude Code (**NEW — column advisories now carry concrete detail + categorical values in the
+**Updated by:** Claude Code (**NEW — suppress the distribution graph for identifier-like columns (UI-only, no
+engine/API/contract change)**. A distribution over near-unique values is meaningless, so an **`identifier`**-
+flagged column no longer draws one: Data Profile `NumericCard` shows a short "distribution isn't meaningful"
+note in place of the density curve, and the Configure picker drops the whole numeric block (curve + avg/IQR/
+variance) for it — the badge's "N of M unique" already tells the story. Non-identifier columns are unchanged.
+**Tests:** `configure.test.tsx` +numeric identifier column asserts exactly one distribution graph renders
+(the normal numeric one, not the identifier). **116 frontend vitest green · `tsc -b` + `vite build` clean.**
+**No plan_tweak entry** — additive UI polish from a user request. `notes/data_profile.md` updated.)
+**Prior update (same day):** Claude Code (**NEW — column advisories now carry concrete detail + categorical values in the
 picker (UI-only, no engine/API/contract change)**. Follow-up to the flag/picker work below, from user
 requests. (1) The shared `ColumnFlags` badge is now annotated: a **`constant`** column shows the actual single
 value (`Single value: 2024` — derived from `stats.mode`/`min` for numeric, `min` for datetime, or

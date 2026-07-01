@@ -53,7 +53,7 @@ Every column also carries: `name`, `dtype_group`, `n_missing`, `missing_pct`, `n
 **Numeric** (`_numeric_profile` → `NumericCard`)
 - Stats: count, mean, std, min, p25, median, p75, max, mode, skew (non-finite → `null` → em-dash).
 - Histogram: 20 bins via `numpy.histogram` (constant col → one widened bin).
-- Graph: **smooth density curve** — Recharts `AreaChart`, natural-spline `Area` over bin **midpoints** on a numeric x-axis (updated 2026-07-01; was a bar histogram — a curve reads continuous, many-distinct-value data better). Single-bin column → an honest "only one distinct value" note.
+- Graph: **smooth density curve** — Recharts `AreaChart`, natural-spline `Area` over bin **midpoints** on a numeric x-axis (updated 2026-07-01; was a bar histogram — a curve reads continuous, many-distinct-value data better). Single-bin column → an honest "only one distinct value" note. **Identifier-like numeric column → no curve** (a distribution over near-unique values is meaningless — shows a short note instead; same in the Configure picker, where the numeric block is dropped entirely).
 
 **Categorical (incl. binary)** (`_categorical_profile` → `CategoricalCard`)
 - Metrics: top-**12** value frequencies (`value`, `count`, `pct`) + an `other_count` bucket + `truncated` flag.
