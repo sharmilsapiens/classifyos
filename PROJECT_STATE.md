@@ -5,7 +5,22 @@
 > planning/overseer chat stays in sync with the local repo.
 
 **Last updated:** 2026-07-01
-**Updated by:** Claude Code (**NEW — decision-threshold policy + calibration surfaced in the UI (frontend
+**Updated by:** Claude Code (**NEW — Data Profile numeric cards now show a smooth density curve instead of a
+bar histogram (UI-only, no engine/API/contract change)**. A blocky 20-bin bar histogram reads poorly for
+continuous numeric data with many distinct values; the numeric cards on the Data Profile page now render a
+**smooth density curve** of the same distribution. `DataProfile.tsx::NumericCard` swaps the Recharts
+`BarChart` for an `AreaChart` with a natural-spline `Area` (`type="natural"`) over the histogram **bin
+midpoints** (`x = (edge_i + edge_{i+1})/2`, `y = count`) on a **numeric x-axis** (was a category axis of
+left-edge labels), with a soft indigo gradient fill, hover tooltip (`≈ value → N rows`), and a per-card unique
+gradient id. Same underlying data (`histogram.counts`/`bin_edges` — no engine change); it's a display
+smoothing. A constant/single-bin column (`data.length ≤ 1`) shows an honest "only one distinct value" note
+instead of a degenerate curve. This complements the Configure feature-picker density curve added earlier today
+(same visual language). **Tests:** existing `dataProfile.test.tsx` still green (asserts the numeric stats +
+flags render; chart-type-agnostic). **113 frontend vitest green · `tsc -b` + `vite build` clean** (backend
+untouched). Hallucination check ✅ — Recharts `AreaChart`/`Area` `type="natural"`, numeric `XAxis`
+`domain=["dataMin","dataMax"]` + `tickFormatter` verified against the installed Recharts (already used across
+the result pages). **No plan_tweak entry** — additive UI polish realizing a user request, not a deviation.)
+**Prior update (same day):** Claude Code (**NEW — decision-threshold policy + calibration surfaced in the UI (frontend
 follow-up; no engine/API/contract change)**. Completes the decision-policy engine+API work (schema 1.5, see
 the 2026-06-30 entry below) by wiring the now-real dials into the dashboard. The old bare "Decision threshold"
 number box (which sent a value the engine ignored) is replaced by a **mode selector** in Configure's *Problem
@@ -30,9 +45,11 @@ per candidate column, the info an analyst needs to decide whether to include it 
 **no new network call, no engine/API/contract change**. Each row now shows: a **type tag**
 (numeric/categorical/datetime); the degenerate-column **flags** ("Identifier-like" / "Single value")
 right beside the name (the user's ask — surface identifiers in the selection column so they can be
-excluded); and, for **numeric** columns, a compact **distribution sparkline** (a dependency-free
-CSS/div mini-histogram built from `histogram.counts`, `role="img"` — no Recharts, so it stays light
-across many features and renders in jsdom) plus **avg · IQR · variance** (avg = `stats.mean`,
+excluded); and, for **numeric** columns, a compact **distribution curve** — a smoothed density line
+over `histogram.counts` (Catmull-Rom spline → SVG cubic-beziers, anchored to the baseline at both
+ends so it reads like a bell/gaussian silhouette, with a soft gradient fill), pure inline SVG
+(`role="img"`, unique per-row gradient id) — no Recharts, so it stays light across many features and
+renders in jsdom — plus **avg · IQR · variance** (avg = `stats.mean`,
 IQR = `p75 − p25`, variance = `std²`, all derived from the profile's `NumericStats`; `fmtNum` → em-dash
 on null). **DRY refactor:** the flag copy (`FLAG_INFO`) + `ColumnFlags` badge and the `fmtNum` numeric
 formatter were extracted from `DataProfile.tsx` into shared modules (`lib/columnFlags.tsx`,

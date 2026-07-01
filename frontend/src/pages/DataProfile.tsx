@@ -3,8 +3,8 @@
    Reads the inspection profile from the store (no new network call — the blocks
    are attached to the /upload response by the engine's profile_dataframe). For
    each column it shows the right view for its type:
-     • numeric     → a distribution histogram + summary stats (mean, median,
-                     mode, std, min/p25/p75/max, skew).
+     • numeric     → a smooth distribution (density) curve + summary stats (mean,
+                     median, mode, std, min/p25/p75/max, skew).
      • categorical → a top-N value-frequency bar chart (+ an "other" bucket and a
                      cardinality/most-frequent summary). Numeric 0/1 columns are
                      profiled this way too.
@@ -15,6 +15,8 @@
 import { useMemo } from "react"
 import { Link } from "react-router-dom"
 import {
+  Area,
+  AreaChart,
   Bar,
   BarChart,
   CartesianGrid,
@@ -228,14 +230,24 @@ function NumericCard({ col }: { col: ColumnProfile }) {
   const stats = col.stats
   const hist = col.histogram
 
-  // Recharts bars: one per histogram bin, labelled by its left edge.
+  // Plot the distribution as a smooth density curve rather than histogram bars —
+  // for continuous data with many distinct values a curve reads the shape (bell,
+  // skew, bimodal) far better than blocky bins. Each histogram bin contributes one
+  // point at its MIDPOINT (x = (edge_i + edge_{i+1}) / 2, y = row count); Recharts'
+  // natural-spline `Area` smooths between them. A numeric x-axis keeps the values
+  // meaningful (unlike the old category axis of left-edge labels).
   const data = useMemo(() => {
     if (!hist) return []
-    return hist.counts.map((count, i) => ({
-      bin: fmtNum(hist.bin_edges[i]),
-      count,
-    }))
+    return hist.counts.map((count, i) => {
+      const lo = hist.bin_edges[i]
+      const hi = hist.bin_edges[i + 1]
+      const mid = lo != null && hi != null ? (lo + hi) / 2 : (lo ?? hi ?? i)
+      return { x: mid, count }
+    })
   }, [hist])
+
+  // Unique gradient id per card (many NumericCards share the DOM).
+  const gradId = `density-${col.name.replace(/[^a-zA-Z0-9_-]/g, "-")}`
 
   const STAT_ROWS: Array<[string, number | null | undefined]> = [
     ["Mean", stats?.mean],
@@ -259,23 +271,46 @@ function NumericCard({ col }: { col: ColumnProfile }) {
       </CardHeader>
       <CardContent>
         <ColumnFlags flags={col.flags} className="mb-3" />
-        {data.length > 0 ? (
+        {data.length > 1 ? (
           <ResponsiveContainer width="100%" height={180}>
-            <BarChart data={data} margin={{ top: 4, right: 8, bottom: 4, left: 0 }}>
+            <AreaChart data={data} margin={{ top: 4, right: 8, bottom: 4, left: 0 }}>
+              <defs>
+                <linearGradient id={gradId} x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0%" stopColor="#4f46e5" stopOpacity={0.35} />
+                  <stop offset="100%" stopColor="#4f46e5" stopOpacity={0.03} />
+                </linearGradient>
+              </defs>
               <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" vertical={false} />
-              <XAxis dataKey="bin" tick={{ fontSize: 9, fill: "#94a3b8" }} interval="preserveStartEnd" />
+              <XAxis
+                dataKey="x"
+                type="number"
+                domain={["dataMin", "dataMax"]}
+                tickFormatter={(v) => fmtNum(v as number)}
+                tick={{ fontSize: 9, fill: "#94a3b8" }}
+                interval="preserveStartEnd"
+              />
               <YAxis tick={{ fontSize: 10, fill: "#64748b" }} allowDecimals={false} width={36} />
               <Tooltip
-                labelFormatter={(label) => `≥ ${label}`}
+                labelFormatter={(label) => `≈ ${fmtNum(label as number)}`}
                 formatter={(value) => [fmtInt(value as number), "rows"]}
                 contentStyle={{ fontSize: 12, borderRadius: 8, border: "1px solid #e2e8f0" }}
               />
-              <Bar dataKey="count" fill="#4f46e5" radius={[3, 3, 0, 0]} />
-            </BarChart>
+              <Area
+                type="natural"
+                dataKey="count"
+                stroke="#4f46e5"
+                strokeWidth={2}
+                fill={`url(#${gradId})`}
+                dot={false}
+                activeDot={{ r: 3 }}
+              />
+            </AreaChart>
           </ResponsiveContainer>
         ) : (
           <p className="py-6 text-center text-sm text-muted-foreground">
-            No numeric values to chart.
+            {data.length === 1
+              ? "Only one distinct value — no distribution to plot."
+              : "No numeric values to chart."}
           </p>
         )}
 

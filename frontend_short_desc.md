@@ -247,8 +247,11 @@ per-label rows and the predicted product SET. A captured multilabel `/run` envel
 **In one line:** A new "Data Profile" screen (between Upload and Configuration) that shows what's
 in your uploaded file at a glance — distributions for number columns, common values for category
 columns, a missing-data scan, and how the number columns correlate.
-- **For number columns:** a histogram (the shape of the data) plus a stats card — mean, median,
-  mode, standard deviation, min/max, the 25th/75th percentiles, and skew.
+- **For number columns:** a smooth **distribution (density) curve** showing the shape of the data —
+  which may come out as a bell curve, a skewed hump, or any smooth shape — plus a stats card: mean,
+  median, mode, standard deviation, min/max, the 25th/75th percentiles, and skew. *(Updated 2026-07-01:
+  this was a bar histogram; a smooth curve reads continuous data with many distinct values far better.
+  A column with only one distinct value shows a short note instead of a curve.)*
 - **For category columns (and yes/no columns):** a bar chart of the most common values, with an
   "other" bucket and a note of how many distinct values there are and the most frequent one.
 - **For date columns:** the earliest and latest dates.
@@ -291,23 +294,24 @@ and number columns get smarter new options.
 
 ## Feature picker enrichment on Configuration (✅ Done, 2026-07-01)
 **In one line:** The feature-selection list on the Configuration page — previously just a checkbox
-and a column name — now shows, for each column, a mini distribution graph and key numbers for
+and a column name — now shows, for each column, a smooth distribution curve and key numbers for
 number columns, and flags identifier / single-value columns right beside the name so you can spot
 (and exclude) them at a glance.
 - **What each row now shows.** A type tag (numeric/categorical/datetime); any advisory flags —
   **"Identifier-like"** (nearly every value distinct — an ID/reference that won't generalise and can
   leak the answer) and **"Single value"** (the same value in every row — no signal) — shown as small
-  badges next to the column name; and, for **number columns**, a compact **distribution sparkline**
-  plus **avg · IQR · variance** (average, the middle-50% spread, and the variance).
+  badges next to the column name; and, for **number columns**, a compact **distribution curve** (a
+  smooth, bell-/gaussian-style density curve of the column's shape) plus **avg · IQR · variance**
+  (average, the middle-50% spread, and the variance).
 - **No new data, no waiting.** It reads the profile the upload already returned (the same
   `column_profiles` the Data Profile page uses) — so there is **no extra server call** and nothing in
   the engine, API, or the locked contract changed. An older upload without a profile simply shows the
   plain checkbox + name as before.
 - **Consistent with Data Profile.** The identifier/single-value wording and the number formatting were
   moved into shared helpers so the picker and the Data Profile page describe and format things
-  **identically** (one source of truth). The sparkline is a lightweight CSS bar chart (no chart
+  **identically** (one source of truth). The curve is a lightweight hand-drawn SVG spline (no chart
   library) so it stays fast even with many columns. New render tests cover the numeric stats, the
-  sparkline, and the identifier tag appearing in the picker.
+  distribution curve, and the identifier tag appearing in the picker.
 
 ## Decision-threshold policy + calibration on Configuration (✅ Done, 2026-07-01)
 **In one line:** The old "Decision threshold" number box (which actually did nothing) is now a

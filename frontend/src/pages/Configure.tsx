@@ -470,8 +470,8 @@ function Field({
 }
 
 /** One selectable feature: a checkbox + column name, its degenerate-column flags
- *  (identifier / single-value), and — for numeric columns — a mini distribution
- *  sparkline with avg · IQR · variance derived from the upload's Data-Profile stats.
+ *  (identifier / single-value), and — for numeric columns — a smooth distribution
+ *  curve with avg · IQR · variance derived from the upload's Data-Profile stats.
  *  Falls back to a plain checkbox row when the upload carried no profile block. */
 function FeatureRow({
   col,
@@ -510,7 +510,7 @@ function FeatureRow({
         </div>
         {stats && (
           <div className="mt-1 flex items-center gap-3">
-            <MiniHistogram histogram={profile?.histogram} />
+            <MiniDensityCurve histogram={profile?.histogram} idSuffix={col} />
             <dl className="flex gap-3 font-mono text-[11px] text-muted-foreground">
               <span title="Mean (average)">avg {fmtNum(stats.mean)}</span>
               <span title="Interquartile range (p75 − p25)">IQR {fmtNum(iqr)}</span>
@@ -523,27 +523,83 @@ function FeatureRow({
   )
 }
 
-/** A compact, dependency-free distribution sparkline: one bar per histogram bin,
- *  scaled to the tallest bin. Pure divs (no chart lib) so it stays light even with
- *  many features and renders in jsdom. Decorative — the numbers carry the detail. */
-function MiniHistogram({ histogram }: { histogram?: Histogram | null }) {
+/** A Catmull-Rom spline through `points`, emitted as SVG cubic-bezier path data —
+ *  gives a smooth density-style curve (rather than jagged line segments) from the
+ *  handful of histogram points. */
+function smoothPath(points: Array<{ x: number; y: number }>): string {
+  if (points.length < 2) return ""
+  let d = `M ${points[0].x},${points[0].y}`
+  for (let i = 0; i < points.length - 1; i++) {
+    const p0 = points[i - 1] ?? points[i]
+    const p1 = points[i]
+    const p2 = points[i + 1]
+    const p3 = points[i + 2] ?? p2
+    const cp1x = p1.x + (p2.x - p0.x) / 6
+    const cp1y = p1.y + (p2.y - p0.y) / 6
+    const cp2x = p2.x - (p3.x - p1.x) / 6
+    const cp2y = p2.y - (p3.y - p1.y) / 6
+    d += ` C ${cp1x.toFixed(2)},${cp1y.toFixed(2)} ${cp2x.toFixed(2)},${cp2y.toFixed(2)} ${p2.x.toFixed(2)},${p2.y.toFixed(2)}`
+  }
+  return d
+}
+
+/** A compact, dependency-free distribution CURVE: a smoothed density line over the
+ *  histogram bins (anchored to the baseline at both ends so it reads like a bell /
+ *  gaussian shape), with a soft gradient fill beneath. Pure inline SVG (no chart lib)
+ *  so it stays light across many features and renders in jsdom. Decorative — the
+ *  numbers carry the detail. `idSuffix` keeps each gradient's id unique in the DOM. */
+function MiniDensityCurve({
+  histogram,
+  idSuffix,
+}: {
+  histogram?: Histogram | null
+  idSuffix: string
+}) {
   if (!histogram || histogram.counts.length === 0) return null
-  const max = Math.max(...histogram.counts, 1)
+  const W = 100
+  const H = 34
+  const PAD = 4
+  // Pad the counts with a zero at each end so the curve rises from and returns to the
+  // baseline — the familiar density-plot silhouette even for a few bins.
+  const counts = [0, ...histogram.counts, 0]
+  const max = Math.max(...counts, 1)
+  const n = counts.length
+  const points = counts.map((c, i) => ({
+    x: (i / (n - 1)) * W,
+    y: H - PAD - (c / max) * (H - PAD * 2),
+  }))
+  const line = smoothPath(points)
+  const area = `${line} L ${W},${H} L 0,${H} Z`
+  const gid = `density-${idSuffix.replace(/[^a-zA-Z0-9_-]/g, "-")}`
+
   return (
-    <div
-      className="flex h-7 w-24 shrink-0 items-end gap-px"
+    <svg
+      viewBox={`0 0 ${W} ${H}`}
+      width={96}
+      height={30}
+      preserveAspectRatio="none"
+      className="shrink-0"
       role="img"
       aria-label="Value distribution"
-      title="Value distribution"
     >
-      {histogram.counts.map((count, i) => (
-        <div
-          key={i}
-          className="flex-1 rounded-sm bg-primary/70"
-          style={{ height: `${Math.max(8, (count / max) * 100)}%` }}
-        />
-      ))}
-    </div>
+      <title>Value distribution</title>
+      <defs>
+        <linearGradient id={gid} x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor="var(--primary)" stopOpacity="0.35" />
+          <stop offset="100%" stopColor="var(--primary)" stopOpacity="0.02" />
+        </linearGradient>
+      </defs>
+      <path d={area} fill={`url(#${gid})`} />
+      <path
+        d={line}
+        fill="none"
+        stroke="var(--primary)"
+        strokeWidth="1.5"
+        strokeLinejoin="round"
+        strokeLinecap="round"
+        vectorEffect="non-scaling-stroke"
+      />
+    </svg>
   )
 }
 
