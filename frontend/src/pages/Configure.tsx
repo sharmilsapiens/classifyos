@@ -17,7 +17,7 @@ import { Play } from "lucide-react"
 
 import type { ColumnProfile, Histogram } from "@/api/types"
 import { useApp } from "@/store/AppStore"
-import { fmtNum } from "@/lib/format"
+import { fmtInt, fmtNum } from "@/lib/format"
 import { ColumnFlags } from "@/lib/columnFlags"
 import { cn } from "@/lib/utils"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -192,12 +192,14 @@ export default function Configure() {
                     checked={form.feature_cols.includes(col)}
                     onToggle={() => toggleFeature(col)}
                     profile={profileByName.get(col)}
+                    nRows={inspect.n_rows}
                   />
                 ))}
               </div>
               <p className="text-xs text-muted-foreground">
                 Numeric columns show a mini distribution and avg · IQR · variance;
-                identifier/single-value columns are flagged (usually excluded).
+                categorical columns list their values; identifier/single-value columns
+                are flagged (usually excluded).
               </p>
             </div>
           </CardContent>
@@ -470,25 +472,35 @@ function Field({
 }
 
 /** One selectable feature: a checkbox + column name, its degenerate-column flags
- *  (identifier / single-value), and — for numeric columns — a smooth distribution
- *  curve with avg · IQR · variance derived from the upload's Data-Profile stats.
- *  Falls back to a plain checkbox row when the upload carried no profile block. */
+ *  (identifier / single-value, annotated with the value / unique-count), and — for
+ *  numeric columns — a smooth distribution curve with avg · IQR · variance, or — for
+ *  categorical columns — the available category values. Falls back to a plain checkbox
+ *  row when the upload carried no profile block. */
 function FeatureRow({
   col,
   checked,
   onToggle,
   profile,
+  nRows,
 }: {
   col: string
   checked: boolean
   onToggle: () => void
   profile?: ColumnProfile
+  nRows: number
 }) {
   const stats = profile?.dtype_group === "numeric" ? profile.stats : null
   // IQR = p75 − p25; variance = std². Both derived from the profile stats (the
   // Data Profile surfaces the same avg / spread numbers on its numeric cards).
   const iqr = stats && stats.p75 != null && stats.p25 != null ? stats.p75 - stats.p25 : null
   const variance = stats && stats.std != null ? stats.std * stats.std : null
+  const flags = profile?.flags ?? []
+  // A normal categorical column lists its values; skip for constant/identifier
+  // (the flag badge already shows the single value / the unique count there).
+  const showCategories =
+    profile?.dtype_group === "categorical" &&
+    !flags.includes("constant") &&
+    !flags.includes("identifier")
 
   return (
     <label className="flex cursor-pointer items-start gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-muted/60">
@@ -506,7 +518,7 @@ function FeatureRow({
               {profile.dtype_group}
             </span>
           )}
-          <ColumnFlags flags={profile?.flags} />
+          <ColumnFlags flags={profile?.flags} profile={profile} nRows={nRows} />
         </div>
         {stats && (
           <div className="mt-1 flex items-center gap-3">
@@ -518,8 +530,44 @@ function FeatureRow({
             </dl>
           </div>
         )}
+        {showCategories && profile && <CategoryChips profile={profile} />}
       </div>
     </label>
+  )
+}
+
+/** The available category values for a categorical column, as compact chips. Scales
+ *  to high cardinality: shows at most CATEGORY_CHIP_LIMIT values (the most frequent,
+ *  from the engine's top-K `top_values`) then a "+N more" tail, so a column with many
+ *  categories never floods the picker. When the engine listed no values, falls back to
+ *  the distinct count. */
+const CATEGORY_CHIP_LIMIT = 6
+function CategoryChips({ profile }: { profile: ColumnProfile }) {
+  const values = profile.top_values ?? []
+  if (values.length === 0) {
+    return (
+      <p className="mt-1 text-[11px] text-muted-foreground">
+        {fmtInt(profile.n_unique)} categories
+      </p>
+    )
+  }
+  const shown = values.slice(0, CATEGORY_CHIP_LIMIT)
+  const remaining = profile.n_unique - shown.length
+  return (
+    <div className="mt-1 flex flex-wrap items-center gap-1">
+      {shown.map((v) => (
+        <span
+          key={v.value}
+          title={`${v.value} · ${fmtInt(v.count)} rows`}
+          className="max-w-[10rem] truncate rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground"
+        >
+          {v.value}
+        </span>
+      ))}
+      {remaining > 0 && (
+        <span className="text-[10px] text-muted-foreground">+{fmtInt(remaining)} more</span>
+      )}
+    </div>
   )
 }
 

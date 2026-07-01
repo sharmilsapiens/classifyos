@@ -5,7 +5,24 @@
 > planning/overseer chat stays in sync with the local repo.
 
 **Last updated:** 2026-07-01
-**Updated by:** Claude Code (**NEW — Data Profile numeric cards now show a smooth density curve instead of a
+**Updated by:** Claude Code (**NEW — column advisories now carry concrete detail + categorical values in the
+picker (UI-only, no engine/API/contract change)**. Follow-up to the flag/picker work below, from user
+requests. (1) The shared `ColumnFlags` badge is now annotated: a **`constant`** column shows the actual single
+value (`Single value: 2024` — derived from `stats.mode`/`min` for numeric, `min` for datetime, or
+`top_values[0]` for categorical; long strings truncated), and an **`identifier`** column shows the
+distinct-of-total count (`Identifier-like · 9,950 of 10,000 unique` = `n_unique` of `n_rows`). Both the Data
+Profile cards and the Configure feature picker pass `profile` + `nRows` into `ColumnFlags` so the annotation
+is identical on both screens. (2) The Configure picker now lists a **categorical** column's **available
+categories** as chips (`CategoryChips`) — answering "show what categories are available for year/month". (3)
+**Scaling** handled deliberately: `top_values` is engine-capped at top-12; the picker shows the first **6**
+chips + a `+N more` tail (`CATEGORY_CHIP_LIMIT`), identifier-like columns skip the list (near-unique values are
+noise — the badge shows the count instead), and an empty `top_values` falls back to `"{n_unique} categories"`.
+**Tests:** `configure.test.tsx` +constant-value / +identifier-ratio / +category-chips; `dataProfile.test.tsx`
+identifier assertion now checks the `N of M unique` annotation. **115 frontend vitest green · `tsc -b` +
+`vite build` clean** (backend untouched). Hallucination check N/A — no new library calls (existing
+`@/api/types` + `fmtInt`/`fmtNum`). **No plan_tweak entry** — additive UI over existing profile data, not a
+deviation. `notes/data_profile.md` updated.)
+**Prior update (same day):** Claude Code (**NEW — Data Profile numeric cards now show a smooth density curve instead of a
 bar histogram (UI-only, no engine/API/contract change)**. A blocky 20-bin bar histogram reads poorly for
 continuous numeric data with many distinct values; the numeric cards on the Data Profile page now render a
 **smooth density curve** of the same distribution. `DataProfile.tsx::NumericCard` swaps the Recharts

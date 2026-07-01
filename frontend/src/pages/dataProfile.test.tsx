@@ -121,8 +121,10 @@ describe("DataProfile", () => {
     expect(screen.getByText(/Most frequent:/)).toBeInTheDocument()
     expect(screen.getByText(/Showing top 2 of/)).toBeInTheDocument()
 
-    // Degenerate-column advisory badge renders for a flagged column.
-    expect(screen.getByText("Identifier-like")).toBeInTheDocument()
+    // Degenerate-column advisory badge renders for a flagged column, annotated
+    // with the unique-of-total count (region: 4 distinct of 6 rows).
+    expect(screen.getByText(/Identifier-like/)).toBeInTheDocument()
+    expect(screen.getByText(/4 of 6 unique/)).toBeInTheDocument()
 
     // Datetime range.
     expect(screen.getByText("2020-01-01")).toBeInTheDocument()

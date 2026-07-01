@@ -254,6 +254,9 @@ columns, a missing-data scan, and how the number columns correlate.
   A column with only one distinct value shows a short note instead of a curve.)*
 - **For category columns (and yes/no columns):** a bar chart of the most common values, with an
   "other" bucket and a note of how many distinct values there are and the most frequent one.
+- **Column advisories (both here and in the Configure feature picker):** a **single-value** column
+  shows the value it holds ("Single value: 2024"); an **identifier-like** column shows how many
+  distinct values it has out of the total rows ("9,950 of 10,000 unique"). *(Added 2026-07-01.)*
 - **For date columns:** the earliest and latest dates.
 - **Across the whole file:** a "missing values" chart (which columns have gaps, and how big) and a
   colour-coded **correlation heatmap** over the number columns (a quick way to spot redundant or
@@ -300,9 +303,13 @@ number columns, and flags identifier / single-value columns right beside the nam
 - **What each row now shows.** A type tag (numeric/categorical/datetime); any advisory flags —
   **"Identifier-like"** (nearly every value distinct — an ID/reference that won't generalise and can
   leak the answer) and **"Single value"** (the same value in every row — no signal) — shown as small
-  badges next to the column name; and, for **number columns**, a compact **distribution curve** (a
+  badges next to the column name (a single-value column names its value, an identifier-like column
+  shows its distinct-of-total count); for **number columns**, a compact **distribution curve** (a
   smooth, bell-/gaussian-style density curve of the column's shape) plus **avg · IQR · variance**
-  (average, the middle-50% spread, and the variance).
+  (average, the middle-50% spread, and the variance); and for **category columns**, the **available
+  category values** as small chips. *(Category chips scale: the most-frequent 6 are shown with a
+  "+N more" tail, so a column with many categories never floods the list; identifier-like columns
+  show the count instead of listing near-unique values.)*
 - **No new data, no waiting.** It reads the profile the upload already returned (the same
   `column_profiles` the Data Profile page uses) — so there is **no extra server call** and nothing in
   the engine, API, or the locked contract changed. An older upload without a profile simply shows the

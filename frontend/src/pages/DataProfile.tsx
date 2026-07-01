@@ -106,7 +106,7 @@ function DataProfileBody({ inspect }: { inspect: InspectProfile }) {
           </h2>
           <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
             {numeric.map((c) => (
-              <NumericCard key={c.name} col={c} />
+              <NumericCard key={c.name} col={c} nRows={inspect.n_rows} />
             ))}
           </div>
         </section>
@@ -120,7 +120,7 @@ function DataProfileBody({ inspect }: { inspect: InspectProfile }) {
           </h2>
           <div className="grid grid-cols-1 gap-5 lg:grid-cols-2">
             {categorical.map((c) => (
-              <CategoricalCard key={c.name} col={c} />
+              <CategoricalCard key={c.name} col={c} nRows={inspect.n_rows} />
             ))}
           </div>
         </section>
@@ -134,7 +134,7 @@ function DataProfileBody({ inspect }: { inspect: InspectProfile }) {
           </h2>
           <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-3">
             {datetime.map((c) => (
-              <DatetimeCard key={c.name} col={c} />
+              <DatetimeCard key={c.name} col={c} nRows={inspect.n_rows} />
             ))}
           </div>
         </section>
@@ -226,7 +226,7 @@ function MissingnessCard({ profiles }: { profiles: ColumnProfile[] }) {
 
 /* ─────────────────────────────── numeric ────────────────────────────────── */
 
-function NumericCard({ col }: { col: ColumnProfile }) {
+function NumericCard({ col, nRows }: { col: ColumnProfile; nRows: number }) {
   const stats = col.stats
   const hist = col.histogram
 
@@ -270,7 +270,7 @@ function NumericCard({ col }: { col: ColumnProfile }) {
         </CardTitle>
       </CardHeader>
       <CardContent>
-        <ColumnFlags flags={col.flags} className="mb-3" />
+        <ColumnFlags flags={col.flags} className="mb-3" profile={col} nRows={nRows} />
         {data.length > 1 ? (
           <ResponsiveContainer width="100%" height={180}>
             <AreaChart data={data} margin={{ top: 4, right: 8, bottom: 4, left: 0 }}>
@@ -334,7 +334,7 @@ function NumericCard({ col }: { col: ColumnProfile }) {
 
 /* ───────────────────────────── categorical ──────────────────────────────── */
 
-function CategoricalCard({ col }: { col: ColumnProfile }) {
+function CategoricalCard({ col, nRows }: { col: ColumnProfile; nRows: number }) {
   const values = col.top_values ?? []
   const data = useMemo(() => {
     const rows = values.map((v) => ({ value: v.value, count: v.count }))
@@ -355,7 +355,7 @@ function CategoricalCard({ col }: { col: ColumnProfile }) {
         </CardTitle>
       </CardHeader>
       <CardContent>
-        <ColumnFlags flags={col.flags} className="mb-3" />
+        <ColumnFlags flags={col.flags} className="mb-3" profile={col} nRows={nRows} />
         {data.length > 0 ? (
           <ResponsiveContainer width="100%" height={Math.max(140, data.length * 26)}>
             <BarChart
@@ -408,7 +408,7 @@ function CategoricalCard({ col }: { col: ColumnProfile }) {
 
 /* ─────────────────────────────── datetime ───────────────────────────────── */
 
-function DatetimeCard({ col }: { col: ColumnProfile }) {
+function DatetimeCard({ col, nRows }: { col: ColumnProfile; nRows: number }) {
   const fmtDate = (iso?: string | null) => (iso ? iso.slice(0, 10) : "—")
   return (
     <Card>
@@ -416,7 +416,7 @@ function DatetimeCard({ col }: { col: ColumnProfile }) {
         <CardTitle className="font-mono text-base">{col.name}</CardTitle>
       </CardHeader>
       <CardContent className="space-y-1.5 text-sm">
-        <ColumnFlags flags={col.flags} className="mb-3" />
+        <ColumnFlags flags={col.flags} className="mb-3" profile={col} nRows={nRows} />
         <div className="flex justify-between">
           <span className="text-muted-foreground">Earliest</span>
           <span className="font-mono">{fmtDate(col.min)}</span>

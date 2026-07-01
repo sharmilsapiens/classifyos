@@ -23,14 +23,14 @@ vi.mock("@/store/AppStore", () => ({ useApp: () => mockApp }))
 import Configure from "./Configure"
 
 const PROFILE: InspectProfile = {
-  columns: ["age", "policy_id", "region"],
-  dtypes: { age: "float64", policy_id: "object", region: "object" },
+  columns: ["age", "policy_id", "region", "plan_year"],
+  dtypes: { age: "float64", policy_id: "object", region: "object", plan_year: "object" },
   numeric_cols: ["age"],
-  categorical_cols: ["policy_id", "region"],
+  categorical_cols: ["policy_id", "region", "plan_year"],
   binary_cols: [],
   datetime_cols: [],
   n_rows: 6,
-  n_missing: { age: 0, policy_id: 0, region: 0 },
+  n_missing: { age: 0, policy_id: 0, region: 0, plan_year: 0 },
   sample: [],
   server_path: "uploads/policy_lapse.csv",
   column_profiles: [
@@ -59,6 +59,24 @@ const PROFILE: InspectProfile = {
       n_missing: 0,
       missing_pct: 0,
       n_unique: 3,
+      top_values: [
+        { value: "North", count: 3, pct: 50 },
+        { value: "South", count: 2, pct: 33.3 },
+        { value: "East", count: 1, pct: 16.7 },
+      ],
+      other_count: 0,
+      truncated: false,
+    },
+    {
+      name: "plan_year",
+      dtype_group: "categorical",
+      n_missing: 0,
+      missing_pct: 0,
+      n_unique: 1,
+      flags: ["constant"],
+      top_values: [{ value: "2024", count: 6, pct: 100 }],
+      other_count: 0,
+      truncated: false,
     },
   ],
 }
@@ -90,9 +108,24 @@ describe("Configure — feature picker enrichment", () => {
     expect(screen.getByRole("img", { name: "Value distribution" })).toBeInTheDocument()
   })
 
-  it("flags an identifier-like column beside its name in the picker", () => {
+  it("flags an identifier-like column with its unique-of-total count", () => {
     renderConfigure()
-    expect(screen.getByText("Identifier-like")).toBeInTheDocument()
+    // policy_id: 6 distinct of 6 rows → "Identifier-like · 6 of 6 unique".
+    expect(screen.getByText(/Identifier-like/)).toBeInTheDocument()
+    expect(screen.getByText(/6 of 6 unique/)).toBeInTheDocument()
+  })
+
+  it("shows the single value for a constant column", () => {
+    renderConfigure()
+    // plan_year holds only "2024" → "Single value: 2024".
+    expect(screen.getByText(/Single value: 2024/)).toBeInTheDocument()
+  })
+
+  it("lists the available categories for a plain categorical column", () => {
+    renderConfigure()
+    expect(screen.getByText("North")).toBeInTheDocument()
+    expect(screen.getByText("South")).toBeInTheDocument()
+    expect(screen.getByText("East")).toBeInTheDocument()
   })
 
   it("does not show numeric stats for a plain categorical column", () => {

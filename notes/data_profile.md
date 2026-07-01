@@ -42,6 +42,10 @@ From `n_unique` (distinct non-null) and `n_rows` (total, incl. missing):
 
 Mutually exclusive. Mirrors `feature_impact._ID_LIKE_FRACTION` (same 0.99) so the two screens agree. Display advisory only — nothing is dropped. Caveat: a genuinely high-cardinality continuous column can also trip `identifier`.
 
+**Badge annotations (frontend `ColumnFlags`, shared by both screens):** the badge shows the concrete detail —
+- **`constant`** → the single value (`Single value: 2024`), derived from `stats.mode`/`min` (numeric), `min` (datetime), or `top_values[0].value` (categorical); long strings truncated.
+- **`identifier`** → the distinct-of-total count (`Identifier-like · 9,950 of 10,000 unique`), i.e. `n_unique` of `n_rows`.
+
 Every column also carries: `name`, `dtype_group`, `n_missing`, `missing_pct`, `n_unique`, `flags`.
 
 ## 4. Metrics & graphs per type
@@ -68,7 +72,9 @@ Above **50,000 rows**: heavy work (histograms + correlation) runs on a seeded 50
 
 ## 6. Second consumer — Configure feature picker
 
-The Configuration feature-selection list reuses these same `column_profiles`: `dtype_group === "numeric"` → density curve (inline SVG) + avg / IQR (`p75 − p25`) / variance (`std²`); `flags` → identifier / single-value badges. No new computation — same data, second consumer. Binary numeric columns (grouped `categorical`) show a plain row there.
+The Configuration feature-selection list reuses these same `column_profiles`: `dtype_group === "numeric"` → density curve (inline SVG) + avg / IQR (`p75 − p25`) / variance (`std²`); `dtype_group === "categorical"` (non-constant, non-identifier) → its category values as chips (`CategoryChips`); `flags` → the annotated identifier / single-value badges. No new computation — same data, second consumer. Binary numeric columns (grouped `categorical`) list their two values.
+
+**Category-chip scaling.** `top_values` is already capped at the top **12** by the engine, and the picker shows only the first **6** chips + a `+N more` tail (`CATEGORY_CHIP_LIMIT = 6`), so a high-cardinality column never floods the row. Identifier-like columns skip the chip list entirely (their values are near-unique — the badge shows the count instead), and an empty `top_values` falls back to `"{n_unique} categories"`.
 
 ## Key constants
 
