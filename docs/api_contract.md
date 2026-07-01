@@ -139,6 +139,8 @@ problem there is returned as HTTP 422.
   "missing_strategy": "median",       // LEGACY GLOBAL default (back-compat); per-type keys below override it
   "missing_strategy_numeric": null,   // null → inherit global. else: median|mean|mode|ffill|bfill|knn|iterative|drop
   "missing_strategy_categorical": null, // null → inherit (mode if global is numeric-only). else: mode|ffill|bfill|drop
+  "missing_strategy_by_column": {},   // optional per-column overrides {col: strategy}; unlisted cols use the per-type default above
+                                      //   value ∈ median|mean|mode|ffill|bfill|knn|iterative|drop (numeric-only strategy on a categorical col is coerced to that type's default)
   "encoding_method": "onehot",
   "scaling_method": "standard",
   "outlier_method": "iqr",

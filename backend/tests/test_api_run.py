@@ -96,6 +96,21 @@ def test_run_bad_per_type_missing_strategy_is_422(api_client) -> None:
     assert api_client.post("/api/v1/run", json=body).status_code == 422
 
 
+def test_run_accepts_per_column_missing_strategy(api_client) -> None:
+    """The per-column override map is accepted on the /run request (request-side only)."""
+    body = {
+        **_VALID,
+        "missing_strategy_by_column": {"age": "knn", "annual_premium": "mean"},
+    }
+    assert api_client.post("/api/v1/run", json=body).status_code == 200
+
+
+def test_run_bad_per_column_missing_strategy_is_422(api_client) -> None:
+    """An unknown per-column strategy is rejected by build_config (422, not 500)."""
+    body = {**_VALID, "missing_strategy_by_column": {"age": "bogus"}}
+    assert api_client.post("/api/v1/run", json=body).status_code == 422
+
+
 def test_run_accepts_permutation_metric(api_client) -> None:
     """The permutation_metric request field is accepted (request-side, no schema change)."""
     body = {**_VALID, "permutation_metric": "roc_auc"}

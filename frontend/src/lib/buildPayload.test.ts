@@ -56,6 +56,15 @@ describe("buildPayload", () => {
     expect(defaults.missing_strategy_categorical).toBe("mode")
   })
 
+  it("carries per-column imputation overrides (default {}; map respected)", () => {
+    expect(buildPayload(form).missing_strategy_by_column).toEqual({})
+    const payload = buildPayload({
+      ...form,
+      missing_strategy_by_column: { age: "knn", region: "ffill" },
+    })
+    expect(payload.missing_strategy_by_column).toEqual({ age: "knn", region: "ffill" })
+  })
+
   it("includes every required key the API expects", () => {
     const payload = buildPayload(form)
     for (const key of ["input_file", "target", "feature_cols"]) {

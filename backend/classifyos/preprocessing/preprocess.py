@@ -89,6 +89,38 @@ def _resolve_strategies(cfg: dict[str, Any]) -> tuple[str, str]:
     return numeric, categorical
 
 
+def _resolve_col_strategies(
+    cfg: dict[str, Any],
+    numeric_cols: list[str],
+    categorical_cols: list[str],
+    numeric_default: str,
+    categorical_default: str,
+) -> dict[str, str]:
+    """Resolve the imputation strategy for EACH feature column.
+
+    Starts from the per-type default (``numeric_default`` / ``categorical_default``)
+    and applies the optional ``missing_strategy_by_column`` override map on top. A
+    numeric-only strategy (e.g. ``mean``/``knn``) named on a categorical column is
+    coerced back to ``categorical_default`` — the same fallback the per-type resolver
+    applies to a numeric-only global — so an ill-typed override never crashes the run.
+    Every numeric strategy is valid for a numeric column, so a numeric override always
+    applies. Columns absent from the map keep their per-type default.
+    """
+    by_col = cfg.get("missing_strategy_by_column") or {}
+    strategies: dict[str, str] = {}
+    for col in numeric_cols:
+        override = by_col.get(col)
+        strategies[col] = override if override is not None else numeric_default
+    for col in categorical_cols:
+        override = by_col.get(col)
+        strategies[col] = (
+            override
+            if override in MISSING_STRATEGIES_CATEGORICAL
+            else categorical_default
+        )
+    return strategies
+
+
 class Preprocessor:
     """Train-only-fitted preprocessing for the ClassifyOS pipeline.
 
@@ -96,23 +128,29 @@ class Preprocessor:
     → categorical encoding → scaling (numeric). Configuration keys consumed:
     ``feature_cols``, ``target``, ``time_split_col``, ``missing_strategy``,
     ``missing_strategy_numeric``, ``missing_strategy_categorical``,
-    ``outlier_method``, ``encoding_method``, ``high_cardinality_threshold``,
-    ``scaling_method``, ``problem_type``.
+    ``missing_strategy_by_column``, ``outlier_method``, ``encoding_method``,
+    ``high_cardinality_threshold``, ``scaling_method``, ``problem_type``.
 
     Missing-value notes:
-        * The strategy is resolved SEPARATELY for numeric vs non-numeric columns.
+        * The strategy is resolved PER COLUMN. The base is a per-type default:
           ``missing_strategy_numeric`` / ``missing_strategy_categorical`` override
           per type when set; otherwise the legacy global ``missing_strategy`` is
           used (a numeric-only global like ``mean``/``median`` falls back to mode
-          for categorical columns, preserving the original behaviour).
+          for categorical columns, preserving the original behaviour). The optional
+          ``missing_strategy_by_column`` map then overrides that default for named
+          columns only — an unlisted column keeps its per-type default, so an empty
+          map is byte-identical to the per-type-only behaviour. A numeric-only
+          strategy named on a categorical column is coerced back to the categorical
+          default (same fallback as a numeric-only global).
         * Numeric strategies: ``median``/``mean``/``mode`` (per-column statistic),
           ``ffill``/``bfill`` (directional fill + statistic fallback for the
           leading/trailing edge), ``knn``/``iterative`` (sklearn ``KNNImputer`` /
           ``IterativeImputer`` fitted on the TRAIN numeric block), or ``drop``.
         * Categorical strategies: ``mode``, ``ffill``/``bfill``, or ``drop``.
         * ``drop`` is row-level: TRAIN rows with a missing value in any column whose
-          type uses ``drop`` are dropped in fit/fit_transform only. :meth:`transform`
-          NEVER drops rows — it imputes with the stored TRAIN statistic instead.
+          resolved strategy is ``drop`` are dropped in fit/fit_transform only.
+          :meth:`transform` NEVER drops rows — it imputes with the stored TRAIN
+          statistic instead.
 
     Encoding notes:
         * Any categorical column with more than ``high_cardinality_threshold``
@@ -183,21 +221,39 @@ class Preprocessor:
         ]
         self.categorical_cols_ = [c for c in cols if c not in self.numeric_cols_]
 
-        # Resolve the missing-value strategy SEPARATELY per feature type. The two
-        # per-type keys override the legacy global when set; a numeric-only global
-        # (mean/median/knn/iterative) falls back to mode for categorical columns,
-        # preserving the original single-setting behaviour.
+        # Resolve the missing-value strategy SEPARATELY per feature type, then apply
+        # the optional per-column override map on top. The per-type keys override the
+        # legacy global when set; a numeric-only global (mean/median/knn/iterative)
+        # falls back to mode for categorical columns, preserving the original
+        # single-setting behaviour. ``col_strategies_`` holds the final per-column
+        # strategy actually applied (an empty override map leaves it == the per-type
+        # default for every column).
         self.numeric_strategy_, self.categorical_strategy_ = _resolve_strategies(cfg)
+        self.col_strategies_ = _resolve_col_strategies(
+            cfg,
+            self.numeric_cols_,
+            self.categorical_cols_,
+            self.numeric_strategy_,
+            self.categorical_strategy_,
+        )
 
         # -- step 1: missing values ---------------------------------------
-        # "drop" is row-level: columns whose TYPE uses "drop" force complete-case
-        # training here. The retained rows feed every downstream statistic (fences,
-        # encoder categories, scaler params, imputer fit).
-        self.drop_cols_: list[str] = []
-        if self.numeric_strategy_ == "drop":
-            self.drop_cols_.extend(self.numeric_cols_)
-        if self.categorical_strategy_ == "drop":
-            self.drop_cols_.extend(self.categorical_cols_)
+        # "drop" is row-level: any column whose RESOLVED strategy is "drop" forces
+        # complete-case training here. The retained rows feed every downstream
+        # statistic (fences, encoder categories, scaler params, imputer fit).
+        self.drop_cols_: list[str] = [
+            c for c in cols if self.col_strategies_[c] == "drop"
+        ]
+        # Directional-fill groups + model-imputer groups, resolved per column so a
+        # run can now MIX strategies across columns of the same type.
+        self.ffill_cols_ = [c for c in cols if self.col_strategies_[c] == "ffill"]
+        self.bfill_cols_ = [c for c in cols if self.col_strategies_[c] == "bfill"]
+        self.knn_cols_ = [
+            c for c in self.numeric_cols_ if self.col_strategies_[c] == "knn"
+        ]
+        self.iterative_cols_ = [
+            c for c in self.numeric_cols_ if self.col_strategies_[c] == "iterative"
+        ]
         if self.drop_cols_:
             keep = work[self.drop_cols_].notna().all(axis=1)
             work = work.loc[keep]
@@ -210,31 +266,36 @@ class Preprocessor:
         # columns at transform time (transform never drops — see transform()).
         self.impute_values_: dict[str, Any] = {}
         for col in self.numeric_cols_:
-            if self.numeric_strategy_ == "mean":
+            strat = self.col_strategies_[col]
+            if strat == "mean":
                 self.impute_values_[col] = float(work[col].mean())
-            elif self.numeric_strategy_ == "mode":
+            elif strat == "mode":
                 self.impute_values_[col] = _mode_value(work[col])
             else:  # median / ffill / bfill / knn / iterative / drop → median baseline
                 self.impute_values_[col] = float(work[col].median())
         for col in self.categorical_cols_:  # mode / ffill / bfill / drop → mode baseline
             self.impute_values_[col] = _mode_value(work[col])
 
-        # Model-based numeric imputers (knn/iterative) are FITTED on the TRAIN numeric
-        # block (with its NaNs) here, then applied via _impute. keep_empty_features=True
-        # so an all-NaN column never silently changes the output column count. [RISK]
-        # leakage — these learn from train rows only; transform merely applies them.
-        self.numeric_imputer_: KNNImputer | IterativeImputer | None = None
-        if self.numeric_cols_ and self.numeric_strategy_ in ("knn", "iterative"):
-            if self.numeric_strategy_ == "knn":
-                self.numeric_imputer_ = KNNImputer(
+        # Model-based numeric imputers (knn/iterative) are FITTED on the whole TRAIN
+        # numeric block (with its NaNs) here, then applied via _impute. Each learns from
+        # every numeric column as a predictor but only writes back the columns whose
+        # resolved strategy is that imputer's — so per-column overrides can select knn
+        # for one column and iterative (or a statistic) for another in the same run.
+        # keep_empty_features=True so an all-NaN column never silently changes the output
+        # column count. [RISK] leakage — these learn from train rows only; transform
+        # merely applies them. ``numeric_imputers_`` is keyed by strategy name.
+        self.numeric_imputers_: dict[str, KNNImputer | IterativeImputer] = {}
+        if self.numeric_cols_:
+            numeric_train = work[self.numeric_cols_].astype(float)
+            if self.knn_cols_:
+                self.numeric_imputers_["knn"] = KNNImputer(
                     n_neighbors=KNN_IMPUTER_NEIGHBORS, keep_empty_features=True
-                )
-            else:
-                self.numeric_imputer_ = IterativeImputer(
+                ).fit(numeric_train)
+            if self.iterative_cols_:
+                self.numeric_imputers_["iterative"] = IterativeImputer(
                     random_state=int(cfg.get("random_state", 42)),
                     keep_empty_features=True,
-                )
-            self.numeric_imputer_.fit(work[self.numeric_cols_].astype(float))
+                ).fit(numeric_train)
 
         work = self._impute(work)
 
@@ -350,29 +411,32 @@ class Preprocessor:
     # -------------------------------------------------------------- impute --
 
     def _impute(self, work: pd.DataFrame) -> pd.DataFrame:
-        """Apply the resolved per-type imputation to ``work`` (mutates and returns it).
+        """Apply the resolved per-column imputation to ``work`` (mutates and returns it).
 
         Shared by :meth:`fit` and :meth:`transform` so train and test are imputed by
-        exactly the same fitted statistics. Order: directional fill (ffill/bfill) per
-        type → model-based numeric imputer (knn/iterative) → per-column statistic
-        fallback (catches the simple strategies, fill-edge residuals, and "drop"
-        columns). No rows are dropped here.
+        exactly the same fitted statistics. Order: directional fill (ffill/bfill) on the
+        columns resolved to those strategies → model-based numeric imputer (knn/iterative,
+        each writing back only its own columns) → per-column statistic fallback (catches
+        the simple strategies, fill-edge residuals, and "drop" columns). No rows are
+        dropped here.
         """
-        if self.numeric_cols_:
-            if self.numeric_strategy_ == "ffill":
-                work[self.numeric_cols_] = work[self.numeric_cols_].ffill()
-            elif self.numeric_strategy_ == "bfill":
-                work[self.numeric_cols_] = work[self.numeric_cols_].bfill()
-        if self.categorical_cols_:
-            if self.categorical_strategy_ == "ffill":
-                work[self.categorical_cols_] = work[self.categorical_cols_].ffill()
-            elif self.categorical_strategy_ == "bfill":
-                work[self.categorical_cols_] = work[self.categorical_cols_].bfill()
+        # Directional fill is per column (a run may mix ffill/bfill/other across
+        # columns of the same type), so fill each group's columns independently.
+        if self.ffill_cols_:
+            work[self.ffill_cols_] = work[self.ffill_cols_].ffill()
+        if self.bfill_cols_:
+            work[self.bfill_cols_] = work[self.bfill_cols_].bfill()
 
-        if self.numeric_imputer_ is not None:
-            work[self.numeric_cols_] = self.numeric_imputer_.transform(
-                work[self.numeric_cols_].astype(float)
-            )
+        # Each model imputer is fitted on the full numeric block but only its own
+        # columns take the imputed values (the rest fall through to the statistic step).
+        for strategy, cols in (("knn", self.knn_cols_), ("iterative", self.iterative_cols_)):
+            imputer = self.numeric_imputers_.get(strategy)
+            if imputer is not None:
+                imputed = imputer.transform(work[self.numeric_cols_].astype(float))
+                imputed_df = pd.DataFrame(
+                    imputed, columns=self.numeric_cols_, index=work.index
+                )
+                work[cols] = imputed_df[cols]
 
         # Statistic fallback: fills the simple median/mean/mode columns and any
         # residual NaN left by a directional fill at the leading/trailing edge.

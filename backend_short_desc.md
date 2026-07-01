@@ -358,6 +358,33 @@ probabilities so a "0.8" really means about 80%.
   dashboard controls + result badges are a separate follow-up session. Engine + API + tests this
   session (**315 backend pytest green**, +16 net new).
 
+## Missing values — per-column choice (✅ Done, 2026-07-01)
+**In one line:** On top of the by-type setting, you can now pick the fill method **for an
+individual column** — so one number column can use KNN while the rest use the median, or one
+category column can forward-fill while the rest use most-common.
+- **Why:** the previous step let you choose one method for *all* number columns and one for *all*
+  category columns. That's still the sensible default, but sometimes a single column wants
+  different treatment (e.g. a time-ordered column that should forward-fill, or a column with a
+  strong relationship to others that suits KNN). This adds a per-column override on top of the
+  type defaults.
+- **How it works:** a new optional setting `missing_strategy_by_column` maps a column name to its
+  own strategy. Any column you don't list keeps its per-type default, so leaving it empty is
+  **byte-for-byte identical** to before. On the Configuration page a "Missing values · per column"
+  card lists your selected feature columns; each has a dropdown defaulting to "Type default" and
+  offering the strategies valid for that column's kind (numbers get the full set incl. KNN /
+  iterative; categories get most-common / forward-fill / backward-fill / drop).
+- **Mixing is allowed now.** Because the strategy is resolved per column, a single run can use KNN
+  on one number column and iterative on another (both learned from the training rows only, applied
+  unchanged to test — the same no-leakage rule). "Drop" stays row-level and only ever drops
+  training rows.
+- **Foolproofing:** if you somehow name a number-only method (mean/KNN/…) for a category column,
+  the engine quietly coerces it back to that column's type default rather than erroring — the same
+  fallback used when a number-only global meets a text column. Unknown strategy names are rejected
+  when the config is built (a 422, not a crash).
+- **Backward-compatible & additive.** Engine + API (request-side only, **no contract/version
+  change** — the response is unchanged) + dashboard. New tests across all three
+  (**323 backend pytest · 119 frontend vitest**).
+
 ---
 
 ## How to read this project

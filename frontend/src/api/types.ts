@@ -96,6 +96,8 @@ export interface RunConfig {
   missing_strategy_numeric: string | null
   /** Per-type override for NON-NUMERIC columns; null → inherit (mode if global is numeric-only). */
   missing_strategy_categorical: string | null
+  /** Optional per-column overrides {column: strategy}; unlisted columns use the per-type default. */
+  missing_strategy_by_column: Record<string, string>
   encoding_method: string
   scaling_method: string
   outlier_method: string

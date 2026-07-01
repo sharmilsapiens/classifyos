@@ -295,6 +295,25 @@ and number columns get smarter new options.
   `missing_strategy_categorical` (default mode) and includes them in the run request; the old global
   field stays as a hidden back-compat default. A new build-payload test covers the split.
 
+## Per-column missing-value overrides on Configuration (✅ Done, 2026-07-01)
+**In one line:** A new "Missing values · per column" card lets you override the blank-filling
+method for an **individual column**, on top of the by-type defaults — leave any column on "Type
+default" and it keeps the type setting.
+- **What it shows.** The card lists the columns you've chosen as features (it needs the upload's
+  Data-Profile to know each column's kind). Each row has the column name, a numeric/categorical
+  tag, and a dropdown that defaults to **"Type default (…)"** — showing the current per-type
+  choice — plus the strategies valid for that column's kind: number columns get the full set
+  (median/mean/most-common/forward-fill/backward-fill/KNN/iterative/drop), category columns get
+  most-common/forward-fill/backward-fill/drop. A small count shows how many columns you've
+  overridden.
+- **Sends a map to the API.** The form carries a new `missing_strategy_by_column` map (default
+  `{}`); picking a non-default strategy adds `{column: strategy}`, switching back to "Type default"
+  removes it — so an untouched card sends `{}` and changes nothing. It rides the existing run
+  request; **no engine/API/contract change** beyond the additive request field.
+- **Graceful fallback.** With no data profile (an older upload) or no features chosen yet, the card
+  shows a short "select feature columns above" note instead of an empty table. New build-payload +
+  Configure render tests cover the map default, the override write, and the numeric option set.
+
 ## Feature picker enrichment on Configuration (✅ Done, 2026-07-01)
 **In one line:** The feature-selection list on the Configuration page — previously just a checkbox
 and a column name — now shows, for each column, a smooth distribution curve and key numbers for

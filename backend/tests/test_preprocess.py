@@ -208,11 +208,11 @@ def test_per_type_missing_strategies(
 
     assert pp.numeric_strategy_ == numeric_strategy
     assert pp.categorical_strategy_ == categorical_strategy
-    # knn/iterative materialise a fitted sklearn imputer; the others do not.
+    # knn/iterative materialise a fitted sklearn imputer (keyed by strategy); others don't.
     if numeric_strategy in ("knn", "iterative"):
-        assert pp.numeric_imputer_ is not None
+        assert numeric_strategy in pp.numeric_imputers_
     else:
-        assert pp.numeric_imputer_ is None
+        assert pp.numeric_imputers_ == {}
 
     assert len(test_out) == len(test), "transform dropped test rows"
     assert not train_out[pp.feature_names_out_].isna().any().any()
@@ -250,13 +250,13 @@ def test_knn_imputer_no_leakage(storage: StorageAdapter, lapse_csv: str) -> None
     pp = Preprocessor(cfg).fit(train)
 
     # KNNImputer stores the fitted training matrix in _fit_X; poisoning test can't change it.
-    fit_x_before = pp.numeric_imputer_._fit_X.copy()
+    fit_x_before = pp.numeric_imputers_["knn"]._fit_X.copy()
     poisoned = test.copy()
     poisoned["annual_premium"] = poisoned["annual_premium"] * 1000
     poisoned.loc[poisoned.index[0], "age"] = np.nan
     pp.transform(poisoned)
     assert np.array_equal(
-        pp.numeric_imputer_._fit_X, fit_x_before, equal_nan=True
+        pp.numeric_imputers_["knn"]._fit_X, fit_x_before, equal_nan=True
     )
 
 
@@ -300,6 +300,122 @@ def test_global_strategy_still_inherited(storage: StorageAdapter, lapse_csv: str
     pp = Preprocessor(cfg).fit(train)
     assert pp.numeric_strategy_ == "mean"
     assert pp.categorical_strategy_ == "mode"  # numeric-only global → mode for categorical
+
+
+# --------------------------------------------- per-column overrides ----
+
+
+def test_per_column_empty_map_is_backcompat(
+    storage: StorageAdapter, lapse_csv: str
+) -> None:
+    """An empty override map leaves every column on its per-type default (byte-compat)."""
+    cfg = _lapse_config(
+        lapse_csv, missing_strategy_numeric="mean", missing_strategy_categorical="ffill"
+    )
+    assert cfg["missing_strategy_by_column"] == {}
+    train, _ = _load_split(cfg, storage)
+    pp = Preprocessor(cfg).fit(train)
+    for col in pp.numeric_cols_:
+        assert pp.col_strategies_[col] == "mean"
+    for col in pp.categorical_cols_:
+        assert pp.col_strategies_[col] == "ffill"
+
+
+def test_per_column_override_applies(storage: StorageAdapter, lapse_csv: str) -> None:
+    """Named columns use their own strategy; unlisted columns keep the per-type default."""
+    cfg = _lapse_config(
+        lapse_csv,
+        missing_strategy_numeric="median",
+        missing_strategy_categorical="mode",
+        missing_strategy_by_column={
+            "age": "mean",
+            "annual_premium": "knn",
+            "occupation": "ffill",
+        },
+    )
+    train, test = _load_split(cfg, storage)
+    # Leading NaN exercises the ffill edge fallback on the overridden categorical column.
+    test = test.copy()
+    test.loc[test.index[0], "occupation"] = np.nan
+
+    pp = Preprocessor(cfg)
+    train_out = pp.fit_transform(train)
+    test_out = pp.transform(test)
+
+    assert pp.col_strategies_["age"] == "mean"
+    assert pp.col_strategies_["annual_premium"] == "knn"
+    assert pp.col_strategies_["occupation"] == "ffill"
+    # An unlisted numeric column keeps the numeric default.
+    assert pp.col_strategies_["sum_assured"] == "median"
+    assert pp.knn_cols_ == ["annual_premium"]
+    # age's baseline fill is the train mean (its override), not the median default.
+    assert pp.impute_values_["age"] == pytest.approx(float(train["age"].mean()))
+
+    assert len(test_out) == len(test), "transform dropped test rows"
+    assert not train_out[pp.feature_names_out_].isna().any().any()
+    assert not test_out[pp.feature_names_out_].isna().any().any()
+
+
+def test_per_column_mixes_knn_and_iterative(
+    storage: StorageAdapter, lapse_csv: str
+) -> None:
+    """One column can use knn while another uses iterative in the SAME run."""
+    cfg = _lapse_config(
+        lapse_csv,
+        missing_strategy_by_column={"age": "knn", "annual_premium": "iterative"},
+    )
+    train, _ = _load_split(cfg, storage)
+    pp = Preprocessor(cfg).fit(train)
+    assert set(pp.numeric_imputers_) == {"knn", "iterative"}
+    assert pp.knn_cols_ == ["age"]
+    assert pp.iterative_cols_ == ["annual_premium"]
+
+
+def test_per_column_coerces_numeric_strategy_on_categorical(
+    storage: StorageAdapter, lapse_csv: str
+) -> None:
+    """A numeric-only strategy named on a categorical column falls back to its type default."""
+    cfg = _lapse_config(
+        lapse_csv,
+        missing_strategy_categorical="mode",
+        # "mean"/"knn" are undefined for categorical columns → coerced to the categorical default.
+        missing_strategy_by_column={"occupation": "mean", "region": "knn"},
+    )
+    train, _ = _load_split(cfg, storage)
+    pp = Preprocessor(cfg).fit(train)
+    assert pp.col_strategies_["occupation"] == "mode"
+    assert pp.col_strategies_["region"] == "mode"
+    # No model imputer is materialised — those overrides never reached a numeric column.
+    assert pp.numeric_imputers_ == {}
+
+
+def test_per_column_drop_override(storage: StorageAdapter, lapse_csv: str) -> None:
+    """A single column set to 'drop' drives complete-case training on that column only."""
+    cfg = _lapse_config(
+        lapse_csv,
+        missing_strategy_numeric="median",
+        missing_strategy_by_column={"age": "drop"},
+    )
+    train, test = _load_split(cfg, storage)
+    pp = Preprocessor(cfg)
+    train_out = pp.fit_transform(train)
+
+    assert pp.drop_cols_ == ["age"]
+    assert len(train_out) == len(train.dropna(subset=["age"]))
+    # transform still never drops a test row.
+    assert len(pp.transform(test)) == len(test)
+
+
+def test_missing_by_column_validated(lapse_csv: str) -> None:
+    """The override map defaults to {} and rejects bad strategies / shapes."""
+    cfg = _lapse_config(lapse_csv)
+    assert cfg["missing_strategy_by_column"] == {}
+    with pytest.raises(ValueError, match="missing_strategy_by_column"):
+        _lapse_config(lapse_csv, missing_strategy_by_column={"age": "bogus"})
+    with pytest.raises(ValueError, match="missing_strategy_by_column"):
+        _lapse_config(lapse_csv, missing_strategy_by_column={"": "mean"})
+    with pytest.raises(ValueError, match="missing_strategy_by_column"):
+        _lapse_config(lapse_csv, missing_strategy_by_column=["age", "mean"])
 
 
 def test_outlier_capping(storage: StorageAdapter, lapse_csv: str) -> None:

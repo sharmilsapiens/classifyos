@@ -119,6 +119,16 @@ additively (`schema_version` now reports `"1.1"`).
   envelope is unchanged, so there is **no `schema_version` bump**; the request example in
   `docs/api_contract.md` was updated.
 
+- **Per-column missing-value overrides on `/run` (2026-07-01, additive, request-side)** — the
+  `/run` request gained one more optional field, `missing_strategy_by_column`, a `{column:
+  strategy}` map (default `{}`). It layers on top of the per-type fields above: a named column uses
+  its own strategy, any column left out keeps its per-type default (so an empty map changes
+  nothing). Values are validated by the engine's `build_config` against the full strategy set (a
+  bad name → 422); a number-only strategy named on a category column is coerced back to that
+  column's type default at fit time rather than erroring. **Request-side only** — the response
+  envelope is unchanged, so **no `schema_version` bump**; the request example in
+  `docs/api_contract.md` was updated.
+
 ---
 
 ## How to read this project

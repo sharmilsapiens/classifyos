@@ -29,6 +29,7 @@ import { Button, buttonVariants } from "@/components/ui/button"
 import { EmptyState, PageHeader } from "@/components/common/States"
 import FeatureBuilderPanel from "@/components/config/FeatureBuilderPanel"
 import TuningOverridesPanel from "@/components/config/TuningOverridesPanel"
+import MissingByColumnPanel from "@/components/config/MissingByColumnPanel"
 
 // Allowed values — mirror config.py's tuples exactly.
 const PROBLEM_TYPES = ["binary", "multiclass", "multilabel"] as const
@@ -320,6 +321,23 @@ export default function Configure() {
               <Input type="number" min={2} value={form.high_cardinality_threshold}
                 onChange={(e) => updateForm({ high_cardinality_threshold: Number(e.target.value) })} />
             </Field>
+          </CardContent>
+        </Card>
+
+        {/* Per-column imputation overrides */}
+        <Card>
+          <CardHeader>
+            <CardTitle>Missing values · per column</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <MissingByColumnPanel
+              featureCols={form.feature_cols}
+              profileByName={profileByName}
+              numericDefault={form.missing_strategy_numeric}
+              categoricalDefault={form.missing_strategy_categorical}
+              value={form.missing_strategy_by_column}
+              onChange={(next) => updateForm({ missing_strategy_by_column: next })}
+            />
           </CardContent>
         </Card>
 

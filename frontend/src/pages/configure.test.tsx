@@ -10,7 +10,7 @@
    • non-numeric column → no numeric stats line */
 
 import { describe, expect, it, vi } from "vitest"
-import { render, screen, within } from "@testing-library/react"
+import { fireEvent, render, screen, within } from "@testing-library/react"
 import { MemoryRouter } from "react-router-dom"
 
 import type { InspectProfile } from "@/api/types"
@@ -162,6 +162,27 @@ describe("Configure — feature picker enrichment", () => {
     const region = screen.getByText("region", { selector: "span" }).closest("label")
     expect(region).not.toBeNull()
     expect(within(region as HTMLElement).getByRole("checkbox")).toBeInTheDocument()
+  })
+})
+
+describe("Configure — per-column imputation", () => {
+  it("offers a per-column imputation selector (with the numeric imputers) for a selected numeric feature", () => {
+    renderConfigure()
+    const sel = screen.getByLabelText("Imputation method for age")
+    expect(sel).toBeInTheDocument()
+    // A numeric column is offered the model-based imputers + the type-default option.
+    expect(within(sel).getByRole("option", { name: "knn" })).toBeInTheDocument()
+    expect(within(sel).getByRole("option", { name: /Type default/ })).toBeInTheDocument()
+  })
+
+  it("writes the chosen per-column strategy into the override map", () => {
+    renderConfigure()
+    fireEvent.change(screen.getByLabelText("Imputation method for age"), {
+      target: { value: "knn" },
+    })
+    expect(mockApp.updateForm).toHaveBeenCalledWith({
+      missing_strategy_by_column: { age: "knn" },
+    })
   })
 })
 

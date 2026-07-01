@@ -27,6 +27,8 @@ export interface ConfigFormState {
   missing_strategy_numeric: string
   /** Missing-value strategy for non-numeric columns (mode/ffill/bfill/drop). */
   missing_strategy_categorical: string
+  /** Optional per-column overrides {column: strategy}; unlisted columns use the per-type default. */
+  missing_strategy_by_column: Record<string, string>
   encoding_method: string
   scaling_method: string
   outlier_method: string
@@ -80,6 +82,7 @@ export const DEFAULT_FORM_STATE: ConfigFormState = {
   missing_strategy: "median",
   missing_strategy_numeric: "median",
   missing_strategy_categorical: "mode",
+  missing_strategy_by_column: {},
   encoding_method: "onehot",
   scaling_method: "standard",
   outlier_method: "iqr",
@@ -144,6 +147,7 @@ export function buildPayload(form: ConfigFormState): RunConfig {
     missing_strategy: form.missing_strategy,
     missing_strategy_numeric: form.missing_strategy_numeric,
     missing_strategy_categorical: form.missing_strategy_categorical,
+    missing_strategy_by_column: form.missing_strategy_by_column,
     encoding_method: form.encoding_method,
     scaling_method: form.scaling_method,
     outlier_method: form.outlier_method,

@@ -184,6 +184,11 @@ class RunConfig(BaseModel):
     missing_strategy: str = "median"
     missing_strategy_numeric: str | None = None
     missing_strategy_categorical: str | None = None
+    # Optional PER-COLUMN overrides: {column_name: strategy}. A named column uses its own
+    # strategy instead of the per-type default; unlisted columns keep the per-type behaviour.
+    # Default {} → no override. The engine's ``build_config`` is the authoritative validator
+    # of the allowed strategy values (and coerces an ill-typed pairing at fit time).
+    missing_strategy_by_column: dict[str, str] = Field(default_factory=dict)
     encoding_method: str = "onehot"
     scaling_method: str = "standard"
     outlier_method: str = "iqr"

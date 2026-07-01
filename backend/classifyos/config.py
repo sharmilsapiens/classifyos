@@ -40,6 +40,12 @@ MISSING_STRATEGIES_NUMERIC = (
 #: ``missing_strategy_categorical``. Statistic-based numeric imputers (mean/median/knn/iterative)
 #: are intentionally excluded — they are undefined for categorical values.
 MISSING_STRATEGIES_CATEGORICAL = ("mode", "ffill", "bfill", "drop")
+#: Strategies selectable for a SINGLE column via the ``missing_strategy_by_column`` override map.
+#: This is the numeric superset (every strategy the engine knows). Column type is not known at
+#: config-build time, so validation only checks membership here; the Preprocessor coerces a
+#: numeric-only strategy set on a categorical column back to that type's default at fit time
+#: (exactly like the numeric-only-global fallback), so a bad type/strategy pairing never crashes.
+MISSING_STRATEGIES_BY_COLUMN = MISSING_STRATEGIES_NUMERIC
 ENCODING_METHODS = ("onehot", "label", "ordinal", "target")
 SCALING_METHODS = ("standard", "minmax", "robust", "none")
 OUTLIER_METHODS = ("iqr", "zscore", "none")
@@ -132,6 +138,12 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "missing_strategy": "median",
     "missing_strategy_numeric": None,  # None → inherit the global; else a MISSING_STRATEGIES_NUMERIC value
     "missing_strategy_categorical": None,  # None → inherit (mode if the global is numeric-only)
+    # Optional PER-COLUMN overrides: {column_name: strategy}. A named column uses its own strategy
+    # instead of the per-type default above; any column NOT listed keeps the per-type behaviour.
+    # Default {} → no override, a run is byte-identical to the per-type-only behaviour. Values must
+    # be a MISSING_STRATEGIES_BY_COLUMN member; a numeric-only strategy (mean/median/knn/iterative)
+    # named on a categorical column is coerced back to that column's type default by the engine.
+    "missing_strategy_by_column": {},
     "encoding_method": "onehot",
     "scaling_method": "standard",
     "outlier_method": "iqr",
@@ -310,6 +322,7 @@ def _validate_config(config: dict[str, Any]) -> None:
         _require_choice(
             cat_strategy, MISSING_STRATEGIES_CATEGORICAL, "missing_strategy_categorical"
         )
+    _validate_missing_by_column(config.get("missing_strategy_by_column", {}))
     _require_choice(config["encoding_method"], ENCODING_METHODS, "encoding_method")
     _require_choice(config["scaling_method"], SCALING_METHODS, "scaling_method")
     _require_choice(config["outlier_method"], OUTLIER_METHODS, "outlier_method")
@@ -344,6 +357,28 @@ def _validate_config(config: dict[str, Any]) -> None:
     _validate_feature_engineering(config["feature_engineering"])
     _validate_tuning(config["tuning"])
     _validate_user_features(config["user_features"])
+
+
+def _validate_missing_by_column(by_col: Any) -> None:
+    """Validate the ``missing_strategy_by_column`` override map.
+
+    Each key must be a non-empty column-name string and each value a
+    :data:`MISSING_STRATEGIES_BY_COLUMN` member. Column existence and
+    numeric/categorical type-compatibility are NOT checked here (the columns are
+    not known until a dataset is loaded); the Preprocessor coerces a per-type-invalid
+    strategy back to the column type's default at fit time, mirroring how a
+    numeric-only global falls back to mode for categorical columns.
+    """
+    if not isinstance(by_col, dict):
+        raise ValueError("'missing_strategy_by_column' must be a dict of {column: strategy}")
+    for col, strategy in by_col.items():
+        if not isinstance(col, str) or not col.strip():
+            raise ValueError(
+                f"'missing_strategy_by_column' keys must be non-empty column names, got {col!r}"
+            )
+        _require_choice(
+            strategy, MISSING_STRATEGIES_BY_COLUMN, f"missing_strategy_by_column[{col!r}]"
+        )
 
 
 def _validate_tuning(t: Any) -> None:
