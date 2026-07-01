@@ -24,13 +24,22 @@
 > pre-training statistical screen of raw features. No `1.0`/`1.1`/`1.2` field was renamed, retyped, or
 > removed. Old clients ignore the new field.
 >
-> **`1.4` (additive, current default).** Adds one new **optional** block — `result.permutation_importance` —
+> **`1.4` (additive).** Adds one new **optional** block — `result.permutation_importance` —
 > carrying each model's **permutation** importance (the drop in F1-weighted on the held-out test split when
 > each feature is shuffled), keyed by model name. Unlike `feature_importance` this is **model-agnostic** (it
 > only needs `predict`), so it is present for **every** model — including the RBF-SVM and GaussianNB that
 > expose no native importance. The block is `null`/absent when it could not be computed for any model. No
-> `1.0`–`1.3` field was renamed, retyped, or removed. The response envelope now reports
-> `"schema_version": "1.4"`. Old clients ignore the new field.
+> `1.0`–`1.3` field was renamed, retyped, or removed. Old clients ignore the new field.
+>
+> **`1.5` (additive, current default).** Adds two **optional** fields to each `result.models[]` row —
+> `decision_threshold` and `calibrated` — reporting the **decision policy** applied to that model.
+> `decision_threshold` is the effective positive-class operating threshold for a **binary** problem (the
+> tuned best threshold, the analyst's fixed value, or `0.5` for the default argmax); it is `null` for
+> multiclass/multilabel (no single scalar cut) and for failed models. `calibrated` is whether the model's
+> probabilities are calibrated. These are driven by the request-side `threshold_mode` (`"default"` |
+> `"fixed"` | `"tuned"`), `threshold`, `threshold_metric`, and `calibrate_probs` fields. No `1.0`–`1.4`
+> field was renamed, retyped, or removed. The response envelope now reports `"schema_version": "1.5"`. Old
+> clients ignore the new fields.
 
 ## Conventions
 
@@ -134,8 +143,11 @@ problem there is returned as HTTP 422.
   "scaling_method": "standard",
   "outlier_method": "iqr",
   "high_cardinality_threshold": 20,
-  "threshold": 0.5,
-  "calibrate_probs": true,
+  "threshold": 0.5,                   // positive-class cutoff used when threshold_mode == "fixed" (binary)
+  "threshold_mode": "default",        // default (0.5 argmax) | fixed | tuned   (binary only)
+  "threshold_metric": "f1",           // metric a "tuned" threshold maximises (binary): f1|f1_weighted|
+                                       // f1_macro|balanced_accuracy|accuracy|precision|recall
+  "calibrate_probs": true,            // calibrate probabilities (binary+multiclass; SVM already calibrated)
   "random_state": 42,
   "permutation_metric": "f1_weighted",  // metric the post-training permutation importance scores the drop in;
                                          // f1_weighted|f1_macro|accuracy|precision_weighted|precision_macro|
@@ -208,6 +220,10 @@ missing/wrong-typed column is skipped and logged — it never aborts the run).
           "roc_auc": 0.0, "pr_auc": 0.0, "log_loss": 0.0, "mcc": 0.0
           // all null for a failed model (or if train eval was unavailable); block always present
         },
+        "decision_threshold": 0.5, // NEW in 1.5 (additive): effective binary operating threshold
+                                   //   (tuned best / fixed value / 0.5 default); null for
+                                   //   multiclass/multilabel and failed models
+        "calibrated": true,        // NEW in 1.5 (additive): whether probabilities are calibrated
         "error": null              // string when status == "failed"
       }
     ],
@@ -319,6 +335,16 @@ missing/wrong-typed column is skipped and logged — it never aborts the run).
   `permutation_importance_summary.csv`. [RISK] correlated features can both look unimportant (the model
   leans on the untouched twin). No leakage surface: read from held-out test predictions only — fits
   nothing, refits nothing, never mutates the test matrix. Pure plumbing — the engine already computed it.
+- **`result.models[].decision_threshold` + `.calibrated` (1.5, additive, optional)** report the **decision
+  policy** applied to each model. `decision_threshold` is the effective positive-class operating threshold
+  for a **binary** problem — the tuned best threshold (`threshold_mode: "tuned"`, chosen by
+  `TunedThresholdClassifierCV` on internal CV folds of TRAIN to maximise `threshold_metric`), the analyst's
+  `threshold` (`"fixed"`), or `0.5` (`"default"` argmax). It is `null` for multiclass/multilabel (no single
+  scalar cut) and for failed models. `calibrated` reflects `calibrate_probs` (probabilities calibrated via
+  `CalibratedClassifierCV`, fit on TRAIN only — and always `true` for the SVM, which is intrinsically
+  calibrated). [RISK] leakage — the tuned threshold and the calibrator are fit on TRAIN-only internal CV;
+  the held-out test set never informs the operating point. These are driven by the request-side
+  `threshold_mode`/`threshold`/`threshold_metric`/`calibrate_probs` fields.
 
 ### Execution model (limitation)
 
@@ -337,6 +363,8 @@ _`1.3` (additive): added the optional `result.feature_importance` block (native 
 post-training importance); all `1.0`/`1.1`/`1.2` fields are unchanged._
 _`1.4` (additive): added the optional `result.permutation_importance` block (model-agnostic per-model
 permutation importance, covering all models); all `1.0`–`1.3` fields are unchanged._
+_`1.5` (additive): added `result.models[].decision_threshold` + `.calibrated` (the per-model decision
+policy — effective binary operating threshold + calibration status); all `1.0`–`1.4` fields are unchanged._
 _2026-06-26 (default-value change only, **no schema/version change** — field shapes unchanged):
 `tuning.timeout_seconds` now defaults to `null` (no per-model wall-clock cap; `n_trials` bounds
 the study) rather than `600`. `tuning.search_space_overrides` (always present in `1.0`) is now

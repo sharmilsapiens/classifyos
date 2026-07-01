@@ -321,6 +321,43 @@ average can never be wrongly applied to a text column.
   prediction time every row is kept and filled instead. Engine + API + dashboard; new tests across
   all three (293 backend pytest · 97 frontend vitest).
 
+## Decision policy — calibration & decision threshold made real (✅ Done, 2026-06-30)
+**In one line:** The "Decision threshold" and "Calibrate probabilities" settings — which were
+shown in the UI but secretly did **nothing** — now actually work: the engine can tune the
+positive/negative cut-off for the best score, or use a value you set, and it can calibrate
+probabilities so a "0.8" really means about 80%.
+- **The problem we found:** both settings were passed all the way through (screen → API →
+  config) but the engine never read either. Predictions always used the built-in 0.5 cut-off,
+  and the only calibration anywhere was the SVM's own internal one. So the threshold control was
+  a dead switch, and the risk-register's claim that "threshold is configurable" was misleading.
+- **Two different things, both now wired up.** *Calibration* reshapes the probabilities so they
+  are trustworthy; the *decision threshold* decides where to cut a (now trustworthy) probability
+  into a yes/no. They are independent — calibration makes a threshold meaningful but doesn't pick
+  one. For lopsided problems (fraud, lapse) the 0.5 default is rarely the best cut, so calibration
+  alone was not enough.
+- **Threshold (binary only) — three modes:** *default* (the old 0.5 cut), *fixed* (use the value
+  you set), or *tuned* — the engine searches for the cut-off that maximises a chosen score (F1,
+  balanced accuracy, precision, recall, …) using cross-validation **inside the training data
+  only**, so the held-out test set never influences the operating point (no leakage). The
+  effective cut-off each model ended up using is reported back. Multiclass/multilabel keep their
+  argmax and ignore the threshold.
+- **Calibration (binary + multiclass), ON by default now.** Each model's probabilities are
+  calibrated on the training data only (scikit-learn's `CalibratedClassifierCV`). The SVM is
+  skipped (already calibrated) and multilabel is left as-is. This is a deliberate behaviour change
+  — every run now calibrates by default, which is slightly slower but gives better probabilities,
+  which the insurance use cases want.
+- **No new ML written, no model code rewritten.** It composes scikit-learn's own building blocks
+  (`CalibratedClassifierCV`, `FixedThresholdClassifier`, `TunedThresholdClassifierCV`) in one new
+  helper (`models/decision.py`); the six model classes are untouched. A careful detail: the
+  calibration/threshold wrappers hide a model's "what mattered" numbers, so the importance read-out
+  now unwraps to the real model first — otherwise native importance would have silently vanished
+  the moment calibration (now default) switched on.
+- **Surfaced additively.** The API gained request fields (`threshold_mode`, `threshold_metric`)
+  and two new per-model result fields — the effective `decision_threshold` and whether the model is
+  `calibrated` (locked contract bumped `1.4 → 1.5`, additive only; old clients ignore them). The
+  dashboard controls + result badges are a separate follow-up session. Engine + API + tests this
+  session (**315 backend pytest green**, +16 net new).
+
 ---
 
 ## How to read this project

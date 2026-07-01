@@ -4,7 +4,51 @@
 > A copy is uploaded to the ClassifyOS Claude Project knowledge after each update so the
 > planning/overseer chat stays in sync with the local repo.
 
-**Last updated:** 2026-06-29
+**Last updated:** 2026-06-30
+**Updated by:** Claude Code (**NEW — decision policy made real: probability calibration + the binary
+decision threshold (engine + API, additive `1.4 → 1.5`)**. A user asked whether the "Decision threshold"
+config field was correct and whether `calibrate_probs` already handled it. Investigation found **both were
+inert** — `threshold` (0.5) and `calibrate_probs` (True) flowed UI → API → config but the engine never read
+either: `classify()`/`predict()` used sklearn's 0.5 argmax, and the only calibration was the SVM wrapper's
+intrinsic one (independent of the flag). Clarified for the user that calibration (trustworthy probabilities)
+and the decision threshold (where to cut) are **orthogonal** — calibration makes a threshold meaningful but
+does not pick one — and that for imbalanced insurance problems 0.5 is rarely optimal, so calibration alone is
+not enough. User chose **auto-tune + manual override** for the threshold and **keep `calibrate_probs` default
+True** (a deliberate behaviour change), engine + API this session, frontend follow-up. **Engine:** new pure
+`models/decision.py` (`fit_policy`/`effective_threshold`/`unwrap_base_estimator`/`DecisionInfo`) composes
+sklearn-native meta-estimators — `CalibratedClassifierCV(cv=3, ensemble=False)` (binary+multiclass; skipped
+for the already-calibrated SVM, not applied to multilabel) and, **binary only**,
+`FixedThresholdClassifier`(fixed) / `TunedThresholdClassifierCV`(tuned, maximises `threshold_metric` on TRAIN
+CV folds). **Leakage-safe** — every wrapper fits via internal CV on TRAIN only; the tuned cut never sees the
+held-out test set ([RISK]-marked). `config.py` gains `threshold_mode` (`default`/`fixed`/`tuned`),
+`threshold_metric` (new `THRESHOLD_METRICS` allowlist) + validation of `threshold ∈ (0,1)` and
+`calibrate_probs` bool. **Additive seam, no model rewrites:** `_SklearnEstimatorWrapper` gains
+`set_decision_policy` + a fit branch delegating to `fit_policy` for binary/multiclass; the six concrete model
+classes are untouched (the "models via registry only" rule is about *adding models*, not capabilities).
+**Importance survives calibration:** `feature_importance()` now unwraps the calibration/threshold wrappers to
+the base estimator — otherwise native importance would have silently vanished the moment calibration (now
+default) turned on. **class_weight routing:** when a threshold wrapper is outermost, `sample_weight` only
+reaches the inner fit under a scoped `config_context(enable_metadata_routing=True)` with explicit
+`set_fit_request`/`set_score_request` (scorer deliberately NOT weighted — tune on the natural distribution);
+the positive class follows the engine's lexicographically-last convention so string targets don't trip the
+default integer `pos_label=1`. Runner sets the policy per model and records the effective threshold +
+calibration status on each metrics row; `run_profile.json` gains a `decision_policy` summary. **API:**
+`RunConfig` gains `threshold_mode`/`threshold_metric` (forwarded to `build_config`, the authoritative
+validator → bad value = 422); `ModelMetrics` gains `decision_threshold` (effective binary operating point;
+`null` for multiclass/multilabel/failed) + `calibrated`; **`schema_version` bumped `1.4 → 1.5` (additive)**;
+`docs/api_contract.md` updated (header note, request + `models[]` examples, notes bullet, footer). **Tests:**
+new `test_decision.py` (calibration applied + importance survives, fixed cut honoured, tuned cut valid +
+TRAIN-only/reproducible, sample_weight routing incl. SVM, multiclass ignores threshold, unwrap peeling) + a
+config-validation test + API asserts (new fields, tuned-run operating point, invalid mode → 422) + the three
+`schema_version` asserts `1.4 → 1.5`. **All 315 backend pytest green** (+16 net new; frontend untouched).
+Hallucination check ✅ — `TunedThresholdClassifierCV`/`FixedThresholdClassifier`/`CalibratedClassifierCV`
+signatures, `best_threshold_`, `make_scorer`, metadata-routing requests, and the unwrap attribute chain all
+verified live against scikit-learn 1.9.0 before coding. **No `plan_tweak` entry** — additive feature
+realizing a user request; the version bump is the sanctioned additive-change path; logged as a Decisions-log
+row. The default-True calibration is a noted behaviour change, chosen by the user. **Frontend follow-up
+(not yet done):** surface the `threshold_mode`/`threshold_metric` controls + the effective-threshold /
+calibrated badges on the dashboard.)
+**Prior update:** 2026-06-29
 **Updated by:** Claude Code (**NEW — dedicated "Train vs Test" (Fit Diagnostics) result page — UI-only,
 no contract change**. The train↔test overfit gap was already computed end-to-end (engine `train_*`
 columns → API `models[].train`, schema 1.2) but the dashboard surfaced only **F1** (one column + a gap
@@ -470,6 +514,7 @@ Status legend: ⬜ Not started · 🔄 In progress · ✅ Done · ⚠️ Blocked
 | 2026-06-26 | **Post-training feature importance**: surfaced each model's **native** importance (the existing `feature_importance()` / `plot3`, previously PNG-only) as data — `feature_importances_` on the runner, `feature_importance_summary.csv`, and an additive `result.feature_importance` block (`{model: [{feature, importance, rank}]}`), `schema_version` `1.2 → 1.3`. Field name `feature_importance` (vs the existing `feature_impact`) follows the codebase's own impact/importance split (pre- vs post-training). Models with no native importance (RBF-SVM, GaussianNB) are **omitted**; whole block `null` when none qualify | Owner asked specifically for the per-model, model-dependent importance you "get to know post-training". Native (not permutation) per owner — cheapest path since the engine already computes it; chose to surface it rather than add a new ML pass. Omit-not-zero-fill keeps SVM/NB-only runs byte-identical to earlier schemas; additive version bump is the sanctioned path for the locked contract. No leakage (reads fitted-model internals only). No plan_tweak — additive feature, not a deviation |
 | 2026-06-27 | **Permutation metric is configurable (request-side)**: added `permutation_metric` config key + `PERMUTATION_METRICS` allowlist (= `TUNING_METRICS`), selectable from a Configuration-page dropdown; the scorer now **reuses `evaluate_model`** instead of a private F1 call. Request-side only → **no `schema_version` bump** (response unchanged); the UI labels the chart from the persisted form metric | User asked to pick the metric from the UI rather than hardcode F1-weighted. Reusing `evaluate_model` keeps one definition of every metric (binary positive-class / multiclass OvR ROC-AUC / multilabel) — no drift, the permutation score equals the reported metric; `log_loss` negated; undefined-for-problem-type → no importances (honest). `predict_proba` only for the proba metrics (label metrics pass a uniform array to silence the sum-to-one warning). A request field doesn't change the response, so no contract bump — same precedent as `user_features`. No plan_tweak — additive enhancement |
 | 2026-06-27 | **Permutation feature importance** (complement to the native 1.3 block): new pure `analysis/permutation_importance.py` (shuffle one feature on the held-out test split, measure the F1-weighted drop, `n_repeats=5`, seeded), collected into `permutation_importances_` + `permutation_importance_summary.csv`, surfaced as an additive `result.permutation_importance` block, `schema_version` `1.3 → 1.4`. **Manual implementation** (not sklearn's `permutation_importance`) so it drives our `ModelWrapper.predict` directly — the wrappers aren't sklearn estimators (no `score`/`get_params`) and XGBoost/LightGBM need the DataFrame's `_safe_X` rename path, which a numpy-array round-trip through sklearn would break. **Scored on F1-weighted** (the engine's primary metric) and **on the test split** (genuine generalisation reliance, consistent with reported metrics). Covers **all six** models incl. SVM/NaiveBayes — the whole point, answering the user's "why only 4/6" | User asked for permutation importance "alongside" native, to compare then drop one later. Model-agnostic measure fills the SVM/NaiveBayes gap that native can't; values are cross-model comparable (one unit) unlike native. Leakage-safe (reads test predictions only, no refit, private-copy shuffle); per-model try/except keeps it report-only. [RISK]: correlated features can both look unimportant; cost = n_features × n_repeats predicts. Omit-not-zero-fill + `null`-when-none keeps old runs byte-identical; additive version bump is the sanctioned locked-contract path. No plan_tweak — additive feature, not a deviation |
+| 2026-06-30 | **Decision policy made real** (calibration + binary decision threshold): both `threshold` and `calibrate_probs` were inert config (passed end-to-end, never read — predictions used sklearn's 0.5 argmax; only the SVM was calibrated, intrinsically). New pure `models/decision.py` composes sklearn-native meta-estimators — `CalibratedClassifierCV(cv=3, ensemble=False)` (binary+multiclass; skips the already-calibrated SVM; not multilabel) and, **binary only**, `FixedThresholdClassifier`/`TunedThresholdClassifierCV`. New config `threshold_mode` (`default`/`fixed`/`tuned`) + `threshold_metric` (`THRESHOLD_METRICS`). `_SklearnEstimatorWrapper` gains `set_decision_policy` + a fit branch delegating to `fit_policy` (six concrete model classes untouched); `feature_importance()` unwraps the wrappers to keep native importance alive. Additive `schema_version` `1.4 → 1.5`: `models[].decision_threshold` (effective binary operating point; `null` otherwise) + `calibrated`; request gains `threshold_mode`/`threshold_metric`. **315 backend pytest green.** | User questioned whether the threshold field was correct / whether calibration covered it. Clarified the two are orthogonal (calibration ≠ choosing a cut) and that 0.5 is rarely optimal on imbalanced data, so calibration alone is insufficient. **Leakage-safe** — calibrator + tuned threshold fit on TRAIN internal CV only, never the test set ([RISK]). `class_weight`→`sample_weight` reaches the inner fit under a threshold wrapper via scoped `enable_metadata_routing` (scorer deliberately unweighted; positive class = lexicographically-last to match the engine convention & avoid the integer `pos_label=1` trap on string targets). The "models via registry only" rule is about *adding models*, not capabilities → the shared-base seam is sanctioned. **Default-True calibration is a deliberate behaviour change, chosen by the user.** Additive version bump is the locked-contract path. **Frontend controls + result badges are a follow-up session.** No plan_tweak — additive feature, not a deviation |
 
 ---
 

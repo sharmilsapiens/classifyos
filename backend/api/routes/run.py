@@ -154,6 +154,11 @@ def _models(runner: ModelRunner) -> list[dict[str, Any]]:
                 # NEW in 1.2 (additive): the same headline metrics on the PRE-balance TRAIN
                 # split, for the overfit gap (test − train). See docs/api_contract.md.
                 "train": _train_block(record),
+                # NEW in 1.5 (additive): the decision policy applied to this model — the
+                # effective binary operating threshold (None for multiclass/multilabel) and
+                # whether probabilities are calibrated.
+                "decision_threshold": record.get("decision_threshold"),
+                "calibrated": record.get("calibrated"),
                 "error": record.get("error"),
             }
         )

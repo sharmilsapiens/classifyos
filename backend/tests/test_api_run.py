@@ -117,7 +117,7 @@ def test_binary_run_envelope(binary_run_response) -> None:
     assert binary_run_response.status_code == 200
     body = binary_run_response.json()
     assert body["status"] == "ok"
-    assert body["schema_version"] == "1.4"
+    assert body["schema_version"] == "1.5"
     assert RESULT_KEYS == set(body["result"].keys())
 
 
@@ -210,6 +210,50 @@ def test_binary_models_carry_train_block(binary_run_response) -> None:
     failed = by_name["NotAModel"]
     assert failed["train"] is not None
     assert all(v is None for v in failed["train"].values())
+
+
+def test_binary_models_carry_decision_policy(binary_run_response) -> None:
+    """Each model row carries the additive ``decision_threshold`` + ``calibrated`` (schema 1.5)."""
+    models = binary_run_response.json()["result"]["models"]
+    by_name = {m["name"]: m for m in models}
+
+    # A succeeded binary model: default policy → calibrated, 0.5 operating threshold.
+    ok = next(m for m in models if m["status"] == "ok")
+    assert ok["calibrated"] is True
+    assert ok["decision_threshold"] == 0.5
+
+    # A failed model: both null.
+    failed = by_name["NotAModel"]
+    assert failed["decision_threshold"] is None
+    assert failed["calibrated"] is None
+
+
+def test_tuned_threshold_run_reports_operating_point(api_client) -> None:
+    """A tuned-threshold run reports a per-model operating threshold in (0, 1) ≠ the default."""
+    from .conftest import LAPSE_FEATURES, _run_payload
+
+    payload = _run_payload(
+        "policy_lapse.csv", "will_lapse", LAPSE_FEATURES,
+        problem_type="binary", algorithms=["LogisticRegression", "RandomForest"],
+        threshold_mode="tuned", threshold_metric="f1",
+    )
+    body = api_client.post("/api/v1/run", json=payload).json()
+    assert body["schema_version"] == "1.5"
+    ok = [m for m in body["result"]["models"] if m["status"] == "ok"]
+    assert ok
+    for m in ok:
+        assert m["calibrated"] is True
+        assert 0.0 < m["decision_threshold"] < 1.0
+
+
+def test_invalid_threshold_mode_is_422(api_client) -> None:
+    """An unknown threshold_mode is rejected by build_config → HTTP 422 (not a silent no-op)."""
+    from .conftest import LAPSE_FEATURES, _run_payload
+
+    payload = _run_payload(
+        "policy_lapse.csv", "will_lapse", LAPSE_FEATURES, threshold_mode="auto"
+    )
+    assert api_client.post("/api/v1/run", json=payload).status_code == 422
 
 
 def test_binary_predictions_sampled(binary_run_response) -> None:
@@ -357,7 +401,7 @@ def test_tuned_run_exposes_best_params(api_client) -> None:
     resp = api_client.post("/api/v1/run", json=payload)
     assert resp.status_code == 200
     body = resp.json()
-    assert body["schema_version"] == "1.4"
+    assert body["schema_version"] == "1.5"
 
     tuning = body["result"]["tuning"]
     assert tuning is not None
@@ -408,8 +452,8 @@ def test_run_with_user_features_creates_columns(api_client) -> None:
     body = resp.json()
     assert body["status"] == "ok"
     # user_features is request-side only — it adds no response field of its own; the version
-    # reflects the current contract default (1.4).
-    assert body["schema_version"] == "1.4"
+    # reflects the current contract default (1.5).
+    assert body["schema_version"] == "1.5"
     active = body["result"]["run"]["active_features"]
     assert "premium_per_sum" in active
     assert "start_year" in active

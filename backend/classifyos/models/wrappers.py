@@ -46,6 +46,7 @@ from sklearn.multiclass import OneVsRestClassifier
 from sklearn.preprocessing import LabelEncoder
 
 from .base import ModelWrapper
+from .decision import DecisionInfo, fit_policy, unwrap_base_estimator
 
 
 class _SklearnEstimatorWrapper(ModelWrapper):
@@ -71,9 +72,42 @@ class _SklearnEstimatorWrapper(ModelWrapper):
     #: which is captured from the *original* (un-renamed) ``X`` in :meth:`fit`.
     _needs_safe_feature_names: bool = False
 
+    #: Decision-policy config (calibration + threshold), set by the runner via
+    #: :meth:`set_decision_policy`. ``None`` → no policy (the historical plain-fit path,
+    #: 0.5 argmax, uncalibrated). Consumed by :meth:`fit` for binary/multiclass; multilabel
+    #: ignores it (calibration/threshold are not applied to the OvR indicator path).
+    _decision_policy_cfg: dict[str, Any] | None = None
+
+    #: What the decision policy did this fit (calibrated?, effective threshold), set in
+    #: :meth:`fit`. ``None`` until fit; read by the runner to report the operating threshold.
+    _decision_info: DecisionInfo | None = None
+
     def _build_estimator(self) -> Any:
         """Construct the underlying (unfitted) sklearn-compatible estimator."""
         raise NotImplementedError  # pragma: no cover - intermediate base
+
+    def set_decision_policy(
+        self,
+        *,
+        calibrate: bool,
+        threshold_mode: str,
+        threshold: float,
+        threshold_metric: str,
+    ) -> "_SklearnEstimatorWrapper":
+        """Configure probability calibration + the binary decision threshold for :meth:`fit`.
+
+        Stores the policy; the actual composition (sklearn ``CalibratedClassifierCV`` /
+        ``FixedThresholdClassifier`` / ``TunedThresholdClassifierCV``) happens at fit time in
+        :func:`classifyos.models.decision.fit_policy`. Multiclass calibrates but ignores the
+        threshold; multilabel ignores both. Returns ``self`` for chaining.
+        """
+        self._decision_policy_cfg = {
+            "calibrate": bool(calibrate),
+            "threshold_mode": threshold_mode,
+            "threshold": float(threshold),
+            "scoring": threshold_metric,
+        }
+        return self
 
     # -- contract methods ---------------------------------------------------------
 
@@ -89,8 +123,6 @@ class _SklearnEstimatorWrapper(ModelWrapper):
         is_multilabel = self.problem_type == "multilabel"
 
         estimator = self._build_estimator()
-        if is_multilabel:
-            estimator = OneVsRestClassifier(estimator)
 
         # XGBoost cannot take string labels — encode to 0..n-1 and map back on predict.
         self._label_encoder: LabelEncoder | None = None
@@ -101,17 +133,46 @@ class _SklearnEstimatorWrapper(ModelWrapper):
 
         # class_weight is consumed as sample_weight (single-label only) so numeric-string
         # labels can't break sklearn's native class_weight-dict lookup. Never dropped.
-        fit_kwargs: dict[str, Any] = {}
+        sample_weight = None
         if self.class_weight and not is_multilabel:
-            fit_kwargs["sample_weight"] = self._sample_weights(y_arr)
+            sample_weight = self._sample_weights(y_arr)
 
-        estimator.fit(self._safe_X(X), y_fit, **fit_kwargs)
-        self.model = estimator
+        X_safe = self._safe_X(X)
+        policy = self._decision_policy_cfg
+
+        if is_multilabel:
+            # Multilabel keeps the existing OvR-on-indicator path: calibration/threshold are
+            # not applied (per-label 0.5 over an indicator matrix), so the policy is ignored.
+            estimator = OneVsRestClassifier(estimator)
+            fit_kwargs = {"sample_weight": sample_weight} if sample_weight is not None else {}
+            estimator.fit(X_safe, y_fit, **fit_kwargs)
+            self.model = estimator
+            self._decision_info = DecisionInfo(calibrated=False, threshold=None)
+        elif policy:
+            # Binary/multiclass: compose calibration + (binary) threshold around the estimator
+            # and fit, all leakage-safe (CV on TRAIN only). See classifyos.models.decision.
+            self.model, self._decision_info = fit_policy(
+                estimator,
+                X_safe,
+                y_fit,
+                problem_type=self.problem_type,
+                sample_weight=sample_weight,
+                **policy,
+            )
+        else:
+            # No policy configured — the historical plain fit (0.5 argmax, uncalibrated).
+            fit_kwargs = {"sample_weight": sample_weight} if sample_weight is not None else {}
+            estimator.fit(X_safe, y_fit, **fit_kwargs)
+            self.model = estimator
+            self._decision_info = DecisionInfo(
+                calibrated=False,
+                threshold=0.5 if self.problem_type == "binary" else None,
+            )
 
         if self._label_encoder is not None:
             self.classes_ = np.asarray(self._label_encoder.classes_)
         else:
-            self.classes_ = np.asarray(estimator.classes_)
+            self.classes_ = np.asarray(self.model.classes_)
         return self
 
     def predict(self, X: Any) -> np.ndarray:
@@ -138,8 +199,14 @@ class _SklearnEstimatorWrapper(ModelWrapper):
         return proba
 
     def feature_importance(self) -> dict[str, float] | None:
-        """Return ``{feature: importance}`` from the estimator, or ``None``."""
-        importances = self._extract_importances(self.model)
+        """Return ``{feature: importance}`` from the estimator, or ``None``.
+
+        The calibration / threshold meta-estimators do not expose ``coef_`` /
+        ``feature_importances_``, so unwrap to the underlying fitted estimator first — this
+        keeps native importance working on a calibrated or thresholded run (otherwise it would
+        silently vanish for every model the moment calibration is enabled).
+        """
+        importances = self._extract_importances(unwrap_base_estimator(self.model))
         if importances is None:
             return None
         return {

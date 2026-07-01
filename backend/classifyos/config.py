@@ -68,6 +68,28 @@ TUNING_METRICS = (
 #: ``pr_auc`` on multiclass, ``log_loss`` on multilabel) yields no importances for that run.
 PERMUTATION_METRICS = TUNING_METRICS
 
+# --- decision policy: probability calibration + decision threshold -------------------
+#: Decision-threshold modes (binary problems only — multiclass/multilabel always use the
+#: argmax / per-label 0.5 and ignore ``threshold``/``threshold_mode``):
+#:   ``default`` — sklearn's built-in 0.5 argmax (the historical behaviour);
+#:   ``fixed``   — apply the analyst-supplied ``threshold`` as the positive-class cutoff;
+#:   ``tuned``   — pick the cutoff that maximises ``threshold_metric`` on internal CV folds
+#:                 of the TRAIN split (sklearn ``TunedThresholdClassifierCV``; leakage-safe —
+#:                 the held-out test set is never used to choose the operating point).
+THRESHOLD_MODES = ("default", "fixed", "tuned")
+#: Metrics a TUNED threshold may maximise. These are sklearn scorer names that depend on the
+#: hard label prediction, so sweeping the cutoff actually changes the score — ranking metrics
+#: like ROC-AUC / average-precision are threshold-INDEPENDENT and are therefore excluded.
+THRESHOLD_METRICS = (
+    "f1",
+    "f1_weighted",
+    "f1_macro",
+    "balanced_accuracy",
+    "accuracy",
+    "precision",
+    "recall",
+)
+
 # --- user-defined feature engineering (UserFeatureBuilder) ---------------------------
 # Fixed allowlists for STRUCTURED user features. The user picks
 # [column(s)] + [operation from these allowlists] + [a new name]; the engine applies
@@ -114,7 +136,22 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "scaling_method": "standard",
     "outlier_method": "iqr",
     "high_cardinality_threshold": 20,
+    # --- decision policy (binary problems) ---
+    # ``threshold_mode`` chooses how predicted probabilities become a positive-class label:
+    #   "default" → sklearn's 0.5 argmax (historical behaviour);
+    #   "fixed"   → use ``threshold`` (below) as the cutoff;
+    #   "tuned"   → maximise ``threshold_metric`` on internal CV folds of TRAIN
+    #               (TunedThresholdClassifierCV — leakage-safe, never sees the test set).
+    # ``threshold`` is consumed ONLY in "fixed" mode; ``threshold_metric`` ONLY in "tuned".
+    # Multiclass/multilabel ignore all three (argmax / per-label 0.5). The effective operating
+    # threshold actually used by each model is reported back on the run result.
     "threshold": 0.5,
+    "threshold_mode": "default",
+    "threshold_metric": "f1",
+    # When True, each model's probabilities are calibrated via CalibratedClassifierCV (fit on
+    # the TRAIN split only — leakage-safe) so a predicted 0.8 reflects ~80% observed frequency.
+    # Binary + multiclass; skipped for the SVM (already internally calibrated) and multilabel.
+    # [RISK] cost — calibration adds internal CV refits, so a calibrated run is slower.
     "calibrate_probs": True,
     # Metric the post-training PERMUTATION importance scores the drop in (see
     # PERMUTATION_METRICS). Default F1-weighted = the engine's primary metric. Selectable from
@@ -279,6 +316,24 @@ def _validate_config(config: dict[str, Any]) -> None:
     _require_choice(
         config["permutation_metric"], PERMUTATION_METRICS, "permutation_metric"
     )
+
+    # decision policy (calibration + threshold)
+    _require_choice(config["threshold_mode"], THRESHOLD_MODES, "threshold_mode")
+    _require_choice(config["threshold_metric"], THRESHOLD_METRICS, "threshold_metric")
+    decision_threshold = config["threshold"]
+    if (
+        not isinstance(decision_threshold, (int, float))
+        or isinstance(decision_threshold, bool)
+        or not (0.0 < decision_threshold < 1.0)
+    ):
+        raise ValueError(
+            f"'threshold' must be a number in the open interval (0, 1), "
+            f"got {decision_threshold!r}"
+        )
+    if not isinstance(config["calibrate_probs"], bool):
+        raise ValueError(
+            f"'calibrate_probs' must be a bool, got {config['calibrate_probs']!r}"
+        )
 
     threshold = config["high_cardinality_threshold"]
     if not isinstance(threshold, int) or isinstance(threshold, bool) or threshold < 1:

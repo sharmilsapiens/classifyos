@@ -418,6 +418,17 @@ class ModelRunner:
                 **params,
             )
 
+            # Decision policy (calibration + binary threshold). Applied for binary/multiclass;
+            # multilabel ignores it (the OvR indicator path uses per-label 0.5). Composed +
+            # fitted leakage-safe (CV on TRAIN only) inside the wrapper — see models/decision.
+            if problem_type != "multilabel" and hasattr(model, "set_decision_policy"):
+                model.set_decision_policy(
+                    calibrate=bool(cfg.get("calibrate_probs", True)),
+                    threshold_mode=cfg.get("threshold_mode", "default"),
+                    threshold=float(cfg.get("threshold", 0.5)),
+                    threshold_metric=cfg.get("threshold_metric", "f1"),
+                )
+
             if problem_type == "multilabel":
                 # Fit on the binary indicator matrix (OneVsRest, one estimator per label);
                 # evaluate against the indicator truth. y_train/y_test stay the delimited
@@ -452,6 +463,7 @@ class ModelRunner:
             self.models_[model.name] = model
             self.metrics_[model.name] = metrics
 
+            info = getattr(model, "_decision_info", None)
             row = {
                 "model": model.name,
                 "status": "ok",
@@ -466,6 +478,10 @@ class ModelRunner:
                 "mcc": metrics.get("mcc"),
                 "log_loss": metrics.get("log_loss"),
                 **_train_row(train_metrics),
+                # Decision policy outcome (binary threshold + calibration status). The effective
+                # operating threshold is None for multiclass/multilabel (no single scalar cut).
+                "decision_threshold": info.threshold if info is not None else None,
+                "calibrated": bool(info.calibrated) if info is not None else None,
                 "error": None,
             }
             logger.info(
@@ -491,6 +507,8 @@ class ModelRunner:
                 "mcc": None,
                 "log_loss": None,
                 **_train_row(None),
+                "decision_threshold": None,
+                "calibrated": None,
                 "error": f"{type(exc).__name__}: {exc}",
             }
             return row, None
@@ -741,6 +759,14 @@ class ModelRunner:
             "algorithms": list(cfg.get("algorithms", [])),
             "class_balance": cfg.get("class_balance"),
             "tuning": tuning_profile,
+            # Decision policy as REQUESTED (the per-model effective threshold reached lives on
+            # the metrics rows / API). Display + governance only.
+            "decision_policy": {
+                "calibrate_probs": bool(cfg.get("calibrate_probs", True)),
+                "threshold_mode": cfg.get("threshold_mode", "default"),
+                "threshold": cfg.get("threshold"),
+                "threshold_metric": cfg.get("threshold_metric"),
+            },
             "class_weight": (
                 {str(k): float(v) for k, v in class_weight.items()}
                 if class_weight

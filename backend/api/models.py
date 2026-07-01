@@ -188,7 +188,13 @@ class RunConfig(BaseModel):
     scaling_method: str = "standard"
     outlier_method: str = "iqr"
     high_cardinality_threshold: int = 20
+    # Decision policy (binary problems). ``threshold`` is the cutoff used in "fixed" mode;
+    # ``threshold_mode`` ∈ {"default","fixed","tuned"}; ``threshold_metric`` is the metric a
+    # "tuned" threshold maximises. ``calibrate_probs`` toggles probability calibration.
+    # All are forwarded to build_config, the authoritative validator of the allowed values.
     threshold: float = 0.5
+    threshold_mode: str = "default"
+    threshold_metric: str = "f1"
     calibrate_probs: bool = True
     random_state: int = 42
     # Metric the post-training permutation importance scores the drop in (request-side only;
@@ -310,6 +316,12 @@ class ModelMetrics(BaseModel):
     mcc: float | None = None
     # NEW in schema 1.2 (additive): pre-balance TRAIN headline metrics. Always present.
     train: TrainMetrics | None = None
+    # NEW in schema 1.5 (additive): the decision policy actually applied to this model.
+    # ``decision_threshold`` is the effective positive-class operating threshold for a BINARY
+    # problem (tuned best / fixed value / 0.5 default); ``null`` for multiclass/multilabel and
+    # for failed models. ``calibrated`` is whether the probabilities are calibrated.
+    decision_threshold: float | None = None
+    calibrated: bool | None = None
     error: str | None = None
 
 
@@ -464,6 +476,8 @@ class RunResponse(BaseModel):
     #     per-model post-training importance).
     # 1.4 (additive): added the optional ``result.permutation_importance`` block (model-agnostic
     #     per-model permutation importance, covering all models). All earlier fields unchanged.
-    schema_version: str = "1.4"
+    # 1.5 (additive): added ``result.models[].decision_threshold`` + ``.calibrated`` (the
+    #     decision policy applied per model). All earlier fields unchanged.
+    schema_version: str = "1.5"
     result: RunResult | None = None
     error: str | None = None

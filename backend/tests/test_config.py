@@ -69,6 +69,35 @@ def test_build_config_permutation_metric() -> None:
         build_config("f.csv", "will_lapse", ["age"], permutation_metric="not_a_metric")
 
 
+def test_build_config_decision_policy() -> None:
+    """Decision-policy keys default sensibly, accept valid values, and reject junk."""
+    base = build_config("f.csv", "will_lapse", ["age"])
+    assert base["threshold_mode"] == "default"
+    assert base["threshold"] == 0.5
+    assert base["threshold_metric"] == "f1"
+    assert base["calibrate_probs"] is True
+
+    cfg = build_config(
+        "f.csv", "will_lapse", ["age"],
+        threshold_mode="tuned", threshold_metric="balanced_accuracy",
+        threshold=0.7, calibrate_probs=False,
+    )
+    assert cfg["threshold_mode"] == "tuned"
+    assert cfg["threshold_metric"] == "balanced_accuracy"
+    assert cfg["threshold"] == 0.7
+    assert cfg["calibrate_probs"] is False
+
+    with pytest.raises(ValueError, match="threshold_mode"):
+        build_config("f.csv", "will_lapse", ["age"], threshold_mode="auto")
+    with pytest.raises(ValueError, match="threshold_metric"):
+        build_config("f.csv", "will_lapse", ["age"], threshold_metric="roc_auc")
+    for bad in (0.0, 1.0, 1.5, -0.1, True):
+        with pytest.raises(ValueError, match="'threshold'"):
+            build_config("f.csv", "will_lapse", ["age"], threshold=bad)
+    with pytest.raises(ValueError, match="calibrate_probs"):
+        build_config("f.csv", "will_lapse", ["age"], calibrate_probs="yes")
+
+
 def test_default_config_not_mutated() -> None:
     snapshot = copy.deepcopy(DEFAULT_CONFIG)
     cfg = build_config("f.csv", "will_lapse", ["age"], scaling_method="robust")
