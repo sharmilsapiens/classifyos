@@ -21,6 +21,7 @@ ARTIFACT_KEYS: tuple[str, ...] = (
     "feature_impact_summary.csv",   # ranked raw feature impact, pre-training (Section 5)
     "feature_importance_summary.csv",  # native per-model importance, post-training (Section 15)
     "permutation_importance_summary.csv",  # model-agnostic permutation importance, post-training
+    "explanations_summary.csv",     # per-row SHAP contributions (only when explainability is enabled)
     "run_profile.json",             # audit record of the run (Section 15)
     "plot1_confusion_matrix.png",   # Section 14
     "plot2_roc_pr_curves.png",      # Section 14

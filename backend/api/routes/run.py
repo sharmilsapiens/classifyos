@@ -105,6 +105,7 @@ def _build_result(runner: ModelRunner, storage: StorageAdapter) -> dict[str, Any
         "tuning": _tuning(runner),
         "feature_importance": _feature_importance(runner),
         "permutation_importance": _permutation_importance(runner),
+        "explanations": _explanations(runner),
     }
 
 
@@ -325,6 +326,37 @@ def _permutation_importance(
             {"feature": feature, "importance": float(value), "rank": rank}
             for rank, (feature, value) in enumerate(ranked, start=1)
         ]
+    return out or None
+
+
+def _explanations(runner: ModelRunner) -> dict[str, dict[str, Any]] | None:
+    """``result.explanations`` — per-row SHAP explanations (NEW in schema 1.6, additive).
+
+    Passes through the runner's ``explanations_`` ({model: {"method", "rows": [...]} | None}),
+    LOCAL explainability — why the model predicted what it did for individual held-out test
+    rows. Present only when the opt-in ``explainability`` config was enabled; a model whose
+    explainer failed (or multilabel, unsupported in v1) is omitted. Returns ``None`` when no
+    model produced any, so a run without explainability matches the earlier schema exactly.
+    No ML here — pure plumbing of values the engine already computed (post-training; no refit).
+    """
+    by_model = getattr(runner, "explanations_", None) or {}
+    out: dict[str, dict[str, Any]] = {}
+    for name, result in by_model.items():
+        if not result or not result.get("rows"):  # None (failed/off) or no rows
+            continue
+        out[name] = {
+            "method": result["method"],
+            "rows": [
+                {
+                    "sample_index": row["sample_index"],
+                    "explained_class": row["explained_class"],
+                    "base_value": row["base_value"],
+                    "prediction": row["prediction"],
+                    "contributions": row["contributions"],
+                }
+                for row in result["rows"]
+            ],
+        }
     return out or None
 
 

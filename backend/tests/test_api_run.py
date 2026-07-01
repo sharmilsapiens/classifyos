@@ -26,6 +26,7 @@ RESULT_KEYS = {
     "tuning",  # NEW in schema 1.1 (additive); null on a non-tuning run
     "feature_importance",  # NEW in schema 1.3 (additive); per-model native importance
     "permutation_importance",  # NEW in schema 1.4 (additive); model-agnostic permutation importance
+    "explanations",  # NEW in schema 1.6 (additive); per-row SHAP (null when explainability OFF)
 }
 
 RUN_KEYS = {
@@ -132,7 +133,7 @@ def test_binary_run_envelope(binary_run_response) -> None:
     assert binary_run_response.status_code == 200
     body = binary_run_response.json()
     assert body["status"] == "ok"
-    assert body["schema_version"] == "1.5"
+    assert body["schema_version"] == "1.6"
     assert RESULT_KEYS == set(body["result"].keys())
 
 
@@ -171,6 +172,52 @@ def test_binary_run_permutation_importance_block(binary_run_response) -> None:
 def test_non_tuning_run_has_null_tuning(binary_run_response) -> None:
     """A run with tuning OFF (the default) carries ``result.tuning`` as null (1.1 additive)."""
     assert binary_run_response.json()["result"]["tuning"] is None
+
+
+def test_explainability_off_by_default(binary_run_response) -> None:
+    """With explainability OFF (the default), ``result.explanations`` is null (1.6 additive)."""
+    assert binary_run_response.json()["result"]["explanations"] is None
+
+
+def test_explanations_block_shape_and_additivity(explain_run_response) -> None:
+    """``result.explanations`` (1.6) carries per-row SHAP for BOTH explainer families.
+
+    RandomForest → ``shap.TreeExplainer``; LogisticRegression → ``shap.KernelExplainer``. Each
+    explained row is additive: ``base_value + Σ contributions == prediction`` (the waterfall
+    lands exactly on the prediction).
+    """
+    assert explain_run_response.status_code == 200
+    body = explain_run_response.json()
+    assert body["schema_version"] == "1.6"
+    expl = body["result"]["explanations"]
+    assert isinstance(expl, dict) and set(expl) == {"RandomForest", "LogisticRegression"}
+    assert expl["RandomForest"]["method"] == "shap.TreeExplainer"
+    assert expl["LogisticRegression"]["method"] == "shap.KernelExplainer"
+    for model in ("RandomForest", "LogisticRegression"):
+        rows = expl[model]["rows"]
+        assert len(rows) == 3  # sample_rows
+        for row in rows:
+            assert set(row) == {
+                "sample_index",
+                "explained_class",
+                "base_value",
+                "prediction",
+                "contributions",
+            }
+            recon = row["base_value"] + sum(row["contributions"].values())
+            assert math.isclose(recon, row["prediction"], abs_tol=1e-6)
+
+
+def test_explanations_summary_artifact_present_when_enabled(explain_run_response) -> None:
+    """The ``explanations_summary.csv`` artifact is listed only when explainability was on."""
+    names = {a["name"] for a in explain_run_response.json()["result"]["artifacts"]}
+    assert "explanations_summary.csv" in names
+
+
+def test_run_bad_explainability_is_422(api_client) -> None:
+    """An invalid explainability sub-field is rejected at the boundary (422, not 500)."""
+    body = {**_VALID, "explainability": {"enabled": True, "sample_rows": 0}}
+    assert api_client.post("/api/v1/run", json=body).status_code == 422
 
 
 def test_binary_run_meta_block(binary_run_response) -> None:
@@ -253,7 +300,7 @@ def test_tuned_threshold_run_reports_operating_point(api_client) -> None:
         threshold_mode="tuned", threshold_metric="f1",
     )
     body = api_client.post("/api/v1/run", json=payload).json()
-    assert body["schema_version"] == "1.5"
+    assert body["schema_version"] == "1.6"
     ok = [m for m in body["result"]["models"] if m["status"] == "ok"]
     assert ok
     for m in ok:
@@ -416,7 +463,7 @@ def test_tuned_run_exposes_best_params(api_client) -> None:
     resp = api_client.post("/api/v1/run", json=payload)
     assert resp.status_code == 200
     body = resp.json()
-    assert body["schema_version"] == "1.5"
+    assert body["schema_version"] == "1.6"
 
     tuning = body["result"]["tuning"]
     assert tuning is not None
@@ -467,8 +514,8 @@ def test_run_with_user_features_creates_columns(api_client) -> None:
     body = resp.json()
     assert body["status"] == "ok"
     # user_features is request-side only — it adds no response field of its own; the version
-    # reflects the current contract default (1.5).
-    assert body["schema_version"] == "1.5"
+    # reflects the current contract default (1.6).
+    assert body["schema_version"] == "1.6"
     active = body["result"]["run"]["active_features"]
     assert "premium_per_sum" in active
     assert "start_year" in active

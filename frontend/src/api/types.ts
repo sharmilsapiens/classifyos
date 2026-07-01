@@ -48,6 +48,15 @@ export interface TuningConfig {
   search_space_overrides: Record<string, unknown>
 }
 
+/** Per-row SHAP explainability dials. OFF by default (opt-in — KernelExplainer has cost). */
+export interface ExplainabilityConfig {
+  enabled: boolean
+  /** first N held-out TEST rows per model to explain. */
+  sample_rows: number
+  /** TRAIN rows sampled as the SHAP reference distribution. */
+  background_size: number
+}
+
 export type ProblemType = "binary" | "multiclass" | "multilabel"
 export type ClassBalance = "smote" | "undersample" | "class_weight" | "none"
 
@@ -116,6 +125,8 @@ export interface RunConfig {
   feature_engineering: FeatureEngineeringConfig
   interaction_features: InteractionFeaturesConfig
   tuning: TuningConfig
+  /** OPTIONAL; opt-in per-row SHAP → result.explanations (schema 1.6). OFF → block absent. */
+  explainability: ExplainabilityConfig
   /** OPTIONAL; [] / omitted → no user-defined features (request unchanged). */
   user_features: UserFeatureSpec[]
 }
@@ -333,6 +344,33 @@ export interface RunResult {
    * null/absent when it could not be computed for any model.
    */
   permutation_importance?: Record<string, PermutationImportanceRow[]> | null
+  /**
+   * schema 1.6 (additive): per-row SHAP explanations keyed by model — LOCAL explainability
+   * (why THIS prediction). null/absent when explainability was OFF (the default). Consumed by:
+   * Explainability.
+   */
+  explanations?: Record<string, ModelExplanation> | null
+}
+
+/** One explained held-out test row (schema 1.6). base_value + Σ contributions === prediction. */
+export interface ExplanationRow {
+  /** 0-based row position within the held-out test set. */
+  sample_index: number
+  /** class the waterfall describes — positive class (binary) / predicted class (multiclass). */
+  explained_class: string
+  /** the model's average output — the waterfall's starting point. */
+  base_value: number
+  /** base_value + Σ contributions (the SHAP-additive landing point). */
+  prediction: number
+  /** signed per-feature push toward the explained class. */
+  contributions: Record<string, number>
+}
+
+/** One model's per-row SHAP explanations (schema 1.6). */
+export interface ModelExplanation {
+  /** "shap.TreeExplainer" (tree models) | "shap.KernelExplainer" (LR/SVM/NaiveBayes). */
+  method: string
+  rows: ExplanationRow[]
 }
 
 /** Top-level envelope for POST /api/v1/run (the forward-compat seam). */

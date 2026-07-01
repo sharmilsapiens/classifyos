@@ -5,7 +5,52 @@
 > planning/overseer chat stays in sync with the local repo.
 
 **Last updated:** 2026-07-01
-**Updated by:** Claude Code (**NEW — per-column missing-value imputation (full stack, additive, request-side —
+**Updated by:** Claude Code (**NEW — Explainability REWIRED: real per-row SHAP, opt-in (full stack, additive
+`1.5 → 1.6`)**. Explainability was unwired at two levels — the UI page was hidden (unwire.md #3) *because*
+the backend was a stateless `/explain` stub deferred to a v2.0 "model persistence / MLflow" item. Both are
+now resolved by the codebase's own established pattern: compute the explanations **during the run** (while
+every model is still fitted in memory) and ship them in the `/run` response — exactly how
+`feature_importance` (1.3) and `permutation_importance` (1.4) already flow — so **no model persistence is
+needed** and the v2.0 blocker is dissolved. **Method:** new `shap` dependency (0.51.0, pinned
+`shap>=0.46,<1`); a **hallucination check** verified `TreeExplainer`/`KernelExplainer`, `shap.sample`/
+`kmeans`, and the `.values`/`base_values` vs `expected_value` shapes against the installed version,
+confirming `base_value + Σ contributions == prediction` for all six models before coding. **Engine:** new
+pure module `analysis/explain.py::explain_rows` — `shap.TreeExplainer(model_output="probability")` on the
+unwrapped base estimator (via existing `unwrap_base_estimator`) for the tree models (RF/XGB/LGBM),
+model-agnostic `shap.KernelExplainer` over `predict_proba` for LogisticRegression/SVM/NaiveBayes — so **all
+six** models are covered (vs 4 for native importance). Robust shape normalization (per-class 3-D vs
+single-output 2-D; TreeExplainer per-row base vs KernelExplainer per-class expected). [RISK] leakage-safe:
+SHAP background = a TRAIN reference sample (never fitted on); explained rows are read-only test rows;
+nothing refit. Binary explains the positive class, multiclass the predicted class, multilabel returns
+`None` (unsupported v1). `config.py` gains a default-OFF `explainability` block (`enabled`/`sample_rows`=20/
+`background_size`=100) + `_validate_explainability` (mirrors `_validate_tuning`). `ModelRunner` collects
+`explanations_` for the first `sample_rows` test rows per model when enabled (per-model try/except,
+report-only, `shap` imported lazily like optuna), and writes `explanations_summary.csv` only when enabled
+(default artifact set unchanged). **API:** `RunConfig.explainability` (forwarded to `build_config`, the
+authoritative validator → bad value = 422); new `ExplanationRow`/`ModelExplanation` Pydantic models +
+optional `result.explanations`; **`schema_version` `1.5 → 1.6` (additive)**; `explanations_summary.csv`
+added to the artifacts allowlist; `_explanations` reshape helper (pure plumbing); `/api/v1/explain` left as
+a documented stateless stub with its message now pointing at the `/run` path; `docs/api_contract.md`
+updated (header note, endpoint row, request + response examples, notes bullet, footer, version). **UI
+(undoes unwire #3):** `Explainability.tsx` rewritten to read `result.explanations` from the store (no
+`/explain` call — same pattern as TuningResults/FitDiagnostics) and draw a **real cumulative SHAP
+waterfall** (base value → each feature's signed push → prediction; red up / green down; a low-impact tail
+folded into one "Other" step so it still lands on the prediction) — replacing the old `WaterfallPlaceholder`;
+an opt-in **"Per-row explainability (SHAP)"** toggle added to the Post-training analysis card
+(`explain_enabled` in `ConfigFormState`/`buildPayload` → the `explainability` block); nav entry + route
+un-commented and the `/explainability` redirect removed; `RunConfig`/`RunResult` TS types +
+`ExplainabilityConfig`/`ExplanationRow`/`ModelExplanation` added. **Tests:** engine `test_explain.py`
+(additivity for all six models across both explainer families, no test-matrix mutation, multiclass predicted
+class, multilabel/empty → None) + config validation; API asserts (`explanations` block shape + additivity
+for both families, OFF → null, artifact present, bad config → 422, three `schema_version` `1.5 → 1.6`
+bumps incl. sweep); `test_api_explain.py` message assertions updated; frontend new `explainability.test.tsx`
+(no-run / OFF / waterfall / model-switch) + `buildPayload` toggle assert + `referencePages.test.tsx` nav
+`13 → 14` and `/explainability` re-asserted (old stub describe-block removed). **All 337 backend pytest
+green (+22) · 122 frontend vitest green · `tsc -b` + `vite build` clean.** unwire.md #3 marked **Restored
+(2026-07-01)**. **No plan_tweak entry** — additive feature realizing an owner request (the version bump is
+the sanctioned additive path) + a temporary-unwire restore, not a plan deviation; the new `shap` dependency
+is recorded here and in requirements.txt.)
+**Prior update (same day):** Claude Code (**NEW — per-column missing-value imputation (full stack, additive, request-side —
 no contract/version change)**. Extends the per-type missing-value split (2026-06-27) with an OPTIONAL
 per-column override: the single `missing_strategy_numeric`/`missing_strategy_categorical` per-type defaults
 still govern, and a new `missing_strategy_by_column` map (`{column: strategy}`, default `{}`) overrides the

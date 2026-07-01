@@ -98,6 +98,26 @@ def test_build_config_decision_policy() -> None:
         build_config("f.csv", "will_lapse", ["age"], calibrate_probs="yes")
 
 
+def test_build_config_explainability() -> None:
+    """explainability defaults OFF, accepts valid overrides, rejects bad sub-fields."""
+    base = build_config("f.csv", "will_lapse", ["age"])["explainability"]
+    assert base["enabled"] is False
+    assert base["sample_rows"] == 20 and base["background_size"] == 100
+
+    cfg = build_config(
+        "f.csv", "will_lapse", ["age"],
+        explainability={"enabled": True, "sample_rows": 5, "background_size": 30},
+    )
+    assert cfg["explainability"] == {"enabled": True, "sample_rows": 5, "background_size": 30}
+
+    with pytest.raises(ValueError, match="explainability.enabled"):
+        build_config("f.csv", "will_lapse", ["age"], explainability={"enabled": "yes"})
+    with pytest.raises(ValueError, match="explainability.sample_rows"):
+        build_config("f.csv", "will_lapse", ["age"], explainability={"sample_rows": 0})
+    with pytest.raises(ValueError, match="explainability.background_size"):
+        build_config("f.csv", "will_lapse", ["age"], explainability={"background_size": -1})
+
+
 def test_default_config_not_mutated() -> None:
     snapshot = copy.deepcopy(DEFAULT_CONFIG)
     cfg = build_config("f.csv", "will_lapse", ["age"], scaling_method="robust")

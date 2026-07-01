@@ -57,12 +57,11 @@ def explain(req: ExplainRequest) -> dict[str, object]:
         "method": None,  # v2.0: "shap.TreeExplainer" | "permutation" | ...
         "shap_values": None,  # v2.0: {feature: contribution}
         "base_value": None,  # v2.0: model expected value
-        "reason": "no_persisted_model",
+        "reason": "use_run_explanations",
         "message": (
-            "Single-row SHAP explanations require a fitted model and its processed features. "
-            "v1.0 is stateless — no model from a prior /run is held in memory and there is no "
-            "model registry — so explainability is deferred to v2.0 (model persistence / "
-            "MLflow). This response shape is final; the null fields populate once persistence "
-            "lands."
+            "On-demand single-row SHAP via this stateless endpoint would need a persisted "
+            "model (a v2.0 item). Per-row SHAP explanations are instead now produced DURING "
+            "the run — set explainability.enabled on POST /api/v1/run and read the additive "
+            "result.explanations block (schema 1.6). This endpoint remains a documented stub."
         ),
     }

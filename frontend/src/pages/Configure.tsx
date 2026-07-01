@@ -352,6 +352,11 @@ export default function Configure() {
                 {TUNING_METRICS.map((m) => <option key={m} value={m}>{m}</option>)}
               </Select>
             </Field>
+            <Field label="Per-row explainability (SHAP)"
+              hint="Opt-in: compute per-row SHAP contributions so the Explainability page can show WHY each prediction was made (all six models). Adds run time — the SVM/Naive Bayes path is the slow one.">
+              <Switch id="explain_enabled" label="Explain predictions" checked={form.explain_enabled}
+                onChange={(e) => updateForm({ explain_enabled: e.target.checked })} />
+            </Field>
           </CardContent>
         </Card>
 

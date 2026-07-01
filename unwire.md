@@ -123,7 +123,22 @@ active pipeline:
 route commented out, stale links redirect to Overview) because the backend explanation is not yet
 implemented; nothing deleted.
 
-**Status:** Unwired 2026-06-28 · still unwired.
+**Status:** Unwired 2026-06-28 · **RESTORED 2026-07-01** — and the backend explanation is now
+**real**, not just re-shown. The v1.0 blocker ("stateless API, no model persistence → deferred to
+v2.0") was dissolved by computing per-row SHAP **during the run** (while models are still fitted in
+memory) and shipping it in the `/run` response as the additive `result.explanations` block (schema
+`1.5 → 1.6`) — the same compute-during-run pattern as `feature_importance` / `permutation_importance`,
+so no model persistence / MLflow is needed. New engine module `analysis/explain.py` (SHAP:
+`TreeExplainer` for the tree models, `KernelExplainer` for LogisticRegression/SVM/NaiveBayes — all six
+covered), gated by an opt-in `explainability` config block (default OFF). The page was rewritten to
+read `result.explanations` from the store and draw a real waterfall (replacing the
+`WaterfallPlaceholder`), the nav entry + route were un-commented (the `/explainability` redirect
+removed), and the `referencePages.test.tsx` nav assertions were reverted (count `13 → 14`,
+`/explainability` back in the nav) with new coverage in `explainability.test.tsx` + `test_explain.py`.
+The `/api/v1/explain` endpoint remains a documented stateless stub (its message now points to the
+`/run` explanations path). See the 2026-07-01 PROJECT_STATE entry.
+
+_Original unwiring (for the record):_
 
 ### Short description
 

@@ -221,6 +221,19 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "timeout_seconds": None,  # per model; None = no cap (n_trials bounds the study)
         "search_space_overrides": {},  # optional per-model bound/choice overrides (engine ``_b``/``_ch``)
     },
+    # --- per-row explainability (Explainability; SHAP) ---------------------------
+    # OFF by default (opt-in). Computes local, per-row SHAP contributions during the run
+    # (models are still fitted in memory), shipped in the /run response — the same
+    # compute-during-run pattern as feature_importance / permutation_importance, so no model
+    # persistence is needed. Covers ALL six models (TreeExplainer for the tree models,
+    # KernelExplainer for LogisticRegression/SVM/NaiveBayes). [RISK] cost — KernelExplainer
+    # (SVM/NaiveBayes) is the slow path, which is why it is opt-in and bounded to a small row
+    # sample. Binary + multiclass only (multilabel returns nothing).
+    "explainability": {
+        "enabled": False,        # OFF by default
+        "sample_rows": 20,       # first N held-out TEST rows per model to explain
+        "background_size": 100,  # TRAIN rows sampled as the SHAP reference distribution
+    },
     "random_state": 42,
 }
 
@@ -356,6 +369,7 @@ def _validate_config(config: dict[str, Any]) -> None:
 
     _validate_feature_engineering(config["feature_engineering"])
     _validate_tuning(config["tuning"])
+    _validate_explainability(config["explainability"])
     _validate_user_features(config["user_features"])
 
 
@@ -423,6 +437,22 @@ def _validate_tuning(t: Any) -> None:
     overrides = t.get("search_space_overrides", {})
     if not isinstance(overrides, dict):
         raise ValueError("'tuning.search_space_overrides' must be a dict")
+
+
+def _validate_explainability(e: Any) -> None:
+    """Validate the ``explainability`` sub-dict (per-row SHAP; opt-in)."""
+    if not isinstance(e, dict):
+        raise ValueError("'explainability' must be a dict")
+    if "enabled" in e and not isinstance(e["enabled"], bool):
+        raise ValueError(f"'explainability.enabled' must be a bool, got {e['enabled']!r}")
+    for key in ("sample_rows", "background_size"):
+        value = e.get(key)
+        if value is not None and (
+            not isinstance(value, int) or isinstance(value, bool) or value < 1
+        ):
+            raise ValueError(
+                f"'explainability.{key}' must be a positive integer, got {value!r}"
+            )
 
 
 def _validate_user_features(specs: Any) -> None:

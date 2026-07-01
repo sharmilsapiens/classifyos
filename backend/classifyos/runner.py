@@ -74,6 +74,7 @@ METRICS_CSV_KEY = "metrics_comparison.csv"
 CLASS_REPORT_CSV_KEY = "class_report.csv"
 FEATURE_IMPORTANCE_CSV_KEY = "feature_importance_summary.csv"
 PERMUTATION_IMPORTANCE_CSV_KEY = "permutation_importance_summary.csv"
+EXPLANATIONS_CSV_KEY = "explanations_summary.csv"
 RUN_PROFILE_KEY = "run_profile.json"
 
 
@@ -132,6 +133,15 @@ class ModelRunner:
         #: not be computed (no feature columns / scoring error). Leakage-safe: reads test
         #: predictions only, fits nothing, never mutates the test matrix.
         self.permutation_importances_: dict[str, dict[str, float] | None] = {}
+        #: {model_name: {"method", "rows": [...]} or None} — per-row SHAP explanations for a
+        #: small sample of held-out TEST rows, computed during the run (models still fitted in
+        #: memory) when ``config["explainability"]["enabled"]`` is set; ``{}`` when OFF. This is
+        #: LOCAL explainability (why THIS prediction), complementing the two GLOBAL importance
+        #: screens above. See :mod:`classifyos.analysis.explain`. Leakage-safe: the SHAP
+        #: background is a TRAIN reference sample (never fitted on) and the explained rows are
+        #: read-only test rows; nothing is refit. ``None`` for a model whose explainer failed
+        #: or for multilabel (unsupported in v1). Report-only — never aborts the run.
+        self.explanations_: dict[str, dict[str, Any] | None] = {}
         self.X_test_: pd.DataFrame | None = None
         self.y_test_: pd.Series | None = None
         #: For multilabel runs only: the test target as a binary indicator matrix
@@ -243,6 +253,22 @@ class ModelRunner:
             metric=cfg.get("permutation_metric", "f1_weighted"),
             random_state=cfg.get("random_state", 42),
         )
+
+        # Per-row SHAP explanations (LOCAL explainability). OFF by default; computed here — while
+        # every model is still fitted in memory — when the opt-in toggle is set, so no model
+        # persistence is needed (same compute-during-run pattern as the importances above).
+        # The SHAP background is the PRE-balance TRAIN matrix (a leakage-safe reference
+        # distribution, never fitted on); the explained rows are the first ``sample_rows`` of the
+        # untouched TEST split. Per-model try/except inside the helper — report-only, never aborts.
+        expl_cfg = cfg.get("explainability", {}) or {}
+        if expl_cfg.get("enabled", False):
+            self.explanations_ = self._compute_explanations(
+                problem_type,
+                train_X,
+                sample_rows=int(expl_cfg.get("sample_rows", 20)),
+                background_size=int(expl_cfg.get("background_size", 100)),
+                random_state=cfg.get("random_state", 42),
+            )
 
         n_ok = len(self.models_)
         logger.info(
@@ -577,6 +603,13 @@ class ModelRunner:
         with self.storage.open_write(PERMUTATION_IMPORTANCE_CSV_KEY) as fh:
             permutation_df.to_csv(fh, index=False)
 
+        # per-row SHAP explanations, one (model, sample_index, feature) row each. Written ONLY
+        # when explainability was enabled (opt-in), so the default artifact set is unchanged.
+        if cfg.get("explainability", {}).get("enabled", False):
+            explanations_df = self._build_explanations_df()
+            with self.storage.open_write(EXPLANATIONS_CSV_KEY) as fh:
+                explanations_df.to_csv(fh, index=False)
+
         # run profile
         self.run_profile_ = self._build_run_profile(cfg, class_weight)
         with self.storage.open_write(RUN_PROFILE_KEY) as fh:
@@ -659,6 +692,46 @@ class ModelRunner:
                 out[name] = None
         return out
 
+    def _compute_explanations(
+        self,
+        problem_type: str,
+        X_background: pd.DataFrame,
+        *,
+        sample_rows: int,
+        background_size: int,
+        random_state: int,
+    ) -> dict[str, dict[str, Any] | None]:
+        """Per-row SHAP explanations for a small sample of test rows, per fitted model.
+
+        Explains the first ``sample_rows`` rows of the held-out TEST split (the same leading
+        rows the predictions preview shows) for each model, using ``X_background`` (the
+        pre-balance TRAIN matrix) as the SHAP reference distribution. Each model is computed
+        in its own try/except: a failure is logged and recorded as ``None`` so one bad model
+        (or the whole opt-in step) never aborts the run. Returns ``{}`` if there is nothing to
+        explain. See :func:`classifyos.analysis.explain.explain_rows` for the leakage note.
+        """
+        from .analysis.explain import explain_rows
+
+        if self.X_test_ is None or self.X_test_.empty or not self.models_:
+            return {}
+
+        X_explain = self.X_test_.head(max(1, sample_rows))
+        out: dict[str, dict[str, Any] | None] = {}
+        for name, model in self.models_.items():
+            try:
+                out[name] = explain_rows(
+                    model,
+                    X_background,
+                    X_explain,
+                    problem_type,
+                    background_size=background_size,
+                    random_state=random_state,
+                )
+            except Exception:  # noqa: BLE001 — report-only; never abort the run
+                logger.exception("ModelRunner: SHAP explanation failed for %r", name)
+                out[name] = None
+        return out
+
     def _build_feature_importance_df(self) -> pd.DataFrame:
         """Flatten each model's native feature importance into ranked long-form rows.
 
@@ -712,6 +785,44 @@ class ModelRunner:
                         "rank": rank,
                     }
                 )
+        return pd.DataFrame(rows, columns=columns)
+
+    def _build_explanations_df(self) -> pd.DataFrame:
+        """Flatten the per-row SHAP explanations into long-form rows for the CSV artifact.
+
+        One row per (model, sample_index, feature) with that feature's signed contribution,
+        plus the row's ``explained_class`` / ``base_value`` / ``prediction`` repeated for
+        context (``base_value + Σ contribution == prediction`` within each model+row group).
+        Models with no explanation (failed / multilabel / OFF) contribute no rows. Returns an
+        empty frame with the locked columns when there is nothing, so the CSV — written only
+        when explainability is enabled — always has a stable header.
+        """
+        columns = [
+            "model",
+            "sample_index",
+            "explained_class",
+            "base_value",
+            "prediction",
+            "feature",
+            "contribution",
+        ]
+        rows: list[dict[str, Any]] = []
+        for name, result in self.explanations_.items():
+            if not result or not result.get("rows"):
+                continue
+            for row in result["rows"]:
+                for feature, contribution in row["contributions"].items():
+                    rows.append(
+                        {
+                            "model": name,
+                            "sample_index": row["sample_index"],
+                            "explained_class": row["explained_class"],
+                            "base_value": row["base_value"],
+                            "prediction": row["prediction"],
+                            "feature": feature,
+                            "contribution": float(contribution),
+                        }
+                    )
         return pd.DataFrame(rows, columns=columns)
 
     def _build_run_profile(

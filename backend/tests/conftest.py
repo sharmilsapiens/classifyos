@@ -308,6 +308,25 @@ def binary_run_response(api_client) -> Any:
 
 
 @pytest.fixture(scope="session")
+def explain_run_response(api_client) -> Any:
+    """Run the binary pipeline once with explainability ON (schema 1.6).
+
+    RandomForest exercises the ``shap.TreeExplainer`` path and LogisticRegression the
+    model-agnostic ``shap.KernelExplainer`` path, so both explainer families are covered.
+    ``sample_rows`` is kept small so the (slower) kernel path stays cheap in CI.
+    """
+    payload = _run_payload(
+        "policy_lapse.csv",
+        "will_lapse",
+        LAPSE_FEATURES,
+        problem_type="binary",
+        algorithms=["RandomForest", "LogisticRegression"],
+        explainability={"enabled": True, "sample_rows": 3, "background_size": 40},
+    )
+    return api_client.post("/api/v1/run", json=payload)
+
+
+@pytest.fixture(scope="session")
 def multiclass_run_response(api_client) -> Any:
     """Run the multiclass risk-tier pipeline once over HTTP."""
     payload = _run_payload(

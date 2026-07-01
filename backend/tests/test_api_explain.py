@@ -26,11 +26,12 @@ def test_explain_returns_structured_stub(api_client) -> None:
     assert body["schema_version"] == "1.0"
     assert body["model"] == "RandomForest"
     assert body["sample_index"] == 3
-    # The final-shape fields exist but are null in v1.0.
+    # The final-shape fields exist but are null in this stub.
     for key in ("method", "shap_values", "base_value"):
         assert key in body and body[key] is None
-    assert body["reason"] == "no_persisted_model"
-    assert "v2.0" in body["message"]
+    # Per-row SHAP now ships via /run (schema 1.6); this endpoint points there.
+    assert body["reason"] == "use_run_explanations"
+    assert "result.explanations" in body["message"]
 
 
 @pytest.mark.parametrize("model", ["XGBoost", "LightGBM", "SVM", "NaiveBayes"])

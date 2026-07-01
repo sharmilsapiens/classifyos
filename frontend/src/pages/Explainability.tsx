@@ -1,63 +1,74 @@
-/* Explainability — single-row SHAP (v1.0 structured stub).
+/* Explainability — per-row SHAP (schema 1.6).
 
-   Honest constraint (see docs/api_contract.md, api_short_desc.md, plan_tweak #29):
-   a FastAPI process holds NO trained model between requests, and v1.0 has no model
-   registry. So /explain cannot produce a real SHAP explanation yet — it returns a
-   structured "unavailable" payload (status:"unavailable", method/shap_values/
-   base_value = null, a reason + a plain-language message). Real SHAP is a v2.0 item
-   (model persistence / MLflow).
+   LOCAL explainability: "why did the model predict THIS for this one row?" —
+   the reason-code / adverse-action view an underwriter or claims adjuster needs.
 
-   This page is built to present that honestly — NOT to fake a waterfall over empty
-   data:
-   • You still pick a model + a test-row index and hit "Explain", so the real
-     client → /explain path is exercised end to end (v2.0 only has to fill the
-     fields, not rebuild this page).
-   • The structured stub response is then shown cleanly as an intentional
-     "coming in v2.0" state, surfacing the server's own reason/message.
-   • The region where the SHAP waterfall WILL render is left clearly stubbed (see
-     <WaterfallPlaceholder> below) so a future real response drops into an
-     already-designed layout.
+   The explanations are computed DURING the run (while every model is still fitted
+   in memory) and shipped in the /run response as `result.explanations` — the same
+   compute-during-run pattern as feature_importance / permutation_importance. So
+   this page just reads them from the store (no /explain call, no model
+   persistence). It renders three honest states:
 
-   We read the model list / features / target from the last /run result in the
-   store (so the picker reflects what actually trained); input_file comes from the
-   uploaded dataset's server_path. */
+     1. NO RUN            — handled by <ResultGate>.
+     2. NOT COMPUTED      — a run exists but explainability was OFF (the default):
+                            a clear "enable it and re-run" message.
+     3. EXPLANATIONS ON   — a model + row picker driving a real SHAP waterfall:
+                            base value → each feature's signed push → the prediction
+                            (base_value + Σ contributions == prediction, exactly).
+
+   Covers all six models (TreeExplainer for the tree models, KernelExplainer for
+   LogisticRegression / SVM / NaiveBayes). Binary explains the positive class;
+   multiclass explains the predicted class. Multilabel produces nothing (omitted). */
 
 import { useState } from "react"
 import { Link } from "react-router-dom"
-import { Lightbulb, Sparkles } from "lucide-react"
 
-import { useApp } from "@/store/AppStore"
-import * as api from "@/api/client"
-import { ApiError } from "@/api/client"
-import type { ExplainResponse } from "@/api/types"
-import { okModelNames } from "@/lib/results"
+import type { ExplanationRow, ModelExplanation } from "@/api/types"
+import { ResultGate } from "@/components/results/ResultGate"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
-import { Button, buttonVariants } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
+import { buttonVariants } from "@/components/ui/button"
 import { Label } from "@/components/ui/label"
 import { Select } from "@/components/ui/select"
-import { EmptyState, ErrorState, PageHeader, Spinner } from "@/components/common/States"
+import { EmptyState, PageHeader } from "@/components/common/States"
+
+/** Most feature bars to draw before the remainder is folded into one "Other" step. */
+const MAX_BARS = 12
 
 export default function Explainability() {
-  const { result, serverPath, form } = useApp()
-  const run = result?.result
+  return (
+    <ResultGate
+      title="Explainability"
+      subtitle="Why did the model predict this for one row? (per-row SHAP)"
+    >
+      {(run) => <ExplainabilityBody explanations={run.explanations ?? null} />}
+    </ResultGate>
+  )
+}
 
-  // Need a completed run to know which models trained and on what features.
-  if (!run) {
+function ExplainabilityBody({
+  explanations,
+}: {
+  explanations: Record<string, ModelExplanation> | null
+}) {
+  const models = explanations ? Object.keys(explanations) : []
+  const [model, setModel] = useState(models[0] ?? "")
+  const [rowIdx, setRowIdx] = useState(0)
+
+  // State 2 — a run exists, but explainability was OFF (block null/absent or empty).
+  if (!explanations || models.length === 0) {
     return (
       <div>
-        <PageHeader title="Explainability" subtitle="Per-row SHAP — a v1.0 stub (real in v2.0)." />
+        <PageHeader
+          title="Explainability"
+          subtitle="Per-row SHAP explanations for the last run."
+        />
         <EmptyState
-          title="No run yet"
-          description={
-            serverPath
-              ? "Run a pipeline first — then you can pick a trained model and a row to (try to) explain."
-              : "Upload a dataset and run a pipeline, then return here to exercise the /explain endpoint."
-          }
+          title="Explainability was not computed for this run"
+          description="Per-row SHAP is opt-in (it adds run time). Turn on 'Per-row explainability (SHAP)' under Post-training analysis in Configuration, then run again to see, for each prediction, which features pushed it up or down."
           action={
-            <Link to={serverPath ? "/configure" : "/upload"} className={buttonVariants({ size: "sm" })}>
-              {serverPath ? "Configure a run" : "Upload data"}
+            <Link to="/configure" className={buttonVariants({ size: "sm" })}>
+              Open Configuration
             </Link>
           }
         />
@@ -65,239 +76,170 @@ export default function Explainability() {
     )
   }
 
-  return (
-    <ExplainabilityBody
-      models={okModelNames(run.models)}
-      features={run.run.features}
-      target={run.run.target}
-      inputFile={serverPath ?? form.input_file}
-      testRows={run.run.n_test}
-    />
-  )
-}
-
-function ExplainabilityBody({
-  models,
-  features,
-  target,
-  inputFile,
-  testRows,
-}: {
-  models: string[]
-  features: string[]
-  target: string
-  inputFile: string
-  testRows: number
-}) {
-  const [model, setModel] = useState(models[0] ?? "")
-  const [sampleIndex, setSampleIndex] = useState(0)
-  const [loading, setLoading] = useState(false)
-  const [response, setResponse] = useState<ExplainResponse | null>(null)
-  const [error, setError] = useState<string | null>(null)
-
-  const maxIndex = Math.max(0, testRows - 1)
-
-  async function onExplain() {
-    setLoading(true)
-    setError(null)
-    setResponse(null)
-    try {
-      // The real client call — proves the wiring even though v1.0 returns a stub.
-      const res = await api.explain({
-        input_file: inputFile,
-        target,
-        feature_cols: features,
-        model,
-        sample_index: sampleIndex,
-      })
-      setResponse(res)
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Unexpected error calling /explain.")
-    } finally {
-      setLoading(false)
-    }
-  }
+  const selected = explanations[model] ?? explanations[models[0]]
+  const rows = selected?.rows ?? []
+  const row = rows[Math.min(rowIdx, rows.length - 1)] ?? rows[0]
 
   return (
     <div>
       <PageHeader
         title="Explainability"
-        subtitle="Why did the model predict this for one row? (single-row SHAP)"
-        actions={<Badge variant="warning">v1.0 stub</Badge>}
+        subtitle="Why did the model predict this for one row? (per-row SHAP)"
+        actions={selected ? <Badge variant="secondary">{selected.method}</Badge> : undefined}
       />
 
-      {/* The honest framing — set expectations before the controls. */}
-      <div className="mb-5 flex items-start gap-3 rounded-lg border border-primary/30 bg-accent p-4">
-        <Lightbulb className="mt-0.5 h-5 w-5 shrink-0 text-primary" aria-hidden />
-        <div className="text-sm">
-          <p className="font-semibold text-foreground">Explainability is coming in v2.0</p>
-          <p className="mt-0.5 text-muted-foreground">
-            A SHAP explanation needs a <em>fitted</em> model kept in memory. The API is stateless —
-            it holds no model between requests and has no model registry yet — so single-row SHAP is
-            deferred to v2.0 (model persistence / MLflow). You can still run the request below: it
-            calls the real <code className="font-mono">/explain</code> endpoint and shows its
-            structured response, so the wiring is proven and v2.0 only has to fill in the values.
-          </p>
+      <div className="mb-5 grid grid-cols-1 gap-4 sm:grid-cols-[1fr_1fr]">
+        <div className="space-y-1.5">
+          <Label htmlFor="explain-model">Model</Label>
+          <Select
+            id="explain-model"
+            value={model}
+            onChange={(e) => {
+              setModel(e.target.value)
+              setRowIdx(0)
+            }}
+          >
+            {models.map((m) => (
+              <option key={m} value={m}>
+                {m}
+              </option>
+            ))}
+          </Select>
+        </div>
+        <div className="space-y-1.5">
+          <Label htmlFor="explain-row">Test row</Label>
+          <Select
+            id="explain-row"
+            value={String(rowIdx)}
+            onChange={(e) => setRowIdx(Number(e.target.value))}
+          >
+            {rows.map((r, i) => (
+              <option key={r.sample_index} value={String(i)}>
+                Row {r.sample_index}
+              </option>
+            ))}
+          </Select>
         </div>
       </div>
 
-      <div className="grid grid-cols-1 gap-5 lg:grid-cols-[360px_1fr]">
-        {/* Controls */}
-        <Card>
-          <CardHeader>
-            <CardTitle>Explain a prediction</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="space-y-1.5">
-              <Label htmlFor="explain-model">Model</Label>
-              <Select
-                id="explain-model"
-                value={model}
-                onChange={(e) => setModel(e.target.value)}
-                disabled={models.length === 0}
-              >
-                {models.length === 0 ? (
-                  <option value="">No successful models</option>
-                ) : (
-                  models.map((m) => (
-                    <option key={m} value={m}>
-                      {m}
-                    </option>
-                  ))
-                )}
-              </Select>
-            </div>
-
-            <div className="space-y-1.5">
-              <Label htmlFor="explain-row">Test row index (0–{maxIndex})</Label>
-              <Input
-                id="explain-row"
-                type="number"
-                min={0}
-                max={maxIndex}
-                value={sampleIndex}
-                onChange={(e) => {
-                  const n = Number(e.target.value)
-                  // Clamp into the valid test-row range.
-                  setSampleIndex(Number.isFinite(n) ? Math.min(maxIndex, Math.max(0, Math.trunc(n))) : 0)
-                }}
-              />
-              <p className="text-xs text-muted-foreground">
-                The row in the held-out test set to explain ({testRows.toLocaleString("en-US")} rows).
-              </p>
-            </div>
-
-            <Button onClick={onExplain} disabled={loading || !model} className="w-full">
-              {loading ? <Spinner className="h-4 w-4" /> : <Sparkles className="h-4 w-4" />}
-              Explain
-            </Button>
-          </CardContent>
-        </Card>
-
-        {/* Response / waterfall region */}
-        <Card>
-          <CardHeader>
-            <CardTitle>Explanation</CardTitle>
-          </CardHeader>
-          <CardContent>
-            {error ? (
-              <ErrorState title="Could not reach /explain" message={error} onRetry={onExplain} />
-            ) : loading ? (
-              <div className="flex items-center gap-2 py-10 text-sm text-muted-foreground">
-                <Spinner className="h-4 w-4 text-primary" />
-                Calling /explain…
-              </div>
-            ) : response ? (
-              <ExplainResult response={response} />
-            ) : (
-              <p className="py-10 text-center text-sm text-muted-foreground">
-                Pick a model and a row, then hit <span className="font-medium">Explain</span> to call
-                the endpoint.
-              </p>
-            )}
-          </CardContent>
-        </Card>
-      </div>
+      {row ? (
+        <Waterfall row={row} />
+      ) : (
+        <EmptyState
+          title="No explained rows"
+          description="This model produced no per-row explanations for the run."
+        />
+      )}
     </div>
   )
 }
 
-/** Render the structured /explain response. In v1.0 this is the "unavailable"
- *  stub; the layout is shaped so a future real response (shap_values + base_value)
- *  drops straight into the waterfall region below. */
-function ExplainResult({ response }: { response: ExplainResponse }) {
-  const isUnavailable = response.status === "unavailable"
-
-  return (
-    <div className="space-y-4">
-      {/* Status line — what the server said about this request. */}
-      <div className="flex flex-wrap items-center gap-2 text-sm">
-        <Badge variant={isUnavailable ? "warning" : "success"}>{response.status}</Badge>
-        <span className="font-mono">{response.model}</span>
-        <span className="text-muted-foreground">· row {response.sample_index}</span>
-        <span className="text-muted-foreground">· schema {response.schema_version}</span>
-      </div>
-
-      {/* The server's own plain-language message (don't paraphrase it). */}
-      {response.message && (
-        <p className="rounded-md border bg-muted/40 p-3 text-sm text-muted-foreground">
-          {response.message}
-        </p>
-      )}
-      {response.reason && (
-        <p className="text-xs text-muted-foreground">
-          reason: <span className="font-mono">{response.reason}</span>
-        </p>
-      )}
-
-      <WaterfallPlaceholder response={response} />
-    </div>
-  )
+/** A signed, fixed-precision number with an explicit + / − (so pushes read clearly). */
+function fmtSigned(value: number): string {
+  const s = value.toFixed(4)
+  return value > 0 ? `+${s}` : s
 }
 
-/* ─────────────────────────────────────────────────────────────────────────────
-   The SHAP waterfall goes HERE in v2.0.
+/**
+ * A real SHAP waterfall: start at the model's average output (`base_value`) and add
+ * each feature's signed contribution, stepping to this row's prediction. Bars are
+ * positioned by their cumulative span so the chart literally walks base → prediction;
+ * red pushes the prediction up, green pulls it down. Features are ordered by impact,
+ * and any tail beyond MAX_BARS is folded into a single "Other" step so the waterfall
+ * still lands exactly on `prediction`.
+ */
+function Waterfall({ row }: { row: ExplanationRow }) {
+  const entries = Object.entries(row.contributions).sort(
+    (a, b) => Math.abs(b[1]) - Math.abs(a[1]),
+  )
 
-   When /explain returns real values, `shap_values` is a {feature: contribution}
-   map and `base_value` is the model's expected value. A waterfall chart starts at
-   base_value and adds each feature's contribution to reach the prediction. For
-   now those fields are null, so we render an intentional placeholder instead of a
-   broken/empty chart. NEXT DEV: swap the placeholder body for a Recharts waterfall
-   driven by `response.shap_values` / `response.base_value` — the surrounding page,
-   controls, and request wiring are already done.
-   ───────────────────────────────────────────────────────────────────────────── */
-function WaterfallPlaceholder({ response }: { response: ExplainResponse }) {
-  const hasValues = response.shap_values != null && response.base_value != null
-
-  if (hasValues) {
-    // v2.0 path (not reachable in v1.0 — kept so the contract shape is honoured).
-    return (
-      <div className="rounded-md border bg-card p-4 text-sm">
-        <p className="mb-2 font-medium">Feature contributions</p>
-        <p className="text-xs text-muted-foreground">
-          base value <span className="font-mono">{response.base_value}</span>
-        </p>
-        <ul className="mt-2 space-y-1">
-          {Object.entries(response.shap_values ?? {}).map(([feature, contribution]) => (
-            <li key={feature} className="flex justify-between font-mono text-xs">
-              <span>{feature}</span>
-              <span>{contribution}</span>
-            </li>
-          ))}
-        </ul>
-      </div>
-    )
+  // Fold the low-impact tail into one "Other" step so the bars still sum to prediction.
+  let steps: { feature: string; value: number }[]
+  if (entries.length > MAX_BARS) {
+    const head = entries.slice(0, MAX_BARS - 1)
+    const tail = entries.slice(MAX_BARS - 1)
+    const tailSum = tail.reduce((acc, [, v]) => acc + v, 0)
+    steps = [
+      ...head.map(([feature, value]) => ({ feature, value })),
+      { feature: `Other (${tail.length} features)`, value: tailSum },
+    ]
+  } else {
+    steps = entries.map(([feature, value]) => ({ feature, value }))
   }
 
+  // Cumulative spans + a padded domain covering base, prediction and every waypoint.
+  let cum = row.base_value
+  const spans = steps.map((s) => {
+    const start = cum
+    const end = cum + s.value
+    cum = end
+    return { ...s, start, end }
+  })
+  const points = [row.base_value, row.prediction, ...spans.flatMap((s) => [s.start, s.end])]
+  const lo = Math.min(...points)
+  const hi = Math.max(...points)
+  const pad = (hi - lo) * 0.06 || 0.1
+  const dmin = lo - pad
+  const dmax = hi + pad
+  const pct = (x: number) => ((x - dmin) / (dmax - dmin)) * 100
+
   return (
-    <div className="rounded-md border border-dashed bg-muted/20 p-6 text-center">
-      <p className="text-sm font-medium text-foreground">SHAP waterfall — reserved for v2.0</p>
-      <p className="mx-auto mt-1 max-w-sm text-xs text-muted-foreground">
-        Once a model is persisted, this region will chart how each feature pushed the prediction
-        away from the base value (<code className="font-mono">base_value</code> +{" "}
-        <code className="font-mono">shap_values</code>). Both fields are{" "}
-        <span className="font-mono">null</span> in v1.0.
-      </p>
-    </div>
+    <Card>
+      <CardHeader>
+        <CardTitle>Feature contributions</CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="flex flex-wrap items-center gap-x-6 gap-y-1 text-sm">
+          <span>
+            Explaining class{" "}
+            <span className="font-mono font-medium">{row.explained_class}</span>
+          </span>
+          <span className="text-muted-foreground">
+            base value <span className="font-mono">{row.base_value.toFixed(4)}</span>
+          </span>
+          <span className="text-muted-foreground">
+            prediction <span className="font-mono">{row.prediction.toFixed(4)}</span>
+          </span>
+        </div>
+
+        <div className="space-y-1.5">
+          {spans.map((s) => {
+            const left = pct(Math.min(s.start, s.end))
+            const width = Math.max(pct(Math.max(s.start, s.end)) - left, 0.5)
+            const up = s.value > 0
+            return (
+              <div key={s.feature} className="flex items-center gap-3 text-xs">
+                <div className="w-40 shrink-0 truncate text-right font-mono" title={s.feature}>
+                  {s.feature}
+                </div>
+                <div className="relative h-5 flex-1 rounded bg-muted/40">
+                  <div
+                    className={`absolute top-0 h-5 rounded ${up ? "bg-rose-500" : "bg-emerald-500"}`}
+                    style={{ left: `${left}%`, width: `${width}%` }}
+                    aria-hidden
+                  />
+                </div>
+                <div
+                  className={`w-20 shrink-0 font-mono ${up ? "text-rose-600" : "text-emerald-600"}`}
+                >
+                  {fmtSigned(s.value)}
+                </div>
+              </div>
+            )
+          })}
+        </div>
+
+        <div className="flex items-center gap-4 border-t pt-3 text-xs text-muted-foreground">
+          <span className="flex items-center gap-1.5">
+            <span className="inline-block h-3 w-3 rounded bg-rose-500" aria-hidden /> increases the
+            prediction
+          </span>
+          <span className="flex items-center gap-1.5">
+            <span className="inline-block h-3 w-3 rounded bg-emerald-500" aria-hidden /> decreases it
+          </span>
+          <span className="ml-auto">base value + all contributions = prediction</span>
+        </div>
+      </CardContent>
+    </Card>
   )
 }

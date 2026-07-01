@@ -64,6 +64,8 @@ export interface ConfigFormState {
   tune_timeout_seconds: number | null
   /** per-model search-space bound/choice overrides; {} = engine defaults. */
   tune_search_space_overrides: SearchSpaceOverrides
+  // explainability (per-row SHAP; opt-in)
+  explain_enabled: boolean
   // user-defined structured features (built via the feature-builder panel)
   user_features: UserFeatureSpec[]
 }
@@ -111,6 +113,7 @@ export const DEFAULT_FORM_STATE: ConfigFormState = {
   tune_n_trials: 30,
   tune_timeout_seconds: null, // no per-model wall-clock cap by default (n_trials bounds the study)
   tune_search_space_overrides: {},
+  explain_enabled: false, // per-row SHAP is opt-in (KernelExplainer has cost)
   user_features: [],
 }
 
@@ -182,6 +185,12 @@ export function buildPayload(form: ConfigFormState): RunConfig {
       n_trials: form.tune_n_trials,
       timeout_seconds: form.tune_timeout_seconds,
       search_space_overrides: form.tune_search_space_overrides,
+    },
+    explainability: {
+      enabled: form.explain_enabled,
+      // sample_rows / background_size use the engine defaults (20 / 100); not surfaced in the UI.
+      sample_rows: 20,
+      background_size: 100,
     },
     // Structured specs only — assembled from dropdowns; never a free-text formula.
     user_features: form.user_features,

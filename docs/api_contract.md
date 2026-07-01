@@ -40,6 +40,18 @@
 > `"fixed"` | `"tuned"`), `threshold`, `threshold_metric`, and `calibrate_probs` fields. No `1.0`–`1.4`
 > field was renamed, retyped, or removed. The response envelope now reports `"schema_version": "1.5"`. Old
 > clients ignore the new fields.
+>
+> **`1.6` (additive, current default).** Adds one new **optional** block — `result.explanations` —
+> carrying **per-row SHAP** explanations keyed by model name (**local** explainability: why the model
+> predicted what it did for individual held-out test rows). Each model entry is `{method, rows[]}` where a
+> row is `{sample_index, explained_class, base_value, prediction, contributions}` and
+> `base_value + Σ contributions == prediction` (the SHAP-additive waterfall). It covers **all six** models
+> (`shap.TreeExplainer` for the tree models, `shap.KernelExplainer` for LogisticRegression/SVM/NaiveBayes).
+> Computed **during the run** (no model persistence needed), gated by the request-side opt-in
+> `explainability` block; the whole block is `null`/absent when explainability was OFF (the default), so a
+> run without it is byte-identical to earlier schemas. Binary + multiclass only (multilabel omitted). No
+> `1.0`–`1.5` field was renamed, retyped, or removed. The response envelope now reports
+> `"schema_version": "1.6"`. Old clients ignore the new field.
 
 ## Conventions
 
@@ -59,7 +71,7 @@
 | `GET`  | `/api/v1/health` | Liveness check → `{status, service, version}`. |
 | `POST` | `/api/v1/upload` | Multipart upload of a CSV/Excel/Parquet dataset → stores it under `DATA_DIR/uploads/` via the StorageAdapter and returns the `inspect_file` profile + `server_path` + the additive Data-Profile blocks (`column_profiles`, `correlation`) — see below. |
 | `POST` | `/api/v1/run` | Execute the full pipeline (`ModelRunner`) → the locked envelope below. |
-| `POST` | `/api/v1/explain` | Single-row SHAP. **v1.0: structured stub** (no model persistence; deferred to v2.0). |
+| `POST` | `/api/v1/explain` | On-demand single-row SHAP — **documented stub** (stateless; would need model persistence). Per-row SHAP is instead produced during a run: set `explainability.enabled` on `/run` and read `result.explanations` (schema 1.6). |
 | `GET`  | `/api/v1/outputs` | List output artifacts → `[{name, suffix, size_bytes}]`. |
 | `GET`  | `/api/v1/outputs/{name}` | Stream one artifact (CSV/PNG) — traversal-guarded by the StorageAdapter. |
 
@@ -163,6 +175,8 @@ problem there is returned as HTTP 422.
   "tuning": { "enabled": false, "models": [], "metric": "f1_weighted", "cv": true,
               "cv_folds": 3, "n_trials": 30, "timeout_seconds": null,  // null = no per-model cap (default); n_trials bounds the study
               "search_space_overrides": {} },  // per-model bound/choice overrides, e.g. {"XGBoost": {"max_depth": {"low": 3, "high": 6}}}
+  "explainability": { "enabled": false, "sample_rows": 20, "background_size": 100 },  // OPTIONAL; opt-in per-row SHAP → result.explanations (1.6); OFF → block absent
+
   "user_features": [            // OPTIONAL; [] / omitted → no user features (unchanged)
     // STRUCTURED specs only — NO free-text formula, nothing is ever eval()'d. Each spec
     // applies a KNOWN op (from a fixed allowlist) to KNOWN existing column(s). An unknown
@@ -280,6 +294,20 @@ missing/wrong-typed column is skipped and logged — it never aborts the run).
       "best_params": {             // per-model chosen hyperparameters (heterogeneous values)
         "XGBoost": {"learning_rate": 0.07, "max_depth": 6, "gamma": 1.2}
       }
+    },
+    "explanations": {              // NEW in 1.6 (additive); null/absent when explainability was OFF (default)
+      "RandomForest": {            // per model; ALL six covered (tree → TreeExplainer, else KernelExplainer)
+        "method": "shap.TreeExplainer",
+        "rows": [                  // one per explained held-out test row (first `sample_rows` rows)
+          {
+            "sample_index": 0,     // 0-based row position in the test set
+            "explained_class": "1",// positive class (binary) / predicted class (multiclass)
+            "base_value": 0.36,    // model's average output — the waterfall's start
+            "prediction": 0.87,    // == base_value + Σ contributions (SHAP-additive)
+            "contributions": {"num_late_payments": 0.40, "policy_tenure_years": 0.11}  // signed per-feature push
+          }
+        ]
+      }
     }
   },
   "error": null                    // top-level string when status == "error"
@@ -347,6 +375,21 @@ missing/wrong-typed column is skipped and logged — it never aborts the run).
   calibrated). [RISK] leakage — the tuned threshold and the calibrator are fit on TRAIN-only internal CV;
   the held-out test set never informs the operating point. These are driven by the request-side
   `threshold_mode`/`threshold`/`threshold_metric`/`calibrate_probs` fields.
+- **`result.explanations` (1.6, additive, optional)** carries **per-row SHAP** explanations —
+  `{model: {method, rows: [{sample_index, explained_class, base_value, prediction, contributions}, …]}}` —
+  the **local** counterpart to the two importance blocks (why THIS prediction, not what matters overall).
+  For each explained row `base_value + Σ contributions == prediction` (SHAP-additive; a waterfall from the
+  model's average output to this row's predicted probability). `method` is `"shap.TreeExplainer"` for the
+  tree models (explains the base estimator's probability) or `"shap.KernelExplainer"` for
+  LogisticRegression/SVM/NaiveBayes (over the model's calibrated `predict_proba`) — so **all six** models are
+  covered. `explained_class` is the positive class (binary) or predicted class (multiclass). Computed
+  **during the run** while models are fitted in memory — no model persistence needed — for the first
+  `sample_rows` held-out test rows of each model, gated by the request-side opt-in `explainability` block
+  (default OFF). Binary + multiclass only; a model whose explainer failed (or multilabel) is **omitted**,
+  and the whole block is `null`/absent when explainability was OFF or produced nothing. Also written as
+  `explanations_summary.csv` (only when enabled). [RISK] leakage — the SHAP background is a TRAIN reference
+  sample (never fitted on); explained rows are read-only test rows; nothing is refit. Pure plumbing — the
+  engine already computed the values.
 
 ### Execution model (limitation)
 
@@ -367,6 +410,8 @@ _`1.4` (additive): added the optional `result.permutation_importance` block (mod
 permutation importance, covering all models); all `1.0`–`1.3` fields are unchanged._
 _`1.5` (additive): added `result.models[].decision_threshold` + `.calibrated` (the per-model decision
 policy — effective binary operating threshold + calibration status); all `1.0`–`1.4` fields are unchanged._
+_`1.6` (additive): added the optional `result.explanations` block (per-row SHAP — local explainability,
+covering all six models; opt-in via the request `explainability` block); all `1.0`–`1.5` fields are unchanged._
 _2026-06-26 (default-value change only, **no schema/version change** — field shapes unchanged):
 `tuning.timeout_seconds` now defaults to `null` (no per-model wall-clock cap; `n_trials` bounds
 the study) rather than `600`. `tuning.search_space_overrides` (always present in `1.0`) is now

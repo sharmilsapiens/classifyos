@@ -385,6 +385,40 @@ category column can forward-fill while the rest use most-common.
   change** — the response is unchanged) + dashboard. New tests across all three
   (**323 backend pytest · 119 frontend vitest**).
 
+## Explainability — per-row SHAP, rewired for real (✅ Done, 2026-07-01)
+**In one line:** The Explainability page is back — and it now shows a real, per-prediction
+"why": for a single policy/claim, which features pushed the model's answer up or down, and by
+how much (a SHAP waterfall), for **all six** models.
+- **The backstory:** this page had been hidden because the honest answer used to be "we can't do
+  it yet." A live web request holds no trained model in memory, so explaining a row *after* a run
+  seemed to need model persistence (a v2.0 / MLflow item). That blocker is now gone — we simply
+  compute the explanations **during** the run, while the models are still in memory, and send them
+  back with the results, exactly like the two importance screens already do. No model persistence
+  needed.
+- **What it shows:** pick a model and a test row → a **waterfall** that starts at the model's
+  average prediction (the "base value") and adds each feature's signed contribution to land on
+  this row's prediction. Red bars pushed the prediction up, green pulled it down; the numbers add
+  up exactly (base + all contributions = the prediction). This is the reason-code / adverse-action
+  view insurance needs ("this policy was flagged high-lapse-risk *because* of X, Y, Z").
+- **How (SHAP):** a new engine helper (`analysis/explain.py`) uses the industry-standard **SHAP**
+  library — the fast, exact *TreeExplainer* for the tree models (Random Forest / XGBoost /
+  LightGBM) and the model-agnostic *KernelExplainer* for Logistic Regression / SVM / Naive Bayes.
+  So it covers **all six** models — better than the native importance screen, which can't do
+  SVM/Naive Bayes. (Before writing it, the exact SHAP calls were checked against the installed
+  version and confirmed to add up for every model — the project's hallucination-check rule.)
+- **Opt-in, because it costs.** It's **OFF by default** (a new "Per-row explainability (SHAP)"
+  toggle on the Configuration page); the SVM/Naive Bayes path in particular is slow, so it's
+  bounded to a small sample of rows and only runs when you ask. No leakage: SHAP's reference data
+  is a sample of the **training** rows (never fitted on), the explained rows are read-only test
+  rows, and nothing is re-trained.
+- **Surfaced additively.** The API gained an optional `result.explanations` block (locked contract
+  bumped `1.5 → 1.6`, additive — absent when the toggle is off, so old runs are unchanged) plus an
+  `explanations_summary.csv` artifact. The page was rewritten to draw the real waterfall (the old
+  "coming in v2.0" placeholder is gone) and put back in the sidebar. The `/api/v1/explain` endpoint
+  stays as a documented stub that now points callers to the `/run` explanations. Engine + API +
+  dashboard, new tests across all three (**337 backend pytest · 122 frontend vitest**); `shap`
+  added to requirements. This **restores** unwire.md entry #3.
+
 ---
 
 ## How to read this project

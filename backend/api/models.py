@@ -73,6 +73,20 @@ class TuningConfig(BaseModel):
     search_space_overrides: dict[str, Any] = Field(default_factory=dict)
 
 
+class ExplainabilityConfig(BaseModel):
+    """Per-row SHAP explainability dials. OFF by default. Mirrors ``DEFAULT_CONFIG['explainability']``.
+
+    Opt-in because the model-agnostic KernelExplainer (SVM/NaiveBayes) has real cost; when
+    enabled, per-row SHAP contributions are computed during the run for the first
+    ``sample_rows`` held-out test rows per model and returned in ``result.explanations``.
+    ``build_config`` is the authoritative validator of the values.
+    """
+
+    enabled: bool = False
+    sample_rows: int = 20  # first N held-out TEST rows per model to explain
+    background_size: int = 100  # TRAIN rows sampled as the SHAP reference distribution
+
+
 class UserFeatureSpec(BaseModel):
     """One user-defined STRUCTURED feature spec (UserFeatureBuilder).
 
@@ -211,6 +225,9 @@ class RunConfig(BaseModel):
     feature_engineering: FeatureEngineeringConfig = Field(default_factory=FeatureEngineeringConfig)
     interaction_features: InteractionFeaturesConfig = Field(default_factory=InteractionFeaturesConfig)
     tuning: TuningConfig = Field(default_factory=TuningConfig)
+    # Per-row SHAP explainability (Explainability page). OFF by default; when enabled the run
+    # returns a ``result.explanations`` block. Forwarded to build_config (authoritative validator).
+    explainability: ExplainabilityConfig = Field(default_factory=ExplainabilityConfig)
     # User-defined structured features (UserFeatureBuilder). Empty/omitted → no user features
     # (unchanged behaviour). Each spec is validated against the engine's allowlists above.
     user_features: list[UserFeatureSpec] = Field(default_factory=list)
@@ -417,6 +434,36 @@ class PermutationImportanceRow(BaseModel):
     rank: int | None = None
 
 
+class ExplanationRow(BaseModel):
+    """One explained row in ``result.explanations[model].rows`` (NEW in schema 1.6).
+
+    Per-row SHAP contributions for one held-out TEST row: ``base_value`` is the model's
+    average output (the waterfall's start), ``contributions`` maps each feature to its signed
+    push, and ``base_value + Σ contributions == prediction`` (the SHAP-additive landing
+    point). ``explained_class`` is the class the waterfall describes — the positive class for
+    binary, the predicted (argmax) class for multiclass. ``sample_index`` is the 0-based row
+    position within the held-out test set.
+    """
+
+    sample_index: int
+    explained_class: str
+    base_value: float
+    prediction: float
+    contributions: dict[str, float] = Field(default_factory=dict)
+
+
+class ModelExplanation(BaseModel):
+    """``result.explanations[model]`` — one model's per-row SHAP explanations (NEW in 1.6).
+
+    ``method`` names the explainer used (``"shap.TreeExplainer"`` for the tree models,
+    ``"shap.KernelExplainer"`` for LogisticRegression/SVM/NaiveBayes). ``rows`` holds one
+    :class:`ExplanationRow` per explained test row.
+    """
+
+    method: str
+    rows: list[ExplanationRow] = Field(default_factory=list)
+
+
 class ArtifactEntry(BaseModel):
     """One output file in ``result.artifacts`` (PNGs fetched on demand via /outputs)."""
 
@@ -469,6 +516,10 @@ class RunResult(BaseModel):
     # to the native ``feature_importance`` above. ``None`` when it could not be computed for
     # any model, so a run that produced none is byte-identical to earlier schemas.
     permutation_importance: dict[str, list[PermutationImportanceRow]] | None = None
+    # NEW in schema 1.6 (additive, optional): per-row SHAP explanations keyed by model name
+    # (LOCAL explainability — why THIS prediction). ``None`` when explainability was OFF (the
+    # default) or produced nothing, so a run without it is byte-identical to earlier schemas.
+    explanations: dict[str, ModelExplanation] | None = None
 
 
 class RunResponse(BaseModel):
@@ -483,6 +534,8 @@ class RunResponse(BaseModel):
     #     per-model permutation importance, covering all models). All earlier fields unchanged.
     # 1.5 (additive): added ``result.models[].decision_threshold`` + ``.calibrated`` (the
     #     decision policy applied per model). All earlier fields unchanged.
-    schema_version: str = "1.5"
+    # 1.6 (additive): added the optional ``result.explanations`` block (per-row SHAP — LOCAL
+    #     explainability). ``None`` when explainability was OFF (default). All earlier fields unchanged.
+    schema_version: str = "1.6"
     result: RunResult | None = None
     error: str | None = None

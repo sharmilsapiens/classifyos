@@ -91,6 +91,15 @@ describe("buildPayload", () => {
     expect(fixed.threshold).toBe(0.3)
   })
 
+  it("carries the explainability toggle (default OFF; opt-in respected)", () => {
+    expect(buildPayload(form).explainability).toEqual({
+      enabled: false,
+      sample_rows: 20,
+      background_size: 100,
+    })
+    expect(buildPayload({ ...form, explain_enabled: true }).explainability.enabled).toBe(true)
+  })
+
   it("carries user-defined feature specs through to the payload verbatim", () => {
     const specs = [
       { name: "premium_per_sum", type: "numeric" as const, op: "divide", col_a: "premium", col_b: "sum_assured" },
