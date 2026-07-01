@@ -301,13 +301,13 @@ method for an **individual column**, on top of the by-type defaults — leave an
 default" and it keeps the type setting.
 - **What it shows.** The card lists the columns you've chosen as features (it needs the upload's
   Data-Profile to know each column's kind). Each row has the column name, a numeric/categorical
-  tag, and a dropdown that defaults to **"Type default (…)"** — showing the current per-type
+  tag, and a dropdown that defaults to **"Default (…)"** — showing the current per-type
   choice — plus the strategies valid for that column's kind: number columns get the full set
   (median/mean/most-common/forward-fill/backward-fill/KNN/iterative/drop), category columns get
   most-common/forward-fill/backward-fill/drop. A small count shows how many columns you've
   overridden.
 - **Sends a map to the API.** The form carries a new `missing_strategy_by_column` map (default
-  `{}`); picking a non-default strategy adds `{column: strategy}`, switching back to "Type default"
+  `{}`); picking a non-default strategy adds `{column: strategy}`, switching back to "Default"
   removes it — so an untouched card sends `{}` and changes nothing. It rides the existing run
   request; **no engine/API/contract change** beyond the additive request field.
 - **Graceful fallback.** With no data profile (an older upload) or no features chosen yet, the card

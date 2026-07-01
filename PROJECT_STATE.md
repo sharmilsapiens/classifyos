@@ -25,7 +25,7 @@ unchanged (imputers learn from train only; `drop` stays row-level, train-only; t
 (response envelope unchanged); `docs/api_contract.md` request example updated. **UI:** new
 `components/config/MissingByColumnPanel.tsx` + a "Missing values · per column" card on Configure — lists the
 selected feature columns (reading the upload `column_profiles` for each column's kind), each with a dropdown
-defaulting to "Type default (…)" offering the strategies valid for that kind; writes/clears entries in the
+defaulting to "Default (…)" offering the strategies valid for that kind; writes/clears entries in the
 `missing_strategy_by_column` form map. `ConfigFormState`/`DEFAULT_FORM_STATE`/`buildPayload` + the `RunConfig`
 TS type carry the map (default `{}`); graceful fallback (no profile / no features → a short note). **Tests:**
 +6 backend preprocess (empty-map back-compat, override applies + unlisted keeps default, mixed knn+iterative,

@@ -172,7 +172,7 @@ describe("Configure — per-column imputation", () => {
     expect(sel).toBeInTheDocument()
     // A numeric column is offered the model-based imputers + the type-default option.
     expect(within(sel).getByRole("option", { name: "knn" })).toBeInTheDocument()
-    expect(within(sel).getByRole("option", { name: /Type default/ })).toBeInTheDocument()
+    expect(within(sel).getByRole("option", { name: /^Default \(/ })).toBeInTheDocument()
   })
 
   it("writes the chosen per-column strategy into the override map", () => {

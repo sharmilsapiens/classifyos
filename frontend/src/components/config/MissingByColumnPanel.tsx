@@ -74,7 +74,7 @@ export default function MissingByColumnPanel({
     <div className="space-y-3">
       <p className="text-sm text-muted-foreground">
         Override the per-type default for individual columns. Leave a column on
-        <span className="font-medium"> Type default</span> to keep the setting above.
+        <span className="font-medium"> Default</span> to keep the per-type setting above.
         {overrideCount > 0 && (
           <span className="ml-1 text-foreground">
             {overrideCount} column{overrideCount === 1 ? "" : "s"} overridden.
@@ -89,12 +89,12 @@ export default function MissingByColumnPanel({
           const overridden = Boolean(value[col])
           return (
             <div key={col} className="flex items-center gap-3">
-              <span className="flex-1 truncate text-sm" title={col}>
+              <span className="min-w-0 flex-1 truncate text-sm" title={col}>
                 {col}
               </span>
               <span
                 className={cn(
-                  "rounded px-1.5 py-0.5 text-xs",
+                  "shrink-0 rounded px-1.5 py-0.5 text-xs",
                   numeric
                     ? "bg-sky-100 text-sky-700"
                     : "bg-violet-100 text-violet-700",
@@ -104,11 +104,11 @@ export default function MissingByColumnPanel({
               </span>
               <Select
                 aria-label={`Imputation method for ${col}`}
-                className={cn("w-40", overridden && "border-indigo-400")}
+                className={cn("w-56 shrink-0", overridden && "border-indigo-400")}
                 value={value[col] ?? ""}
                 onChange={(e) => setCol(col, e.target.value)}
               >
-                <option value="">Type default ({def})</option>
+                <option value="">Default ({def})</option>
                 {opts.map((o) => (
                   <option key={o} value={o}>
                     {o}
