@@ -13,6 +13,16 @@ export function fmtInt(value: number | null | undefined): string {
   return value.toLocaleString("en-US")
 }
 
+/** A number to ~3 significant decimals, compacting very small/large magnitudes to
+    exponential; "—" when null/undefined/NaN. Shared by the Data Profile stats and
+    the Configuration feature picker so numeric summaries read identically. */
+export function fmtNum(value: number | null | undefined): string {
+  if (value === null || value === undefined || Number.isNaN(value)) return "—"
+  const abs = Math.abs(value)
+  if (abs !== 0 && (abs < 0.001 || abs >= 1e6)) return value.toExponential(2)
+  return Number(value.toFixed(3)).toLocaleString("en-US")
+}
+
 /** Bytes → a short human size (for artifact lists). */
 export function fmtBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`

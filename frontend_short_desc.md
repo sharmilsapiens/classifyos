@@ -289,6 +289,51 @@ and number columns get smarter new options.
   `missing_strategy_categorical` (default mode) and includes them in the run request; the old global
   field stays as a hidden back-compat default. A new build-payload test covers the split.
 
+## Feature picker enrichment on Configuration (✅ Done, 2026-07-01)
+**In one line:** The feature-selection list on the Configuration page — previously just a checkbox
+and a column name — now shows, for each column, a mini distribution graph and key numbers for
+number columns, and flags identifier / single-value columns right beside the name so you can spot
+(and exclude) them at a glance.
+- **What each row now shows.** A type tag (numeric/categorical/datetime); any advisory flags —
+  **"Identifier-like"** (nearly every value distinct — an ID/reference that won't generalise and can
+  leak the answer) and **"Single value"** (the same value in every row — no signal) — shown as small
+  badges next to the column name; and, for **number columns**, a compact **distribution sparkline**
+  plus **avg · IQR · variance** (average, the middle-50% spread, and the variance).
+- **No new data, no waiting.** It reads the profile the upload already returned (the same
+  `column_profiles` the Data Profile page uses) — so there is **no extra server call** and nothing in
+  the engine, API, or the locked contract changed. An older upload without a profile simply shows the
+  plain checkbox + name as before.
+- **Consistent with Data Profile.** The identifier/single-value wording and the number formatting were
+  moved into shared helpers so the picker and the Data Profile page describe and format things
+  **identically** (one source of truth). The sparkline is a lightweight CSS bar chart (no chart
+  library) so it stays fast even with many columns. New render tests cover the numeric stats, the
+  sparkline, and the identifier tag appearing in the picker.
+
+## Decision-threshold policy + calibration on Configuration (✅ Done, 2026-07-01)
+**In one line:** The old "Decision threshold" number box (which actually did nothing) is now a
+**mode selector** — *Auto-tune* (let the engine find the best cut), *Fixed value*, or *Default
+(0.5)* — and each model's effective cut-off + whether its probabilities are calibrated now show on
+the scoreboard.
+- **Why it changed.** The threshold field used to send a number the engine ignored. Now that the
+  backend actually applies calibration and a decision threshold (engine + API done 2026-06-30),
+  the UI exposes it properly.
+- **The control.** In the **Problem framing** card, "Decision threshold" is a dropdown that
+  **defaults to Auto-tune** (the engine picks the probability cut that maximises a metric on
+  train-only CV folds — the "the model should decide it" answer). Choosing **Auto-tune** reveals a
+  **metric** selector (F1, balanced accuracy, precision, recall, …); choosing **Fixed value**
+  reveals the number box; **Default (0.5)** shows a disabled 0.5. A one-line hint explains each
+  mode and notes it is **binary-only** (multiclass/multilabel use argmax and ignore it). The
+  existing "Calibrate probabilities" switch is unchanged — but now it actually calibrates.
+- **Sent to the API.** The form carries `threshold_mode` (default `tuned`) and `threshold_metric`
+  (default `f1`) alongside the existing `threshold`; a build-payload test covers them.
+- **Seen on results.** The **Model scoreboard** (Overview) gained a **Threshold** column showing
+  the effective cut each model used (tuned best / fixed / 0.5; blank for multiclass/multilabel),
+  with a green ● when that model's probabilities are calibrated — reading the additive
+  `models[].decision_threshold` + `.calibrated` fields (schema 1.5). The Risk Register's threshold
+  and calibration cards were updated to describe the now-real behaviour.
+- **Backwards-safe.** The new response fields are optional; an older run without them shows "—".
+  **113 vitest green · tsc + build clean.**
+
 ---
 
 ## How to read this project

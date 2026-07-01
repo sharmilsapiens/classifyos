@@ -58,7 +58,7 @@ const RISKS: Risk[] = [
     title: "Probability calibration",
     severity: "medium",
     risk: "Predicted probabilities may not match observed frequencies, so a 0.8 score doesn't mean 80% — risky when probabilities drive downstream decisions or thresholds.",
-    mitigation: "A reliability diagram (plot5, binary) plots predicted vs observed against the perfect diagonal so miscalibration is visible. SVM uses CalibratedClassifierCV. Calibration is binary-only; multiclass shows a labelled placeholder rather than implying it was checked.",
+    mitigation: "Probabilities are calibrated by default (calibrate_probs, via CalibratedClassifierCV fit on train only; SVM is intrinsically calibrated). A reliability diagram (plot5, binary) plots predicted vs observed against the perfect diagonal so miscalibration is visible. The reliability diagram is binary-only; multiclass shows a labelled placeholder rather than implying it was checked.",
   },
   {
     id: "multicollinearity",
@@ -72,7 +72,7 @@ const RISKS: Risk[] = [
     title: "Threshold sensitivity",
     severity: "medium",
     risk: "A binary decision threshold (default 0.5) trades precision against recall; the wrong threshold for an imbalanced problem can make a usable model look useless (or vice-versa).",
-    mitigation: "Threshold is an explicit config field. ROC and PR curves (full test set, from the single sanctioned curve helper so the PNG and the JSON never drift) show the whole precision/recall trade-off, not just the operating point at one threshold.",
+    mitigation: "The decision threshold is a real config policy: Auto-tune (the engine picks the cut that maximises a chosen metric on train-only CV folds), a Fixed analyst value, or the 0.5 default. The effective cut each model used is shown on the scoreboard. ROC and PR curves (full test set, from the single sanctioned curve helper so the PNG and the JSON never drift) show the whole precision/recall trade-off, not just one operating point.",
   },
   {
     id: "temporal",

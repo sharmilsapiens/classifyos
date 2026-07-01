@@ -72,6 +72,16 @@ describe("buildPayload", () => {
     expect(buildPayload({ ...form, permutation_metric: "roc_auc" }).permutation_metric).toBe("roc_auc")
   })
 
+  it("carries the decision-threshold policy (UI defaults to auto-tune)", () => {
+    const payload = buildPayload(form)
+    expect(payload.threshold_mode).toBe("tuned")
+    expect(payload.threshold_metric).toBe("f1")
+    expect(payload.threshold).toBe(0.5)
+    const fixed = buildPayload({ ...form, threshold_mode: "fixed", threshold: 0.3 })
+    expect(fixed.threshold_mode).toBe("fixed")
+    expect(fixed.threshold).toBe(0.3)
+  })
+
   it("carries user-defined feature specs through to the payload verbatim", () => {
     const specs = [
       { name: "premium_per_sum", type: "numeric" as const, op: "divide", col_a: "premium", col_b: "sum_assured" },

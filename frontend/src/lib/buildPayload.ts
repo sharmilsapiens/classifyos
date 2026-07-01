@@ -31,7 +31,12 @@ export interface ConfigFormState {
   scaling_method: string
   outlier_method: string
   high_cardinality_threshold: number
+  /** Positive-class cutoff used when threshold_mode === "fixed" (binary only). */
   threshold: number
+  /** Decision-threshold mode (binary): "default" | "fixed" | "tuned". */
+  threshold_mode: string
+  /** Metric a "tuned" threshold maximises (binary). */
+  threshold_metric: string
   calibrate_probs: boolean
   random_state: number
   /** metric the post-training permutation importance scores the drop in. */
@@ -80,6 +85,10 @@ export const DEFAULT_FORM_STATE: ConfigFormState = {
   outlier_method: "iqr",
   high_cardinality_threshold: 20,
   threshold: 0.5,
+  // UI default is "tuned" (let the engine optimize the cut) — deliberately more helpful than the
+  // engine/API default of "default" (0.5), which is what a raw API/CLI caller gets. Binary only.
+  threshold_mode: "tuned",
+  threshold_metric: "f1",
   calibrate_probs: true,
   random_state: 42,
   permutation_metric: "f1_weighted",
@@ -140,6 +149,8 @@ export function buildPayload(form: ConfigFormState): RunConfig {
     outlier_method: form.outlier_method,
     high_cardinality_threshold: form.high_cardinality_threshold,
     threshold: form.threshold,
+    threshold_mode: form.threshold_mode,
+    threshold_metric: form.threshold_metric,
     calibrate_probs: form.calibrate_probs,
     random_state: form.random_state,
     permutation_metric: form.permutation_metric,

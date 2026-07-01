@@ -100,7 +100,12 @@ export interface RunConfig {
   scaling_method: string
   outlier_method: string
   high_cardinality_threshold: number
+  /** Positive-class cutoff used when threshold_mode === "fixed" (binary only). */
   threshold: number
+  /** Decision-threshold mode (binary): "default" (0.5 argmax) | "fixed" | "tuned". */
+  threshold_mode: string
+  /** Metric a "tuned" threshold maximises (binary): f1 | balanced_accuracy | precision | … */
+  threshold_metric: string
   calibrate_probs: boolean
   random_state: number
   /** metric the post-training permutation importance scores the drop in (default f1_weighted). */
@@ -165,6 +170,11 @@ export interface ModelMetrics {
   mcc: number | null
   /** schema 1.2 (additive): same headline metrics on the pre-balance train split (overfit gap). */
   train?: TrainMetrics | null
+  /** schema 1.5 (additive): effective binary operating threshold (tuned best / fixed / 0.5);
+   *  null for multiclass/multilabel and failed models. */
+  decision_threshold?: number | null
+  /** schema 1.5 (additive): whether this model's probabilities are calibrated. */
+  calibrated?: boolean | null
   error: string | null // set when status === "failed"
 }
 

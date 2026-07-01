@@ -15,7 +15,10 @@ import { useNavigate } from "react-router-dom"
 import { Link } from "react-router-dom"
 import { Play } from "lucide-react"
 
+import type { ColumnProfile, Histogram } from "@/api/types"
 import { useApp } from "@/store/AppStore"
+import { fmtNum } from "@/lib/format"
+import { ColumnFlags } from "@/lib/columnFlags"
 import { cn } from "@/lib/utils"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
@@ -39,6 +42,17 @@ const MISSING_CATEGORICAL = ["mode", "ffill", "bfill", "drop"] as const
 const ENCODING = ["onehot", "label", "ordinal", "target"] as const
 const SCALING = ["standard", "minmax", "robust", "none"] as const
 const OUTLIER = ["iqr", "zscore", "none"] as const
+// Decision-threshold policy (binary only). "tuned" lets the engine pick the cut on train-only
+// CV folds; "fixed" uses the analyst value; "default" is sklearn's 0.5 argmax.
+const THRESHOLD_MODES = [
+  { value: "tuned", label: "Auto-tune (best cut)" },
+  { value: "fixed", label: "Fixed value" },
+  { value: "default", label: "Default (0.5)" },
+] as const
+// Metrics a tuned threshold may maximise — mirror config.py THRESHOLD_METRICS exactly.
+const THRESHOLD_METRICS = [
+  "f1", "f1_weighted", "f1_macro", "balanced_accuracy", "accuracy", "precision", "recall",
+] as const
 // const FILL = ["zero", "median", "nan"] as const  // unused while interactions card is hidden
 const TUNING_METRICS = [
   "f1_weighted", "f1_macro", "accuracy", "precision_weighted", "recall_weighted",
@@ -71,6 +85,11 @@ export default function Configure() {
   // Feature candidates = every column except the target (datetimes are offered but
   // the engine drops id/datetime columns itself).
   const featureCandidates = inspect.columns.filter((c) => c !== form.target)
+  // The upload's Data-Profile blocks (may be absent on an older upload) let each
+  // candidate show its distribution + degenerate-column flags right in the picker.
+  const profileByName = new Map<string, ColumnProfile>(
+    (inspect.column_profiles ?? []).map((p) => [p.name, p]),
+  )
 
   function toggleFeature(col: string) {
     const next = form.feature_cols.includes(col)
@@ -165,19 +184,21 @@ export default function Configure() {
                   </button>
                 </div>
               </div>
-              <div className="grid max-h-44 grid-cols-2 gap-x-4 gap-y-1.5 overflow-y-auto rounded-md border p-3 sm:grid-cols-3">
+              <div className="grid max-h-72 grid-cols-1 gap-1 overflow-y-auto rounded-md border p-2 sm:grid-cols-2">
                 {featureCandidates.map((col) => (
-                  <label key={col} className="flex items-center gap-2 text-sm">
-                    <input
-                      type="checkbox"
-                      className="h-4 w-4 accent-[color:var(--primary)]"
-                      checked={form.feature_cols.includes(col)}
-                      onChange={() => toggleFeature(col)}
-                    />
-                    <span className="truncate">{col}</span>
-                  </label>
+                  <FeatureRow
+                    key={col}
+                    col={col}
+                    checked={form.feature_cols.includes(col)}
+                    onToggle={() => toggleFeature(col)}
+                    profile={profileByName.get(col)}
+                  />
                 ))}
               </div>
+              <p className="text-xs text-muted-foreground">
+                Numeric columns show a mini distribution and avg · IQR · variance;
+                identifier/single-value columns are flagged (usually excluded).
+              </p>
             </div>
           </CardContent>
         </Card>
@@ -196,10 +217,29 @@ export default function Configure() {
               <Input type="number" min={0.05} max={0.5} step={0.05} value={form.test_size}
                 onChange={(e) => updateForm({ test_size: Number(e.target.value) })} />
             </Field>
-            <Field label="Decision threshold">
-              <Input type="number" min={0} max={1} step={0.05} value={form.threshold}
-                onChange={(e) => updateForm({ threshold: Number(e.target.value) })} />
+            <Field label="Decision threshold" hint={thresholdModeHint(form.threshold_mode, form.problem_type)}>
+              <Select value={form.threshold_mode}
+                onChange={(e) => updateForm({ threshold_mode: e.target.value })}>
+                {THRESHOLD_MODES.map((m) => <option key={m.value} value={m.value}>{m.label}</option>)}
+              </Select>
             </Field>
+            {form.threshold_mode === "tuned" ? (
+              <Field label="Threshold metric" hint="Maximised on train-only CV folds to choose the cut.">
+                <Select value={form.threshold_metric}
+                  onChange={(e) => updateForm({ threshold_metric: e.target.value })}>
+                  {THRESHOLD_METRICS.map((m) => <option key={m} value={m}>{m}</option>)}
+                </Select>
+              </Field>
+            ) : form.threshold_mode === "fixed" ? (
+              <Field label="Threshold value" hint="Positive-class cutoff (0–1).">
+                <Input type="number" min={0.01} max={0.99} step={0.05} value={form.threshold}
+                  onChange={(e) => updateForm({ threshold: Number(e.target.value) })} />
+              </Field>
+            ) : (
+              <Field label="Threshold value" hint="Fixed 0.5 cutoff (change the mode to tune or set it).">
+                <Input type="number" value={0.5} disabled />
+              </Field>
+            )}
             <Field label="Random state">
               <Input type="number" value={form.random_state}
                 onChange={(e) => updateForm({ random_state: Number(e.target.value) })} />
@@ -429,11 +469,104 @@ function Field({
   )
 }
 
+/** One selectable feature: a checkbox + column name, its degenerate-column flags
+ *  (identifier / single-value), and — for numeric columns — a mini distribution
+ *  sparkline with avg · IQR · variance derived from the upload's Data-Profile stats.
+ *  Falls back to a plain checkbox row when the upload carried no profile block. */
+function FeatureRow({
+  col,
+  checked,
+  onToggle,
+  profile,
+}: {
+  col: string
+  checked: boolean
+  onToggle: () => void
+  profile?: ColumnProfile
+}) {
+  const stats = profile?.dtype_group === "numeric" ? profile.stats : null
+  // IQR = p75 − p25; variance = std². Both derived from the profile stats (the
+  // Data Profile surfaces the same avg / spread numbers on its numeric cards).
+  const iqr = stats && stats.p75 != null && stats.p25 != null ? stats.p75 - stats.p25 : null
+  const variance = stats && stats.std != null ? stats.std * stats.std : null
+
+  return (
+    <label className="flex cursor-pointer items-start gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-muted/60">
+      <input
+        type="checkbox"
+        className="mt-0.5 h-4 w-4 shrink-0 accent-[color:var(--primary)]"
+        checked={checked}
+        onChange={onToggle}
+      />
+      <div className="min-w-0 flex-1">
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+          <span className="truncate font-medium">{col}</span>
+          {profile && (
+            <span className="text-[10px] uppercase tracking-wide text-muted-foreground">
+              {profile.dtype_group}
+            </span>
+          )}
+          <ColumnFlags flags={profile?.flags} />
+        </div>
+        {stats && (
+          <div className="mt-1 flex items-center gap-3">
+            <MiniHistogram histogram={profile?.histogram} />
+            <dl className="flex gap-3 font-mono text-[11px] text-muted-foreground">
+              <span title="Mean (average)">avg {fmtNum(stats.mean)}</span>
+              <span title="Interquartile range (p75 − p25)">IQR {fmtNum(iqr)}</span>
+              <span title="Variance (std²)">var {fmtNum(variance)}</span>
+            </dl>
+          </div>
+        )}
+      </div>
+    </label>
+  )
+}
+
+/** A compact, dependency-free distribution sparkline: one bar per histogram bin,
+ *  scaled to the tallest bin. Pure divs (no chart lib) so it stays light even with
+ *  many features and renders in jsdom. Decorative — the numbers carry the detail. */
+function MiniHistogram({ histogram }: { histogram?: Histogram | null }) {
+  if (!histogram || histogram.counts.length === 0) return null
+  const max = Math.max(...histogram.counts, 1)
+  return (
+    <div
+      className="flex h-7 w-24 shrink-0 items-end gap-px"
+      role="img"
+      aria-label="Value distribution"
+      title="Value distribution"
+    >
+      {histogram.counts.map((count, i) => (
+        <div
+          key={i}
+          className="flex-1 rounded-sm bg-primary/70"
+          style={{ height: `${Math.max(8, (count / max) * 100)}%` }}
+        />
+      ))}
+    </div>
+  )
+}
+
 /** Explains what the engine does to categorical columns whose unique-value count
  *  exceeds the threshold. Such columns skip one-hot/ordinal encoding (which would
  *  explode width or impose a fake order) and fall back to target encoding on binary
  *  problems, or frequency encoding on multiclass/multilabel — mirroring the engine's
  *  Preprocessor (preprocess.py). */
+/** Note for the decision-threshold mode selector. The threshold is binary-only; for
+ *  multiclass/multilabel the model uses argmax and this setting is ignored (engine-side). */
+function thresholdModeHint(mode: string, problemType: string): string {
+  if (problemType !== "binary")
+    return "Applies to binary problems only — multiclass/multilabel use argmax and ignore this."
+  switch (mode) {
+    case "tuned":
+      return "The engine picks the probability cutoff that maximises the chosen metric, on train-only CV folds (never the test set)."
+    case "fixed":
+      return "Use the exact cutoff you set below to turn a probability into the positive class."
+    default:
+      return "Cut at 0.5 (sklearn's default). Rarely optimal on imbalanced data — try Auto-tune."
+  }
+}
+
 function highCardinalityHint(problemType: string): string {
   const fallback =
     problemType === "binary"

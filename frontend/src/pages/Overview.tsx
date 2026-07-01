@@ -283,6 +283,9 @@ export default function Overview() {
                   </th>
                   <th className="px-2 py-2 text-right font-medium">ROC-AUC</th>
                   <th className="px-2 py-2 text-right font-medium">MCC</th>
+                  <th className="px-2 py-2 text-right font-medium" title="Effective positive-class cutoff used (tuned best / fixed / 0.5). ● = calibrated probabilities. Blank for multiclass/multilabel.">
+                    Threshold
+                  </th>
                 </tr>
               </thead>
               <tbody>
@@ -312,6 +315,12 @@ export default function Overview() {
                     <OverfitGapCell test={m.f1_weighted} train={m.train?.f1_weighted} />
                     <td className="px-2 py-2 text-right font-mono">{fmtMetric(m.roc_auc)}</td>
                     <td className="px-2 py-2 text-right font-mono">{fmtMetric(m.mcc)}</td>
+                    <td className="px-2 py-2 text-right font-mono">
+                      {m.decision_threshold != null ? m.decision_threshold.toFixed(2) : "—"}
+                      {m.calibrated ? (
+                        <span className="ml-1 text-emerald-600" title="Probabilities calibrated">●</span>
+                      ) : null}
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -321,7 +330,9 @@ export default function Overview() {
             Sorted best-first by <strong>F1 · test</strong> (failed models last). Accuracy, ROC-AUC and MCC
             are on the held-out <strong>test</strong> set. <strong>Gap</strong> is
             train − test F1-weighted (train measured on the pre-balance split): a large positive gap suggests
-            the model is overfitting.
+            the model is overfitting. <strong>Threshold</strong> is the effective positive-class cutoff each
+            model used (tuned / fixed / 0.5; blank for multiclass/multilabel); a green ● marks calibrated
+            probabilities.
           </p>
         </CardContent>
       </Card>

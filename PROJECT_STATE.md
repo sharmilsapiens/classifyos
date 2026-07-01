@@ -4,7 +4,49 @@
 > A copy is uploaded to the ClassifyOS Claude Project knowledge after each update so the
 > planning/overseer chat stays in sync with the local repo.
 
-**Last updated:** 2026-06-30
+**Last updated:** 2026-07-01
+**Updated by:** Claude Code (**NEW — decision-threshold policy + calibration surfaced in the UI (frontend
+follow-up; no engine/API/contract change)**. Completes the decision-policy engine+API work (schema 1.5, see
+the 2026-06-30 entry below) by wiring the now-real dials into the dashboard. The old bare "Decision threshold"
+number box (which sent a value the engine ignored) is replaced by a **mode selector** in Configure's *Problem
+framing* card — **defaults to Auto-tune** (the user's "the model should optimize it" answer), with *Fixed
+value* and *Default (0.5)* as the other modes; Auto-tune reveals a `threshold_metric` selector, Fixed reveals
+the number box, Default shows a disabled 0.5. A per-mode hint notes it's binary-only (multiclass/multilabel
+ignore it). **`buildPayload`** now carries `threshold_mode` (UI default `"tuned"` — deliberately more helpful
+than the engine/API default `"default"` a raw caller gets) + `threshold_metric` (`"f1"`); `RunConfig`/
+`ModelMetrics` TS types extended (`decision_threshold`/`calibrated` optional). **Overview scoreboard** gained
+a **Threshold** column (effective cut per model — tuned/fixed/0.5, blank for multiclass/multilabel) with a
+green ● calibrated marker, reading the additive 1.5 fields; the **Risk Register** threshold + calibration
+cards were rewritten to describe the now-real behaviour (was: "threshold is an explicit config field" —
+misleading when inert). **Tests:** +build-payload assert (threshold policy carried; fixed override),
++Configure render test (defaults to Auto-tune, metric selector shown, no value box), RiskRegister/calibration
+copy. **113 frontend vitest green · `tsc -b` + `vite build` clean** (backend untouched). Backwards-safe — the
+new response fields are optional, so an older run renders "—". **No plan_tweak entry** — UI realizing the 1.5
+fields, not a deviation.)
+**Prior update (same day):** Claude Code (**NEW — Configure feature-picker enrichment (UI-only, no contract change)**.
+The Configuration page's feature-selection list was a bare checkbox + column name; it now surfaces,
+per candidate column, the info an analyst needs to decide whether to include it — reading the
+**existing** `/upload` Data-Profile blocks already in the store (`inspect.column_profiles`), so
+**no new network call, no engine/API/contract change**. Each row now shows: a **type tag**
+(numeric/categorical/datetime); the degenerate-column **flags** ("Identifier-like" / "Single value")
+right beside the name (the user's ask — surface identifiers in the selection column so they can be
+excluded); and, for **numeric** columns, a compact **distribution sparkline** (a dependency-free
+CSS/div mini-histogram built from `histogram.counts`, `role="img"` — no Recharts, so it stays light
+across many features and renders in jsdom) plus **avg · IQR · variance** (avg = `stats.mean`,
+IQR = `p75 − p25`, variance = `std²`, all derived from the profile's `NumericStats`; `fmtNum` → em-dash
+on null). **DRY refactor:** the flag copy (`FLAG_INFO`) + `ColumnFlags` badge and the `fmtNum` numeric
+formatter were extracted from `DataProfile.tsx` into shared modules (`lib/columnFlags.tsx`,
+`lib/format.ts::fmtNum`) so the picker and the Data Profile page describe "constant"/"identifier"
+columns and format numbers **identically** (single source of truth); `DataProfile` now imports both
+(behaviour unchanged — the `mb-3` spacing is passed via `className`). Graceful fallback: an older
+upload with no `column_profiles` renders the plain checkbox+name row as before. **Tests:** new
+`configure.test.tsx` (avg/IQR/variance render for a numeric column; the distribution sparkline
+renders; an identifier-flagged column shows its tag in the picker; a plain categorical column shows
+no numeric stats) → **111 frontend vitest green · `tsc -b` + `vite build` clean** (backend untouched).
+Hallucination check N/A — no new library calls (pure React/Tailwind + existing `@/api/types`, standard
+JS `Math.max`/`toFixed`/`toLocaleString`). **No plan_tweak entry** — additive UI realizing a user
+request, consuming data the profile already returns, not a deviation.)
+**Prior update:** 2026-06-30
 **Updated by:** Claude Code (**NEW — decision policy made real: probability calibration + the binary
 decision threshold (engine + API, additive `1.4 → 1.5`)**. A user asked whether the "Decision threshold"
 config field was correct and whether `calibrate_probs` already handled it. Investigation found **both were
