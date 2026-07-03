@@ -143,6 +143,41 @@ def test_correlation_none_with_one_numeric_col() -> None:
     assert prof["correlation"] is None
 
 
+def test_correlation_excludes_identifier_columns() -> None:
+    """A near-unique (identifier-like) numeric column is dropped from the matrix."""
+    n = 200
+    df = pd.DataFrame(
+        {
+            "policy_id": np.arange(n),                 # all-distinct → identifier
+            "age": np.random.default_rng(0).integers(20, 60, n),      # ~40 unique
+            "premium_band": np.random.default_rng(1).integers(1, 20, n),  # ~19 unique
+        }
+    )
+    prof = profile_dataframe(
+        df,
+        numeric_cols=["policy_id", "age", "premium_band"],
+        categorical_cols=[],
+        binary_cols=[],
+        datetime_cols=[],
+    )
+    # policy_id is flagged identifier and must not appear in the correlation.
+    pid = next(c for c in prof["column_profiles"] if c["name"] == "policy_id")
+    assert pid["flags"] == ["identifier"]
+    assert prof["correlation"] is not None
+    assert "policy_id" not in prof["correlation"]["columns"]
+    assert set(prof["correlation"]["columns"]) == {"age", "premium_band"}
+
+
+def test_correlation_none_when_only_identifier_numeric_cols() -> None:
+    """Two identifier columns leave <2 usable numeric cols → no correlation."""
+    df = pd.DataFrame({"id_a": np.arange(150), "id_b": np.arange(150) * 3})
+    prof = profile_dataframe(
+        df, numeric_cols=["id_a", "id_b"], categorical_cols=[], binary_cols=[],
+        datetime_cols=[],
+    )
+    assert prof["correlation"] is None
+
+
 def test_large_file_samples_heavy_work() -> None:
     df = pd.DataFrame({"x": np.arange(100), "y": np.arange(100) * 2.0})
     prof = profile_dataframe(

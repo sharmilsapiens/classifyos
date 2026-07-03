@@ -6,7 +6,8 @@ show the analyst what's actually in their file: a distribution histogram and
 summary statistics for each numeric column, a value-frequency breakdown for each
 categorical/binary column, a date range for datetime columns, a missingness
 overview across all columns, and a Pearson correlation matrix over the numeric
-columns.
+columns (excluding identifier-like ones, whose near-unique values would only add
+noise).
 
 It is deliberately a **pure function of a DataFrame** (no file I/O, no config) so
 it is trivially unit-testable and so it can reuse the frame ``inspect_file``
@@ -174,14 +175,27 @@ def _datetime_profile(series: pd.Series) -> dict[str, Any]:
 
 
 def _correlation(
-    df: pd.DataFrame, numeric_cols: list[str], max_cols: int
+    df: pd.DataFrame,
+    numeric_cols: list[str],
+    max_cols: int,
+    *,
+    exclude: set[str] | None = None,
 ) -> dict[str, Any] | None:
     """Pearson correlation over (up to ``max_cols``) numeric columns.
 
-    Returns ``None`` when fewer than two numeric columns are available. NaN cells
+    Identifier-like columns (near-unique, passed in ``exclude``) are dropped
+    first: a correlation over near-unique ID values is noise, not signal, so
+    including them just clutters the matrix with meaningless cells — the same
+    reason the UI already suppresses their distribution graph. Constant columns
+    are *not* excluded (their cells are legitimately ``None`` / undefined and
+    still tell the analyst the column is degenerate).
+
+    Returns ``None`` when fewer than two usable numeric columns remain. NaN cells
     (e.g. a constant column has no correlation) become ``None``.
     """
-    cols = [c for c in numeric_cols if c in df.columns][:max_cols]
+    exclude = exclude or set()
+    available = [c for c in numeric_cols if c in df.columns and c not in exclude]
+    cols = available[:max_cols]
     if len(cols) < 2:
         return None
 
@@ -190,7 +204,7 @@ def _correlation(
     return {
         "columns": list(corr.columns),
         "matrix": matrix,
-        "truncated": len(cols) < len([c for c in numeric_cols if c in df.columns]),
+        "truncated": len(cols) < len(available),
     }
 
 
@@ -242,17 +256,23 @@ def profile_dataframe(
     numeric_set = set(numeric_cols)
 
     profiles: list[dict[str, Any]] = []
+    # Identifier-like columns are collected here so they can be excluded from the
+    # correlation matrix below (a correlation over near-unique values is noise).
+    identifier_cols: set[str] = set()
     for col in df.columns:
         series = df[col]
         n_missing = int(series.isna().sum())
         n_unique = int(series.dropna().nunique())
+        # Degenerate-column advisories (constant / identifier) for the UI.
+        flags = _quality_flags(n_unique, n_rows)
+        if "identifier" in flags:
+            identifier_cols.add(col)
         base: dict[str, Any] = {
             "name": col,
             "n_missing": n_missing,
             "missing_pct": _finite_or_none(n_missing / n_rows * 100) if n_rows else None,
             "n_unique": n_unique,
-            # Degenerate-column advisories (constant / identifier) for the UI.
-            "flags": _quality_flags(n_unique, n_rows),
+            "flags": flags,
         }
 
         if col in datetime_set:
@@ -271,7 +291,9 @@ def profile_dataframe(
 
         profiles.append(base)
 
-    correlation = _correlation(heavy_df, numeric_cols, max_corr_cols)
+    correlation = _correlation(
+        heavy_df, numeric_cols, max_corr_cols, exclude=identifier_cols
+    )
 
     return {
         "column_profiles": profiles,
