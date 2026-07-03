@@ -210,6 +210,11 @@ common values for category columns, a missing-data scan, and how the number colu
   (it looks like an ID or reference number — high churn that won't generalise and can leak the
   answer). Uses the same "near-unique" threshold as the Feature Impact screen so the two agree.
   +2 engine tests.
+- **Update (2026-07-03) — identifier-like columns are kept out of the correlation grid.** A
+  correlation over near-unique ID values is just noise, so any column flagged "identifier-like" is
+  now dropped before the number-column correlation is computed (constant columns are still shown —
+  their blank cells honestly say "no variance"). This matches what the dashboard already does for
+  those columns' distribution charts. +2 engine tests.
 
 ## Train-vs-test metrics — the overfit gap (✅ Done, 2026-06-26)
 **In one line:** Every model now reports its scores on the **training data** alongside the
@@ -418,6 +423,91 @@ how much (a SHAP waterfall), for **all six** models.
   stays as a documented stub that now points callers to the `/run` explanations. Engine + API +
   dashboard, new tests across all three (**337 backend pytest · 122 frontend vitest**); `shap`
   added to requirements. This **restores** unwire.md entry #3.
+
+## Explainability — LLM reason-code narratives on top of SHAP (✅ Done, 2026-07-03)
+**In one line:** Each explained row can now carry a short plain-language paragraph — written by
+an Azure OpenAI model from the row's own SHAP numbers — that says, in words an underwriter can
+read, how the top features drove that prediction.
+- **What it adds:** the SHAP work above gives the *numbers* behind one prediction (base value,
+  each feature's signed push, the additive landing point). This turns those same numbers into a
+  2–4 sentence reason-code narrative — "flagged high lapse risk chiefly because of a high number
+  of late payments, only partly offset by a longer tenure" — so a claims/underwriting user doesn't
+  have to read a waterfall.
+- **How:** a new pure engine module (`analysis/llm_explain.py`) builds an Azure OpenAI chat client
+  from five `AZURE_OPEN_AI_*` environment variables and, for each explained row, sends the top
+  features (by |contribution|), their signed SHAP pushes, the row's feature values, the base value
+  and the prediction, asking for a short grounded paragraph. The `openai` package is imported
+  **lazily** and only when narratives are requested — the exact same opt-in / lazy-import
+  discipline as `shap` and `optuna`.
+- **Opt-in twice, and safe to fail.** It is **OFF by default**, gated by a new
+  `explainability.llm_narratives` flag that also requires SHAP (`explainability.enabled`) to be on.
+  If the credentials are absent, the `openai` package is missing, or a call errors/times out, the
+  run simply ships SHAP without narratives — a report-only layer that never aborts a run and adds
+  no new ML or leakage surface (it only reads values SHAP already computed; nothing is refit).
+- **Scope:** one narrative per explained (model, row) for **all** models that produced SHAP, over
+  the same `sample_rows` cap (default 20 rows). Binary + multiclass (multilabel isn't explained).
+- **Surfaced additively.** The API gained `result.explanations[model].rows[].narrative` (locked
+  contract bumped `1.6 → 1.7`, additive — `null` unless narratives were on AND credentials
+  configured, so a SHAP-only run is unchanged), and `explanations_summary.csv` gained a `narrative`
+  column. Engine + API + dashboard (a toggle on Configuration + the narrative rendered above the
+  waterfall); new tests across all three; `openai` added to requirements. Hallucination check ✅ —
+  `AzureOpenAI(...)` + `chat.completions.create(...)` verified against the installed openai 1.109.1.
+
+## Explainability — context-aware, original-value narratives (✅ Done, 2026-07-03)
+**In one line:** The LLM narratives now read like a human wrote them — they cite the **original
+(un-scaled) values** ("status.description = 4", "coverage = 500,000"), compare the prediction to the
+**class base rate**, and use **domain meaning** you supply, instead of restating a scaled number.
+- **The problem:** the first cut fed the model the *scaled* feature values ("Decision_Days =
+  -1.473"), no idea what the columns/target mean, and only that one row — producing mechanical text.
+- **Original values.** The narrator now maps each SHAP feature back to its raw value from the
+  retained pre-preprocessing test rows (`test_df_`): a numeric column shows its real number, a
+  one-hot column shows the source column's category, and a derived/interaction feature with no raw
+  source keeps its contribution without inventing a value.
+- **Dataset context — you choose the source.** A new `context_mode` (**given / derived / both**)
+  controls what the model sees: `given` uses the free-text `dataset_context` (what the data/target
+  mean) plus per-column `column_context` notes you write; `derived` lets the model infer meaning
+  from data the engine already has (column headers, a couple of sample rows, light stats, class base
+  rates); `both` combines them. [RISK] privacy — `derived`/`both` send sample data values to Azure
+  (opt-in, documented).
+- **Whole-run context in every call.** Each narrative is now framed against the model's headline
+  performance, the class base rates, and the global feature ranking — assembled once per model into
+  a `RunContext` and placed in the (stable) system message, with only the row's own values in the
+  user message.
+- **Faster + more robust.** Calls now run over a small **thread pool** (default 6) instead of one
+  at a time, cutting a `rows × models` sweep from minutes to seconds. The token budget was raised
+  and a **length-truncation retry** added because the richer prompt makes reasoning models (gpt-5)
+  spend far more hidden reasoning tokens — without it some rows came back empty.
+- **Request-side only — no contract/version change** (the response `narrative` is still a string).
+  Engine + API + dashboard (a "Context mode" selector, a dataset-context textarea, and a per-column
+  notes panel, shown only when the narrative toggle is on); new tests across all three. Verified live
+  against the Azure `gpt-5` deployment on `arizona_buyingpropensity.csv`. Hallucination check ✅ — no
+  new library calls (same `openai` chat API, `concurrent.futures` stdlib).
+
+## Explainability — narratives that read as prose, not a SHAP readout (✅ Done, 2026-07-03)
+**In one line:** With no context supplied, narratives still restated the SHAP numbers ("Decision_Days
+= 2 reduced the score by 0.1040…"); they now read as a short underwriter's note that names the two or
+three real drivers in business terms — and the model figures out what the columns mean on its own.
+- **Prompt redesign.** The narrator's instructions now forbid printing SHAP numbers / base value /
+  `feature = value (±x)` lists; it uses the contributions only to pick the top 2–3 drivers and their
+  direction, compares the case to the class base rate in words, treats integer-coded categoricals as
+  category *codes* (not magnitudes), and writes flowing prose. The per-row feature list was trimmed
+  from 8 to 5 to keep the focus on the few drivers that matter.
+- **Dataset-understanding "primer".** Because auto-derived context was just numbers (min/median/max,
+  sample rows) with no *meaning*, a single extra LLM call per run now infers — from the headers,
+  per-column facts, sample rows, target and class balance — what the dataset is, what the target
+  means, and each key column's likely business meaning. That inferred paragraph is reused in every
+  row's prompt (labelled a *hypothesis*, so any analyst-supplied context still wins). This gives the
+  narrator real semantics even when the analyst types nothing. It runs only in `derived`/`both` mode,
+  once per run (not per row), and degrades to no-primer behaviour on any failure.
+- **Coded columns flagged.** Low-cardinality integer columns are labelled "category code" in the
+  derived facts so the model describes them qualitatively instead of as amounts.
+- **Result (verified live on `arizona_buyingpropensity.csv`, no human context):** *"This case looks
+  well below the typical conversion rate for our book. The primary negative driver is the application
+  status being in category 4… and a very fast decision turnaround of two days further lowered the
+  chance…"* — no raw numbers, drivers named in business terms.
+- **Engine-internal only** — prompt/primer quality; no `config`/API/contract/frontend/`schema_version`
+  change (reuses the existing `context_mode`). +1 LLM call per run. Tests extended; hallucination
+  check ✅ (same `openai` chat API, no new libraries).
 
 ---
 

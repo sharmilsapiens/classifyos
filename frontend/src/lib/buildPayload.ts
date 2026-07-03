@@ -66,6 +66,14 @@ export interface ConfigFormState {
   tune_search_space_overrides: SearchSpaceOverrides
   // explainability (per-row SHAP; opt-in)
   explain_enabled: boolean
+  /** opt-in Azure OpenAI reason-code narrative per explained row (requires explain_enabled). */
+  explain_llm: boolean
+  /** how dataset context reaches the narrator: given | derived | both. */
+  explain_context_mode: "given" | "derived" | "both"
+  /** free-text describing the data/target for the narrator (context_mode !== "derived"). */
+  explain_dataset_context: string
+  /** per-column meaning {column: note} for the narrator (context_mode !== "derived"). */
+  explain_column_context: Record<string, string>
   // user-defined structured features (built via the feature-builder panel)
   user_features: UserFeatureSpec[]
 }
@@ -114,6 +122,10 @@ export const DEFAULT_FORM_STATE: ConfigFormState = {
   tune_timeout_seconds: null, // no per-model wall-clock cap by default (n_trials bounds the study)
   tune_search_space_overrides: {},
   explain_enabled: false, // per-row SHAP is opt-in (KernelExplainer has cost)
+  explain_llm: false, // Azure OpenAI reason-code narrative is opt-in (per-row LLM call)
+  explain_context_mode: "both",
+  explain_dataset_context: "",
+  explain_column_context: {},
   user_features: [],
 }
 
@@ -191,6 +203,12 @@ export function buildPayload(form: ConfigFormState): RunConfig {
       // sample_rows / background_size use the engine defaults (20 / 100); not surfaced in the UI.
       sample_rows: 20,
       background_size: 100,
+      // Narratives only make sense with SHAP on; guard so LLM can't be requested without it.
+      llm_narratives: form.explain_enabled && form.explain_llm,
+      // Prompt-context knobs (request-only; ignored by the engine unless llm_narratives is on).
+      context_mode: form.explain_context_mode,
+      dataset_context: form.explain_dataset_context,
+      column_context: form.explain_column_context,
     },
     // Structured specs only — assembled from dropdowns; never a free-text formula.
     user_features: form.user_features,

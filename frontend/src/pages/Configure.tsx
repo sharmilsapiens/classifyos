@@ -30,6 +30,7 @@ import { EmptyState, PageHeader } from "@/components/common/States"
 import FeatureBuilderPanel from "@/components/config/FeatureBuilderPanel"
 import TuningOverridesPanel from "@/components/config/TuningOverridesPanel"
 import MissingByColumnPanel from "@/components/config/MissingByColumnPanel"
+import ExplainContextPanel from "@/components/config/ExplainContextPanel"
 
 // Allowed values — mirror config.py's tuples exactly.
 const PROBLEM_TYPES = ["binary", "multiclass", "multilabel"] as const
@@ -357,8 +358,71 @@ export default function Configure() {
               <Switch id="explain_enabled" label="Explain predictions" checked={form.explain_enabled}
                 onChange={(e) => updateForm({ explain_enabled: e.target.checked })} />
             </Field>
+            {form.explain_enabled && (
+              <Field label="LLM reason-code narrative (Azure OpenAI)"
+                hint="Opt-in: also generate a plain-language paragraph per explained row describing how the top features drove the prediction. Requires SHAP (above) and the server's AZURE_OPEN_AI_* credentials; one LLM call per explained row, so it adds latency. Degrades to SHAP-only if unconfigured.">
+                <Switch id="explain_llm" label="Narrate predictions with an LLM" checked={form.explain_llm}
+                  onChange={(e) => updateForm({ explain_llm: e.target.checked })} />
+              </Field>
+            )}
           </CardContent>
         </Card>
+
+        {/* LLM narrative context — only when the narrative toggle is on. Shapes the prompt, not the ML. */}
+        {form.explain_enabled && form.explain_llm && (
+          <Card>
+            <CardHeader>
+              <CardTitle>LLM narrative context</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-5">
+              <Field label="Context mode"
+                hint="Given: use only the notes you write below. Derived: let the model infer meaning from the data (column headers, a sample row, basic stats, class base rates). Both: combine them.">
+                <Select
+                  value={form.explain_context_mode}
+                  onChange={(e) =>
+                    updateForm({
+                      explain_context_mode: e.target.value as "given" | "derived" | "both",
+                    })
+                  }
+                >
+                  <option value="both">Both (given + derived)</option>
+                  <option value="given">Given context only</option>
+                  <option value="derived">Derived from data only</option>
+                </Select>
+              </Field>
+
+              {form.explain_context_mode !== "derived" && (
+                <>
+                  <Field label="Dataset context"
+                    hint="Free-text: what this dataset is, what the target means, any domain notes. Sent to the model to ground the explanations.">
+                    <textarea
+                      id="explain_dataset_context"
+                      className="min-h-24 w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                      placeholder="e.g. Insurance quotes for Arizona commercial policies. Target 'converted' = the quote was bound into a policy (1) or not (0)."
+                      value={form.explain_dataset_context}
+                      onChange={(e) => updateForm({ explain_dataset_context: e.target.value })}
+                    />
+                  </Field>
+                  <div className="space-y-1.5">
+                    <Label>Per-column context</Label>
+                    <ExplainContextPanel
+                      featureCols={form.feature_cols}
+                      value={form.explain_column_context}
+                      onChange={(next) => updateForm({ explain_column_context: next })}
+                    />
+                  </div>
+                </>
+              )}
+
+              {form.explain_context_mode === "derived" && (
+                <p className="text-sm text-muted-foreground">
+                  The model will infer context from the data itself (column headers, a sample row,
+                  basic stats, and class base rates). No manual notes are sent.
+                </p>
+              )}
+            </CardContent>
+          </Card>
+        )}
 
         {/* Feature engineering — TEMPORARILY HIDDEN (Section 7 derived features unwired
             from the backend). Restore this card to re-expose the controls. The engine

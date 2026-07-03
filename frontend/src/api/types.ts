@@ -55,6 +55,17 @@ export interface ExplainabilityConfig {
   sample_rows: number
   /** TRAIN rows sampled as the SHAP reference distribution. */
   background_size: number
+  /**
+   * schema 1.7 (opt-in): add an Azure OpenAI reason-code paragraph per explained row. Requires
+   * `enabled` and server-side AZURE_OPEN_AI_* credentials; degrades to SHAP-only otherwise.
+   */
+  llm_narratives: boolean
+  /** How dataset context reaches the narrator (request-only; prompt quality, not the ML). */
+  context_mode: "given" | "derived" | "both"
+  /** Free-text describing the data/target (used when context_mode !== "derived"). */
+  dataset_context: string
+  /** Per-column meaning {column: note} (used when context_mode !== "derived"). */
+  column_context: Record<string, string>
 }
 
 export type ProblemType = "binary" | "multiclass" | "multilabel"
@@ -364,6 +375,12 @@ export interface ExplanationRow {
   prediction: number
   /** signed per-feature push toward the explained class. */
   contributions: Record<string, number>
+  /**
+   * schema 1.7 (optional): LLM-authored plain-language reason-code paragraph for this row
+   * (Azure OpenAI). null/absent unless `explainability.llm_narratives` was on AND the server
+   * had AZURE_OPEN_AI_* credentials.
+   */
+  narrative?: string | null
 }
 
 /** One model's per-row SHAP explanations (schema 1.6). */

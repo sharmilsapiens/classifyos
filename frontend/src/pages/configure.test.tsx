@@ -196,3 +196,42 @@ describe("Configure — decision threshold policy", () => {
     expect(screen.queryByText("Threshold value")).not.toBeInTheDocument()
   })
 })
+
+describe("Configure — LLM narrative context", () => {
+  function renderWithForm(overrides: Record<string, unknown>) {
+    mockApp = {
+      inspect: PROFILE,
+      serverPath: PROFILE.server_path,
+      form: { ...DEFAULT_FORM_STATE, target: "", feature_cols: ["age"], ...overrides },
+      updateForm: vi.fn(),
+      runPipeline: vi.fn(),
+      formErrors: () => [] as string[],
+    }
+    render(
+      <MemoryRouter>
+        <Configure />
+      </MemoryRouter>,
+    )
+  }
+
+  it("hides the context card until the LLM narrative toggle is on", () => {
+    renderWithForm({ explain_enabled: true, explain_llm: false })
+    expect(screen.queryByText("LLM narrative context")).not.toBeInTheDocument()
+  })
+
+  it("shows context mode + dataset textarea + per-column notes when LLM is on", () => {
+    renderWithForm({ explain_enabled: true, explain_llm: true, explain_context_mode: "both" })
+    expect(screen.getByText("LLM narrative context")).toBeInTheDocument()
+    expect(screen.getByText("Context mode")).toBeInTheDocument()
+    expect(screen.getByText("Dataset context")).toBeInTheDocument()
+    // the per-column note input for the selected feature "age"
+    expect(screen.getByLabelText("Context note for age")).toBeInTheDocument()
+  })
+
+  it("hides the manual inputs in derived-only mode", () => {
+    renderWithForm({ explain_enabled: true, explain_llm: true, explain_context_mode: "derived" })
+    expect(screen.getByText("LLM narrative context")).toBeInTheDocument()
+    expect(screen.queryByText("Dataset context")).not.toBeInTheDocument()
+    expect(screen.queryByLabelText("Context note for age")).not.toBeInTheDocument()
+  })
+})

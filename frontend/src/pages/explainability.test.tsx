@@ -23,7 +23,7 @@ import Explainability from "./Explainability"
 function envelopeWithExplanations(): RunResponse {
   return {
     status: "ok",
-    schema_version: "1.6",
+    schema_version: "1.7",
     error: null,
     result: {
       explanations: {
@@ -36,6 +36,8 @@ function envelopeWithExplanations(): RunResponse {
               base_value: 0.3,
               prediction: 0.62,
               contributions: { num_late_payments: 0.25, policy_tenure_years: 0.07 },
+              narrative:
+                "This policy is flagged high lapse risk chiefly due to a high number of late payments.",
             },
           ],
         },
@@ -94,6 +96,17 @@ describe("Explainability (per-row SHAP)", () => {
     expect(screen.getByText("policy_tenure_years")).toBeInTheDocument()
     // The additive framing is present.
     expect(screen.getByText(/base value \+ all contributions = prediction/i)).toBeInTheDocument()
+    // The LLM reason-code narrative (schema 1.7) renders when present on the row.
+    expect(screen.getByText(/LLM reason-code narrative/i)).toBeInTheDocument()
+    expect(screen.getByText(/high number of late payments/i)).toBeInTheDocument()
+  })
+
+  it("omits the narrative panel when a row has no narrative (SHAP-only)", () => {
+    mockApp = { result: envelopeWithExplanations(), serverPath: "policy_lapse.csv" }
+    renderPage()
+    // The LogisticRegression row carries no narrative → the panel is absent for it.
+    fireEvent.change(screen.getByLabelText("Model"), { target: { value: "LogisticRegression" } })
+    expect(screen.queryByText(/LLM reason-code narrative/i)).not.toBeInTheDocument()
   })
 
   it("switches models via the picker (kernel explainer path)", () => {

@@ -41,7 +41,15 @@
 > field was renamed, retyped, or removed. The response envelope now reports `"schema_version": "1.5"`. Old
 > clients ignore the new fields.
 >
-> **`1.6` (additive, current default).** Adds one new **optional** block — `result.explanations` —
+> **`1.7` (additive, current default).** Adds one new **optional** field —
+> `result.explanations[model].rows[].narrative` — an LLM-authored plain-language reason-code paragraph for
+> that row (Azure OpenAI), grounded in the same SHAP contributions. It is `null` unless the request-side
+> opt-in `explainability.llm_narratives` was `true` **and** the `AZURE_OPEN_AI_*` credentials were configured
+> on the server; absent credentials or a failed call degrade to SHAP-only, so a run stays valid either way.
+> No `1.0`–`1.6` field was renamed, retyped, or removed. The response envelope now reports
+> `"schema_version": "1.7"`. Old clients ignore the new field.
+>
+> **`1.6` (additive).** Adds one new **optional** block — `result.explanations` —
 > carrying **per-row SHAP** explanations keyed by model name (**local** explainability: why the model
 > predicted what it did for individual held-out test rows). Each model entry is `{method, rows[]}` where a
 > row is `{sample_index, explained_class, base_value, prediction, contributions}` and
@@ -175,7 +183,11 @@ problem there is returned as HTTP 422.
   "tuning": { "enabled": false, "models": [], "metric": "f1_weighted", "cv": true,
               "cv_folds": 3, "n_trials": 30, "timeout_seconds": null,  // null = no per-model cap (default); n_trials bounds the study
               "search_space_overrides": {} },  // per-model bound/choice overrides, e.g. {"XGBoost": {"max_depth": {"low": 3, "high": 6}}}
-  "explainability": { "enabled": false, "sample_rows": 20, "background_size": 100 },  // OPTIONAL; opt-in per-row SHAP → result.explanations (1.6); OFF → block absent
+  "explainability": { "enabled": false, "sample_rows": 20, "background_size": 100,
+                      "llm_narratives": false,          // adds an Azure OpenAI reason-code paragraph per row (1.7; needs AZURE_OPEN_AI_* env)
+                      "context_mode": "both",           // given | derived | both — how dataset context reaches the narrator (request-only)
+                      "dataset_context": "",            // free-text: what the data/target mean (used when context_mode != "derived")
+                      "column_context": {} },           // {column: note} per-column meaning (used when context_mode != "derived"); OPTIONAL; OFF → block absent
 
   "user_features": [            // OPTIONAL; [] / omitted → no user features (unchanged)
     // STRUCTURED specs only — NO free-text formula, nothing is ever eval()'d. Each spec
@@ -304,7 +316,8 @@ missing/wrong-typed column is skipped and logged — it never aborts the run).
             "explained_class": "1",// positive class (binary) / predicted class (multiclass)
             "base_value": 0.36,    // model's average output — the waterfall's start
             "prediction": 0.87,    // == base_value + Σ contributions (SHAP-additive)
-            "contributions": {"num_late_payments": 0.40, "policy_tenure_years": 0.11}  // signed per-feature push
+            "contributions": {"num_late_payments": 0.40, "policy_tenure_years": 0.11},  // signed per-feature push
+            "narrative": "The model flags this policy as high lapse risk chiefly because of a high number of late payments, which pushed the prediction up, only partly offset by a longer policy tenure."  // NEW in 1.7 (additive); null unless llm_narratives on AND creds configured
           }
         ]
       }
@@ -390,6 +403,19 @@ missing/wrong-typed column is skipped and logged — it never aborts the run).
   `explanations_summary.csv` (only when enabled). [RISK] leakage — the SHAP background is a TRAIN reference
   sample (never fitted on); explained rows are read-only test rows; nothing is refit. Pure plumbing — the
   engine already computed the values.
+- **`result.explanations[model].rows[].narrative` (1.7, additive, optional)** is an LLM-authored
+  plain-language reason-code paragraph for that row (Azure OpenAI chat), grounded in the same SHAP
+  contributions plus the row's model-space feature values. Gated by the request-side opt-in
+  `explainability.llm_narratives` (requires `explainability.enabled`) **and** the `AZURE_OPEN_AI_*` server
+  credentials; it is `null` when narratives were OFF, credentials were absent, or the call failed — a
+  report-only layer that degrades to SHAP-only and never aborts a run. The `explanations_summary.csv` gains a
+  `narrative` column (empty when absent). No new ML — a presentation layer over the SHAP numbers.
+  The narrative quality is shaped by three **request-only** `explainability` fields (no response/version
+  change): `dataset_context` (free-text on the data/target), `column_context` (`{column: note}`), and
+  `context_mode` (`given` | `derived` | `both`) — `derived`/`both` also feed the model engine-derived facts
+  (column headers + a sample row + light stats + class base rates + the global feature ranking) and the row's
+  ORIGINAL (un-scaled) values, so a narrative can cite `num_late_payments = 3` in business terms rather than a
+  scaled float. [RISK] privacy — `derived`/`both` send sample data values to Azure OpenAI (opt-in).
 
 ### Execution model (limitation)
 
@@ -412,6 +438,9 @@ _`1.5` (additive): added `result.models[].decision_threshold` + `.calibrated` (t
 policy — effective binary operating threshold + calibration status); all `1.0`–`1.4` fields are unchanged._
 _`1.6` (additive): added the optional `result.explanations` block (per-row SHAP — local explainability,
 covering all six models; opt-in via the request `explainability` block); all `1.0`–`1.5` fields are unchanged._
+_`1.7` (additive): added the optional `result.explanations[model].rows[].narrative` field (LLM-authored
+reason-code paragraph, Azure OpenAI; opt-in via the request `explainability.llm_narratives` + `AZURE_OPEN_AI_*`
+server credentials); all `1.0`–`1.6` fields are unchanged._
 _2026-06-26 (default-value change only, **no schema/version change** — field shapes unchanged):
 `tuning.timeout_seconds` now defaults to `null` (no per-model wall-clock cap; `n_trials` bounds
 the study) rather than `600`. `tuning.search_space_overrides` (always present in `1.0`) is now

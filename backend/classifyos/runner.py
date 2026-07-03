@@ -262,13 +262,18 @@ class ModelRunner:
         # untouched TEST split. Per-model try/except inside the helper — report-only, never aborts.
         expl_cfg = cfg.get("explainability", {}) or {}
         if expl_cfg.get("enabled", False):
+            sample_rows = int(expl_cfg.get("sample_rows", 20))
             self.explanations_ = self._compute_explanations(
                 problem_type,
                 train_X,
-                sample_rows=int(expl_cfg.get("sample_rows", 20)),
+                sample_rows=sample_rows,
                 background_size=int(expl_cfg.get("background_size", 100)),
                 random_state=cfg.get("random_state", 42),
             )
+            # Optional LLM reason-code narratives on top of the SHAP numbers (opt-in; Azure
+            # OpenAI). Report-only: absent credentials / a failed call leave SHAP untouched.
+            if expl_cfg.get("llm_narratives", False):
+                self._add_llm_narratives(cfg, problem_type, sample_rows=sample_rows)
 
         n_ok = len(self.models_)
         logger.info(
@@ -732,6 +737,232 @@ class ModelRunner:
                 out[name] = None
         return out
 
+    def _add_llm_narratives(
+        self, cfg: dict[str, Any], problem_type: str, *, sample_rows: int
+    ) -> None:
+        """Attach an LLM reason-code ``narrative`` to each explained row, in place.
+
+        For every model that produced SHAP explanations, this asks an Azure OpenAI chat model to
+        describe — for each explained TEST row — how the top features pushed the prediction, using
+        the SHAP contributions plus the row's ORIGINAL (un-scaled) values from ``self.test_df_``
+        and a per-model :class:`~classifyos.analysis.llm_explain.RunContext` (dataset/domain
+        context, class base rates, this model's performance, the global feature ranking). Calls
+        run concurrently (bounded). Report-only: absent credentials, a missing ``openai`` package,
+        or a failed call leave a row SHAP-only (no ``narrative`` key), so this never aborts the
+        run. No refit, no data mutation. See :mod:`classifyos.analysis.llm_explain`.
+        """
+        from .analysis.llm_explain import (
+            RunContext,
+            derive_dataset_understanding,
+            narrate_rows,
+            narrator_from_env,
+        )
+
+        if problem_type == "multilabel" or not self.explanations_:
+            return
+        narrator = narrator_from_env()
+        if narrator is None:  # unconfigured / SDK missing — already logged; ship SHAP only
+            return
+        if self.test_df_ is None or self.test_df_.empty:
+            return
+
+        target = cfg.get("target", "")
+        feature_cols = [c for c in (cfg.get("feature_cols") or []) if c in self.test_df_.columns]
+        expl = cfg.get("explainability", {}) or {}
+        context_mode = expl.get("context_mode", "both")
+        dataset_context = expl.get("dataset_context", "") or ""
+        column_context = expl.get("column_context", {}) or {}
+
+        # Shared context (identical across models/rows), computed once.
+        class_base_rates = self._class_base_rates(target)
+        derived_schema: list[str] = []
+        sample_ctx_rows: list[dict[str, Any]] = []
+        dataset_understanding = ""
+        if context_mode in ("derived", "both"):
+            derived_schema = self._derived_schema(feature_cols)
+            sample_ctx_rows = self._sample_context_rows(feature_cols)
+            # One-time "primer": infer dataset/column/target meaning from the derived facts so the
+            # per-row narrator has semantics even when the analyst supplied none. One call per run.
+            first_model = next(iter(self.explanations_), None)
+            hint_features = (
+                [f for f, _ in self._global_features(first_model)] if first_model else []
+            )
+            primer_ctx = RunContext(
+                problem_type=problem_type,
+                target=target,
+                class_base_rates=class_base_rates,
+                context_mode=context_mode,
+                derived_schema=derived_schema,
+                sample_rows=sample_ctx_rows,
+            )
+            dataset_understanding = (
+                derive_dataset_understanding(
+                    narrator, primer_ctx, global_features=hint_features
+                )
+                or ""
+            )
+
+        raw_test = self.test_df_
+        contexts: dict[str, RunContext] = {}
+
+        def context_for(model_name: str) -> RunContext:
+            if model_name not in contexts:
+                contexts[model_name] = RunContext(
+                    problem_type=problem_type,
+                    target=target,
+                    class_base_rates=class_base_rates,
+                    model_metrics=self._model_headline_metrics(model_name),
+                    global_features=self._global_features(model_name),
+                    dataset_context=dataset_context,
+                    column_context=column_context,
+                    context_mode=context_mode,
+                    derived_schema=derived_schema,
+                    sample_rows=sample_ctx_rows,
+                    dataset_understanding=dataset_understanding,
+                )
+            return contexts[model_name]
+
+        # Build one narration job per (model, explained row).
+        jobs: list[dict[str, Any]] = []
+        for name, result in self.explanations_.items():
+            if not result or not result.get("rows"):
+                continue
+            run_context = context_for(name)
+            for row in result["rows"]:
+                idx = row["sample_index"]
+                original_row = (
+                    raw_test.iloc[idx][feature_cols].to_dict()
+                    if feature_cols and 0 <= idx < len(raw_test)
+                    else None
+                )
+                jobs.append(
+                    {
+                        "key": (name, idx),
+                        "params": {
+                            "model_name": name,
+                            "problem_type": problem_type,
+                            "target": target,
+                            "explained_class": row["explained_class"],
+                            "base_value": row["base_value"],
+                            "prediction": row["prediction"],
+                            "contributions": row["contributions"],
+                            "original_row": original_row,
+                            "run_context": run_context,
+                        },
+                    }
+                )
+
+        results = narrate_rows(narrator, jobs)
+
+        n_narrated = 0
+        for name, result in self.explanations_.items():
+            if not result or not result.get("rows"):
+                continue
+            for row in result["rows"]:
+                narrative = results.get((name, row["sample_index"]))
+                if narrative:
+                    row["narrative"] = narrative
+                    n_narrated += 1
+        logger.info("ModelRunner: attached %d LLM narrative(s) to explanations", n_narrated)
+
+    def _class_base_rates(self, target: str) -> dict[str, float]:
+        """Population base rate per class from the raw frame (``{label: proportion}``).
+
+        Read from ``self.raw_df_`` (not the balanced train matrix) so the rates reflect the real
+        distribution the narrative should reference. Empty when unavailable.
+        """
+        if self.raw_df_ is None or target not in self.raw_df_.columns:
+            return {}
+        counts = self.raw_df_[target].astype(str).value_counts(normalize=True)
+        return {str(k): float(v) for k, v in counts.items()}
+
+    def _model_headline_metrics(self, model_name: str) -> dict[str, float]:
+        """This model's headline TEST metrics (F1-weighted + accuracy) from ``metrics_df_``."""
+        if self.metrics_df_ is None or self.metrics_df_.empty:
+            return {}
+        rows = self.metrics_df_[self.metrics_df_["model"] == model_name]
+        if rows.empty:
+            return {}
+        row = rows.iloc[0]
+        out: dict[str, float] = {}
+        for key in ("f1_weighted", "accuracy"):
+            value = row.get(key)
+            if value is not None and pd.notna(value):
+                out[key] = float(value)
+        return out
+
+    def _global_features(self, model_name: str) -> list[tuple[str, float]]:
+        """Top-K globally important features for a model (permutation, else feature-impact).
+
+        Prefers this model's model-agnostic permutation importance; falls back to the pre-training
+        raw-feature composite ranking so a model with no permutation result still gets context.
+        """
+        from .analysis.llm_explain import _GLOBAL_FEATURE_TOP_K
+
+        perm = (self.permutation_importances_ or {}).get(model_name)
+        if perm:
+            ranked = sorted(perm.items(), key=lambda kv: kv[1], reverse=True)
+            return [(str(f), float(v)) for f, v in ranked[:_GLOBAL_FEATURE_TOP_K]]
+        if self.feature_impact_ is not None and not self.feature_impact_.empty:
+            fi = self.feature_impact_.sort_values("composite_score", ascending=False)
+            return [
+                (str(r["feature"]), float(r["composite_score"]))
+                for _, r in fi.head(_GLOBAL_FEATURE_TOP_K).iterrows()
+                if pd.notna(r.get("composite_score"))
+            ]
+        return []
+
+    def _derived_schema(self, feature_cols: list[str]) -> list[str]:
+        """One compact fact line per feature column, derived from the raw frame.
+
+        Numeric → ``col (numeric): min=.. median=.. max=..``; else → ``col (categorical):
+        examples a, b, c``. Lets the model infer meaning under ``context_mode`` derived/both.
+        """
+        if self.raw_df_ is None:
+            return []
+        lines: list[str] = []
+        for col in feature_cols:
+            if col not in self.raw_df_.columns:
+                continue
+            series = self.raw_df_[col]
+            if pd.api.types.is_numeric_dtype(series):
+                nunique = int(series.nunique(dropna=True))
+                is_int = pd.api.types.is_integer_dtype(series)
+                # A low-cardinality integer column is almost certainly a category CODE, not a
+                # measured quantity — label it so the narrator won't read it as a magnitude.
+                if is_int and nunique <= 20:
+                    examples = [str(v) for v in series.dropna().unique()[:5]]
+                    joined = ", ".join(examples)
+                    lines.append(
+                        f"- {col} (category code, integer-coded): {nunique} distinct, "
+                        f"e.g. {joined}" if joined else f"- {col} (category code)"
+                    )
+                    continue
+                try:
+                    lines.append(
+                        f"- {col} (numeric): min={series.min():.4g}, "
+                        f"median={series.median():.4g}, max={series.max():.4g}"
+                    )
+                except (TypeError, ValueError):
+                    lines.append(f"- {col} (numeric)")
+            else:
+                examples = [str(v) for v in series.dropna().unique()[:5]]
+                joined = ", ".join(examples)
+                lines.append(f"- {col} (categorical): examples {joined}" if joined else f"- {col}")
+        return lines
+
+    def _sample_context_rows(self, feature_cols: list[str]) -> list[dict[str, Any]]:
+        """A couple of raw sample rows (feature columns only) to seed derived context."""
+        from .analysis.llm_explain import _DERIVED_SAMPLE_ROWS
+
+        if self.raw_df_ is None or not feature_cols:
+            return []
+        cols = [c for c in feature_cols if c in self.raw_df_.columns]
+        if not cols:
+            return []
+        head = self.raw_df_[cols].head(_DERIVED_SAMPLE_ROWS)
+        return [{k: v for k, v in rec.items()} for rec in head.to_dict(orient="records")]
+
     def _build_feature_importance_df(self) -> pd.DataFrame:
         """Flatten each model's native feature importance into ranked long-form rows.
 
@@ -805,12 +1036,16 @@ class ModelRunner:
             "prediction",
             "feature",
             "contribution",
+            # Optional LLM reason-code narrative (repeated per feature row of a given model+row
+            # group); empty string when narratives were OFF or a call failed (opt-in).
+            "narrative",
         ]
         rows: list[dict[str, Any]] = []
         for name, result in self.explanations_.items():
             if not result or not result.get("rows"):
                 continue
             for row in result["rows"]:
+                narrative = row.get("narrative", "")
                 for feature, contribution in row["contributions"].items():
                     rows.append(
                         {
@@ -821,6 +1056,7 @@ class ModelRunner:
                             "prediction": row["prediction"],
                             "feature": feature,
                             "contribution": float(contribution),
+                            "narrative": narrative,
                         }
                     )
         return pd.DataFrame(rows, columns=columns)

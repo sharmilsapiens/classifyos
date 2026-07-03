@@ -189,6 +189,16 @@ function Waterfall({ row }: { row: ExplanationRow }) {
         <CardTitle>Feature contributions</CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
+        {row.narrative ? (
+          <div className="rounded-md border border-indigo-200 bg-indigo-50/60 p-3 text-sm leading-relaxed text-indigo-950 dark:border-indigo-900 dark:bg-indigo-950/40 dark:text-indigo-100">
+            <div className="mb-1 flex items-center gap-2 text-xs font-medium uppercase tracking-wide text-indigo-600 dark:text-indigo-300">
+              <span className="inline-block h-2 w-2 rounded-full bg-indigo-500" aria-hidden />
+              LLM reason-code narrative
+            </div>
+            <p>{row.narrative}</p>
+          </div>
+        ) : null}
+
         <div className="flex flex-wrap items-center gap-x-6 gap-y-1 text-sm">
           <span>
             Explaining class{" "}

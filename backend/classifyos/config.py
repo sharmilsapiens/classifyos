@@ -74,6 +74,16 @@ TUNING_METRICS = (
 #: ``pr_auc`` on multiclass, ``log_loss`` on multilabel) yields no importances for that run.
 PERMUTATION_METRICS = TUNING_METRICS
 
+#: How the LLM reason-code narrator (opt-in; see the ``explainability`` block) is fed dataset
+#: context: ``given`` uses only the analyst-supplied ``dataset_context``/``column_context`` text;
+#: ``derived`` feeds the model headers + a sample row + light per-column facts + class base rates
+#: and lets it infer meaning; ``both`` (default) combines them. Only consulted when
+#: ``explainability.llm_narratives`` is on.
+EXPLAIN_CONTEXT_MODES = ("given", "derived", "both")
+#: Hard caps so a runaway ``dataset_context`` / ``column_context`` can't bloat every prompt.
+EXPLAIN_DATASET_CONTEXT_MAX = 8000
+EXPLAIN_COLUMN_CONTEXT_VALUE_MAX = 500
+
 # --- decision policy: probability calibration + decision threshold -------------------
 #: Decision-threshold modes (binary problems only — multiclass/multilabel always use the
 #: argmax / per-label 0.5 and ignore ``threshold``/``threshold_mode``):
@@ -229,10 +239,23 @@ DEFAULT_CONFIG: dict[str, Any] = {
     # KernelExplainer for LogisticRegression/SVM/NaiveBayes). [RISK] cost — KernelExplainer
     # (SVM/NaiveBayes) is the slow path, which is why it is opt-in and bounded to a small row
     # sample. Binary + multiclass only (multilabel returns nothing).
+    # ``llm_narratives`` (default OFF) layers a plain-language reason-code paragraph on top of
+    # each explained row's SHAP numbers, authored by an Azure OpenAI chat model (credentials from
+    # the ``AZURE_OPEN_AI_*`` env vars). Requires ``enabled`` (SHAP is its input) and covers the
+    # same ``sample_rows`` per model. [RISK] cost/latency — one LLM call per explained (model,
+    # row); it degrades gracefully to SHAP-only when credentials are absent or a call fails.
+    # ``dataset_context`` (overall free-text), ``column_context`` ({column: note}) and
+    # ``context_mode`` (given/derived/both) only shape the LLM prompt when ``llm_narratives`` is on;
+    # they never touch the ML. ``given`` uses only the supplied text, ``derived`` feeds the model
+    # data-derived facts (headers + a sample row + light stats + class base rates), ``both`` merges.
     "explainability": {
         "enabled": False,        # OFF by default
         "sample_rows": 20,       # first N held-out TEST rows per model to explain
         "background_size": 100,  # TRAIN rows sampled as the SHAP reference distribution
+        "llm_narratives": False,  # OFF by default — opt-in Azure OpenAI per-row narrative
+        "dataset_context": "",   # analyst free-text describing the dataset / target meaning
+        "column_context": {},    # {column: short note}; per-column meaning for the narrator
+        "context_mode": "both",  # given | derived | both — how dataset context reaches the LLM
     },
     "random_state": 42,
 }
@@ -443,8 +466,9 @@ def _validate_explainability(e: Any) -> None:
     """Validate the ``explainability`` sub-dict (per-row SHAP; opt-in)."""
     if not isinstance(e, dict):
         raise ValueError("'explainability' must be a dict")
-    if "enabled" in e and not isinstance(e["enabled"], bool):
-        raise ValueError(f"'explainability.enabled' must be a bool, got {e['enabled']!r}")
+    for flag in ("enabled", "llm_narratives"):
+        if flag in e and not isinstance(e[flag], bool):
+            raise ValueError(f"'explainability.{flag}' must be a bool, got {e[flag]!r}")
     for key in ("sample_rows", "background_size"):
         value = e.get(key)
         if value is not None and (
@@ -452,6 +476,38 @@ def _validate_explainability(e: Any) -> None:
         ):
             raise ValueError(
                 f"'explainability.{key}' must be a positive integer, got {value!r}"
+            )
+
+    # LLM-narrative dataset-context inputs (prompt-only; never touch the ML).
+    if "context_mode" in e:
+        _require_choice(e["context_mode"], EXPLAIN_CONTEXT_MODES, "explainability.context_mode")
+    dataset_context = e.get("dataset_context", "")
+    if not isinstance(dataset_context, str):
+        raise ValueError(
+            f"'explainability.dataset_context' must be a string, got {dataset_context!r}"
+        )
+    if len(dataset_context) > EXPLAIN_DATASET_CONTEXT_MAX:
+        raise ValueError(
+            f"'explainability.dataset_context' must be <= {EXPLAIN_DATASET_CONTEXT_MAX} chars"
+        )
+    column_context = e.get("column_context", {})
+    if not isinstance(column_context, dict):
+        raise ValueError(
+            "'explainability.column_context' must be a dict of {column: note}"
+        )
+    for col, note in column_context.items():
+        if not isinstance(col, str) or not col.strip():
+            raise ValueError(
+                f"'explainability.column_context' keys must be non-empty column names, got {col!r}"
+            )
+        if not isinstance(note, str):
+            raise ValueError(
+                f"'explainability.column_context[{col!r}]' must be a string, got {note!r}"
+            )
+        if len(note) > EXPLAIN_COLUMN_CONTEXT_VALUE_MAX:
+            raise ValueError(
+                f"'explainability.column_context[{col!r}]' must be "
+                f"<= {EXPLAIN_COLUMN_CONTEXT_VALUE_MAX} chars"
             )
 
 

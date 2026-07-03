@@ -129,6 +129,28 @@ additively (`schema_version` now reports `"1.1"`).
   envelope is unchanged, so **no `schema_version` bump**; the request example in
   `docs/api_contract.md` was updated.
 
+## LLM reason-code narratives on the SHAP block (schema 1.6 → 1.7, additive) — 2026-07-03
+- The `/run` request's optional `explainability` block gained one more flag, `llm_narratives`
+  (default `false`), and each per-row SHAP explanation in the response gained an optional
+  `narrative` string. When `llm_narratives` is on (it requires `explainability.enabled`) **and** the
+  server has the five `AZURE_OPEN_AI_*` env vars configured, the engine attaches an LLM-authored
+  plain-language reason-code paragraph to each explained row; otherwise `narrative` is `null` and
+  the run is byte-identical to `1.6`. The `schema_version` was bumped **`1.6 → 1.7`** (additive —
+  no earlier field renamed/retyped/removed) and `docs/api_contract.md` was updated (header note,
+  request + response examples, notes bullet, footer). The `explanations_summary.csv` artifact gained
+  a `narrative` column. Purely a presentation layer — the API still just plumbs values the engine
+  computed; absent credentials or a failed call degrade gracefully to SHAP-only.
+
+## Narrative context knobs (request-only, no version change) — 2026-07-03
+- The `explainability` block gained three request-only fields that shape the LLM prompt (not the
+  ML, not the response): `context_mode` (`given` | `derived` | `both`), `dataset_context`
+  (free-text on the data/target), and `column_context` (`{column: note}`). They let the narrator
+  cite ORIGINAL feature values and business meaning instead of scaled numbers. Validated by
+  `build_config` (bad `context_mode` → 422). The response envelope and `schema_version` are
+  **unchanged** (`narrative` is still a string), so this is purely additive on the request side;
+  `docs/api_contract.md` request example + notes updated. [RISK] privacy — `derived`/`both` cause
+  the server to send sample data values to Azure OpenAI (opt-in).
+
 ---
 
 ## How to read this project

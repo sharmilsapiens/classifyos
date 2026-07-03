@@ -96,8 +96,39 @@ describe("buildPayload", () => {
       enabled: false,
       sample_rows: 20,
       background_size: 100,
+      llm_narratives: false,
+      context_mode: "both",
+      dataset_context: "",
+      column_context: {},
     })
     expect(buildPayload({ ...form, explain_enabled: true }).explainability.enabled).toBe(true)
+  })
+
+  it("carries the LLM narrative context (mode, dataset text, per-column notes)", () => {
+    const payload = buildPayload({
+      ...form,
+      explain_enabled: true,
+      explain_llm: true,
+      explain_context_mode: "given",
+      explain_dataset_context: "Arizona quotes; converted = bound.",
+      explain_column_context: { Decision_Days: "days to decision" },
+    })
+    expect(payload.explainability.context_mode).toBe("given")
+    expect(payload.explainability.dataset_context).toBe("Arizona quotes; converted = bound.")
+    expect(payload.explainability.column_context).toEqual({ Decision_Days: "days to decision" })
+  })
+
+  it("only sends llm_narratives when SHAP is also on (guard)", () => {
+    // LLM without SHAP is meaningless — buildPayload forces it off.
+    expect(
+      buildPayload({ ...form, explain_enabled: false, explain_llm: true }).explainability
+        .llm_narratives,
+    ).toBe(false)
+    // With both on, the narrative flag is carried through.
+    expect(
+      buildPayload({ ...form, explain_enabled: true, explain_llm: true }).explainability
+        .llm_narratives,
+    ).toBe(true)
   })
 
   it("carries user-defined feature specs through to the payload verbatim", () => {

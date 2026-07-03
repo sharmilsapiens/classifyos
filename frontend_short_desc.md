@@ -364,6 +364,29 @@ the scoreboard.
 - **Backwards-safe.** The new response fields are optional; an older run without them shows "—".
   **113 vitest green · tsc + build clean.**
 
+## Explainability — LLM reason-code narrative on the waterfall (2026-07-03)
+- The Configuration page's "Per-row explainability (SHAP)" toggle now reveals a second, nested
+  toggle — **"LLM reason-code narrative (Azure OpenAI)"** — shown only once SHAP is enabled (a
+  narrative is meaningless without the SHAP numbers it summarises). `buildPayload` carries a new
+  `explain_llm` form field into `explainability.llm_narratives`, force-off unless SHAP is also on.
+- The **Explainability** page now renders, above the SHAP waterfall, the LLM-authored paragraph
+  for the selected row when the response carries one (`result.explanations[model].rows[].narrative`,
+  schema 1.7) — an indigo reason-code panel. When a row has no narrative (SHAP-only run, or LLM was
+  off/unconfigured) the panel is simply omitted, so the page degrades cleanly. The `ExplanationRow`
+  type gained an optional `narrative` and `ExplainabilityConfig` gained `llm_narratives`.
+  **124 vitest green · tsc + build clean.**
+
+## Explainability — dataset-context controls for the narrator (2026-07-03)
+- When the "LLM reason-code narrative" toggle is on, a new **"LLM narrative context"** card appears
+  on Configuration with a **Context mode** selector (Given / Derived / Both), a **Dataset context**
+  textarea (what the data/target mean), and a **per-column notes** panel (new
+  `components/config/ExplainContextPanel.tsx`, mirroring the per-column imputation panel). In
+  *Derived* mode the manual inputs are hidden (the model infers context from the data). These map
+  to `explainability.context_mode` / `dataset_context` / `column_context`; `ConfigFormState` gained
+  `explain_context_mode` / `explain_dataset_context` / `explain_column_context`, carried by
+  `buildPayload` only when the narrative toggle is on. This is what makes narratives cite real
+  values and business meaning. **128 vitest green · tsc + build clean.**
+
 ---
 
 ## How to read this project

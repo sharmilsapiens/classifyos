@@ -133,7 +133,7 @@ def test_binary_run_envelope(binary_run_response) -> None:
     assert binary_run_response.status_code == 200
     body = binary_run_response.json()
     assert body["status"] == "ok"
-    assert body["schema_version"] == "1.6"
+    assert body["schema_version"] == "1.7"
     assert RESULT_KEYS == set(body["result"].keys())
 
 
@@ -188,7 +188,7 @@ def test_explanations_block_shape_and_additivity(explain_run_response) -> None:
     """
     assert explain_run_response.status_code == 200
     body = explain_run_response.json()
-    assert body["schema_version"] == "1.6"
+    assert body["schema_version"] == "1.7"
     expl = body["result"]["explanations"]
     assert isinstance(expl, dict) and set(expl) == {"RandomForest", "LogisticRegression"}
     assert expl["RandomForest"]["method"] == "shap.TreeExplainer"
@@ -203,7 +203,9 @@ def test_explanations_block_shape_and_additivity(explain_run_response) -> None:
                 "base_value",
                 "prediction",
                 "contributions",
+                "narrative",  # NEW in 1.7 — null here (LLM narratives OFF for this fixture)
             }
+            assert row["narrative"] is None
             recon = row["base_value"] + sum(row["contributions"].values())
             assert math.isclose(recon, row["prediction"], abs_tol=1e-6)
 
@@ -217,6 +219,60 @@ def test_explanations_summary_artifact_present_when_enabled(explain_run_response
 def test_run_bad_explainability_is_422(api_client) -> None:
     """An invalid explainability sub-field is rejected at the boundary (422, not 500)."""
     body = {**_VALID, "explainability": {"enabled": True, "sample_rows": 0}}
+    assert api_client.post("/api/v1/run", json=body).status_code == 422
+
+
+def test_llm_narratives_flow_through_when_narrator_stubbed(api_client, monkeypatch) -> None:
+    """With ``llm_narratives`` on and a stubbed narrator, each explained row carries a narrative.
+
+    No live Azure endpoint is touched: ``narrator_from_env`` (imported lazily by the runner) is
+    patched to return a stub whose ``narrate`` returns a canned paragraph. This proves the 1.7
+    wiring — config → runner → response ``narrative`` field — end-to-end.
+    """
+    import classifyos.analysis.llm_explain as llm_mod
+
+    seen: dict[str, object] = {}
+
+    class _StubNarrator:
+        def narrate(self, **kwargs):
+            # capture what reached the narrator so we can assert context + original values flow
+            seen["run_context"] = kwargs.get("run_context")
+            seen["original_row"] = kwargs.get("original_row")
+            return f"Reason code for {kwargs['model_name']} row."
+
+    monkeypatch.setattr(llm_mod, "narrator_from_env", lambda **kw: _StubNarrator())
+
+    body = {
+        **_VALID,
+        "class_balance": "none",
+        "algorithms": ["LogisticRegression"],
+        "interaction_features": {"max_auto_pairs": 0},
+        "explainability": {
+            "enabled": True,
+            "sample_rows": 2,
+            "background_size": 30,
+            "llm_narratives": True,
+            "context_mode": "both",
+            "dataset_context": "Policy lapse dataset; will_lapse = the policy lapsed.",
+            "column_context": {"age": "policyholder age in years"},
+        },
+    }
+    resp = api_client.post("/api/v1/run", json=body)
+    assert resp.status_code == 200
+    result = resp.json()["result"]
+    rows = result["explanations"]["LogisticRegression"]["rows"]
+    assert rows and all(r["narrative"] == "Reason code for LogisticRegression row." for r in rows)
+    # The narrator received a RunContext carrying the analyst context, and ORIGINAL row values.
+    ctx = seen["run_context"]
+    assert ctx is not None and ctx.dataset_context.startswith("Policy lapse")
+    assert ctx.column_context == {"age": "policyholder age in years"}
+    assert ctx.context_mode == "both"
+    assert isinstance(seen["original_row"], dict) and "age" in seen["original_row"]
+
+
+def test_run_bad_context_mode_is_422(api_client) -> None:
+    """An invalid explainability.context_mode is rejected at the boundary (422, not 500)."""
+    body = {**_VALID, "explainability": {"enabled": True, "context_mode": "nope"}}
     assert api_client.post("/api/v1/run", json=body).status_code == 422
 
 
@@ -300,7 +356,7 @@ def test_tuned_threshold_run_reports_operating_point(api_client) -> None:
         threshold_mode="tuned", threshold_metric="f1",
     )
     body = api_client.post("/api/v1/run", json=payload).json()
-    assert body["schema_version"] == "1.6"
+    assert body["schema_version"] == "1.7"
     ok = [m for m in body["result"]["models"] if m["status"] == "ok"]
     assert ok
     for m in ok:
@@ -463,7 +519,7 @@ def test_tuned_run_exposes_best_params(api_client) -> None:
     resp = api_client.post("/api/v1/run", json=payload)
     assert resp.status_code == 200
     body = resp.json()
-    assert body["schema_version"] == "1.6"
+    assert body["schema_version"] == "1.7"
 
     tuning = body["result"]["tuning"]
     assert tuning is not None
@@ -514,8 +570,8 @@ def test_run_with_user_features_creates_columns(api_client) -> None:
     body = resp.json()
     assert body["status"] == "ok"
     # user_features is request-side only — it adds no response field of its own; the version
-    # reflects the current contract default (1.6).
-    assert body["schema_version"] == "1.6"
+    # reflects the current contract default (1.7).
+    assert body["schema_version"] == "1.7"
     active = body["result"]["run"]["active_features"]
     assert "premium_per_sum" in active
     assert "start_year" in active

@@ -4,7 +4,136 @@
 > A copy is uploaded to the ClassifyOS Claude Project knowledge after each update so the
 > planning/overseer chat stays in sync with the local repo.
 
-**Last updated:** 2026-07-01
+**Last updated:** 2026-07-03
+**Updated by:** Claude Code (**NEW — Data Profile correlation excludes identifier-like columns (engine-only,
+no API/contract change)**. The upload Data-Profile's Pearson **correlation grid** was computed over *all*
+numeric columns, including ones already flagged **`identifier`** (near-unique, `n_unique/n_rows >= 0.99` — a
+numeric `policy_id`, a running index). A correlation over near-unique ID values is noise, not signal, so those
+cells only cluttered the matrix. **Fix:** `analysis/profile.py` — `profile_dataframe` now collects the set of
+`identifier`-flagged columns while building the per-column profiles and passes it to `_correlation(...,
+exclude=...)`, which drops them **before** computing the matrix; `truncated` now compares against the *usable*
+(post-exclusion) column list. **Constant columns are deliberately NOT excluded** — their cells are legitimately
+`None`/undefined and still tell the analyst the column is degenerate (the existing constant-column test still
+asserts this). This mirrors what the dashboard already does for identifier columns' distribution charts (they're
+suppressed as meaningless). Pure display logic — no leakage surface, no `schema_version` bump (this rides the
+`/upload` payload, not the locked `/run` envelope), no frontend change (the grid just renders fewer columns; the
+column's `identifier` badge already explains why). **Tests:** +2 engine (`test_profile.py`: an identifier numeric
+column is dropped from the grid while real features remain; two identifier-only numeric cols → `<2` usable →
+`correlation is None`); all existing profile tests green. Hallucination check N/A — no new library calls
+(existing pandas `.corr(numeric_only=True)`). **No plan_tweak entry** — additive correctness fix on the display
+layer realizing a user request, not a plan deviation.)
+**Prior update (same day):** Claude Code (**NEW — LLM narratives that read as prose, not a SHAP readout (engine-internal;
+NO config/API/contract/frontend/version change)**. Owner feedback: even with the context work, a run with **no
+analyst context** still restated the SHAP numbers ("Decision_Days = 2 reduced the score by 0.1040, …") because
+(a) the prompt was number-centric, (b) auto-derived context carried no *meaning* (just min/median/max + sample
+rows), and (c) the categoricals are opaque integer codes with no legend. Three engine-only fixes, verified live
+against Azure `gpt-5`. **(1) Prompt redesign** (`analysis/llm_explain.py::_ROLE_INSTRUCTIONS`): forbid printing
+SHAP numbers / base value / `feature = value (±x)`; use contributions only to pick the top **2–3** drivers +
+direction; compare to the base rate qualitatively; treat integer-coded categoricals as category *codes*, not
+magnitudes; write a single flowing paragraph. `DEFAULT_MAX_FEATURES` 8→5. **(2) Dataset-understanding primer**:
+new `derive_dataset_understanding(narrator, ctx)` — **one** LLM call per run that infers, from the target, class
+base rates, derived per-column facts and sample rows, what the dataset/target/columns mean; the paragraph is
+stored on every model's `RunContext.dataset_understanding` and rendered into the system message **labelled a
+hypothesis** (analyst `dataset_context`/`column_context` still win). Reuses `AzureNarrator._create` +
+`_content_and_finish` (same length-retry); report-only (None on failure/no-facts); runs only in `derived`/`both`,
+once per run, not per row. `runner._add_llm_narratives` calls it once and threads it into each context. **(3)
+Coded-column flag** (`runner._derived_schema`): a low-cardinality integer column is labelled "category code" so
+the model treats it qualitatively. **Result (live, `arizona_buyingpropensity.csv`, NO human context):** "This
+case looks well below the typical conversion rate for our book. The primary negative driver is the application
+status being in category 4… and a very fast decision turnaround of two days further lowered the chance…" — prose,
+drivers in business terms, no raw numbers. **Cost:** +1 LLM call per run. **Tests:** `test_llm_explain.py` +role
+instructions forbid number-printing, +inferred-understanding rendered (and omitted in `given`), +primer happy/
+empty/failure paths (17 in-file). **357 backend pytest green · frontend untouched** (one unrelated
+`test_profile.py::test_correlation_excludes_identifier_columns` flaked on full-suite ordering — green in
+isolation and alongside the changed files; `profile.py` is untouched by this work). Hallucination check ✅ — no
+new library calls. **No plan_tweak entry** — engine-internal prompt-quality enhancement realizing owner
+feedback; no schema/contract change.)
+**Prior update (same day):** Claude Code (**NEW — context-aware LLM narratives: original values + dataset context + global
+results (full stack, request-side only, NO version change)**. Follow-up to the LLM narratives below, from the
+owner: the first narratives restated **scaled** values ("Decision_Days = -1.473"), knew nothing about what the
+columns/target mean, and saw only the one row — so they read mechanically. Three fixes + concurrency, all
+verified live against the Azure `gpt-5` deployment. **(A) Original values** — the narrator now maps each SHAP
+feature back to its raw value via the retained pre-preprocessing `test_df_` (index-aligned to `sample_index`):
+`_resolve_feature_display` handles numeric passthrough, one-hot `col_cat` → source column's raw category
+(longest-prefix match), and leaves derived/interaction features value-less rather than fabricating. **(B)
+Dataset context, mode-selectable** — new request-side `explainability` fields `context_mode`
+(`given`/`derived`/`both`, default both), `dataset_context` (free-text) and `column_context` ({col: note});
+`given` uses the analyst text, `derived` feeds engine-derived facts (column headers + a couple of sample rows +
+light per-column stats + class base rates), `both` merges. [RISK] privacy — `derived`/`both` send sample data
+values to Azure (opt-in). **(C) Whole-run context per call** — a per-model `RunContext` (this model's headline
+metrics, the global feature ranking from `permutation_importances_`/`feature_impact_`, class base rates, the
+dataset context) is built once and rendered into the **system message** (stable prefix); only the row's values +
+contributions go in the user message. **(D) Bounded concurrency** — new `narrate_rows` helper fans calls over a
+`ThreadPoolExecutor` (default 6), keyed by `(model, sample_index)` for deterministic attachment; a per-job
+failure stays `None`. **Reasoning-model robustness:** the context-rich prompt makes gpt-5 spend far more hidden
+reasoning tokens (observed ~1000), so the token budget was raised to 4000 and a **length-truncation retry**
+(finish_reason `length` + empty → one retry at 2×) added — without it some rows returned empty. **Engine:**
+`config.py` (+`EXPLAIN_CONTEXT_MODES` + validation of the three fields), `analysis/llm_explain.py` (RunContext,
+`_resolve_feature_display`, `build_system_message`, `narrate_rows`, retry), `runner.py`
+(`_build_run_context`-style helpers `_class_base_rates`/`_model_headline_metrics`/`_global_features`/
+`_derived_schema`/`_sample_context_rows`; `_add_llm_narratives` now pulls `test_df_` raw rows, builds jobs,
+calls `narrate_rows`). **API:** `ExplainabilityConfig` +3 fields (forwarded to `build_config`; bad `context_mode`
+→ 422); **request-side only — response shape + `schema_version` UNCHANGED**; `docs/api_contract.md` request
+example + notes updated. **UI:** an "LLM narrative context" card (Context-mode select + dataset-context textarea
++ new `ExplainContextPanel` per-column notes), shown only when the narrative toggle is on; `ConfigFormState`/
+`buildPayload`/`ExplainabilityConfig` TS extended. **Tests:** engine `test_llm_explain.py` (+resolve numeric/
+one-hot/unresolved, system-message context, given-mode omits derived, `narrate_rows` keying+failure, context
+config validation), API (context fields reach the narrator + original row values; bad `context_mode` → 422);
+frontend (buildPayload carries context; Configure shows/hides the context card + derived-mode). **All 353
+backend pytest green · 128 frontend vitest green · `tsc -b` + `vite build` clean.** Verified live on
+`arizona_buyingpropensity.csv` — narratives now cite real values (`status.description = 4`,
+`covers[0].insuranceAmount = 500,000`), the population conversion rate (~15%), and domain meaning. **No
+plan_tweak entry** — additive, request-side enhancement realizing an owner request; no new library calls
+(`concurrent.futures` stdlib, same openai chat API).)
+**Prior update (same day):** Claude Code (**NEW — LLM reason-code narratives on top of the SHAP explanations (full stack,
+additive `1.6 → 1.7`)**. Owner ask: "an explanation for every row where an LLM explains how the features
+impacted the row", using the supplied Azure OpenAI credentials. Built as a **presentation layer over the
+existing per-row SHAP** (1.6) — the SHAP numbers are the input; no new ML, no leakage surface (nothing refit;
+only values SHAP already computed are read). **Hallucination check ✅ FIRST** — installed `openai` **1.109.1**
+and verified `AzureOpenAI(azure_endpoint/api_key/api_version/timeout/max_retries)` + `chat.completions.create(
+model/messages/temperature/max_tokens)` + `openai.OpenAIError` against the live package before coding.
+**Engine:** new pure module `analysis/llm_explain.py` — `narrator_from_env()` builds an `AzureOpenAI` client
+from the five `AZURE_OPEN_AI_*` env vars (lazy `openai` import, same opt-in discipline as `shap`/`optuna`);
+`AzureNarrator.narrate(...)` sends the top-N features (by |contribution|) with their signed SHAP pushes +
+values, the base value and the prediction, returning a 2–4 sentence grounded paragraph. Every failure path
+(missing creds / missing package / SDK error / empty completion) returns `None` — report-only, never aborts.
+`config.py` gains `explainability.llm_narratives` (default `False`) validated as a bool (mirrors the existing
+`enabled` flag). `ModelRunner._add_llm_narratives` runs after `_compute_explanations` when the flag is on: for
+**every** model that produced SHAP, over the same `sample_rows` cap, it attaches a `narrative` to each row
+(feature values pulled from `X_test_.head(sample_rows).iloc[sample_index]`); `explanations_summary.csv` gains
+a `narrative` column. **Owner decisions:** row scope = the SHAP `sample_rows` cap (configurable, not every row
+unbounded — cost/latency), model scope = **all** models with SHAP. **API:** `ExplainabilityConfig.llm_narratives:
+bool = False` (forwarded via `to_engine_config` → `build_config`, the authoritative validator → bad value =
+422); `ExplanationRow.narrative: str | None = None`; **`schema_version` `1.6 → 1.7` (additive)**; `_explanations`
+route helper passes `row.get("narrative")` through; `docs/api_contract.md` updated (header note, request +
+response examples, notes bullet, footer, version). **UI:** a nested **"LLM reason-code narrative (Azure OpenAI)"**
+toggle on Configuration, revealed only when SHAP is on (`explain_llm` in `ConfigFormState`/`buildPayload` →
+`explainability.llm_narratives`, force-off unless SHAP on); the Explainability page renders the narrative as an
+indigo reason-code panel above the waterfall, omitted when a row has none; `ExplanationRow.narrative?` +
+`ExplainabilityConfig.llm_narratives` TS types added. **Tests:** engine `test_llm_explain.py` (narrate happy
+path keys on deployment + system/user roles, None on SDK error / empty completion, `_top_features` ordering +
+residual, `_build_messages` grounding, `narrator_from_env` unconfigured→None / configured→client, config
+validation) + an API integration test (stubbed narrator → each explained row carries the narrative, schema
+1.7); the `explanations` row-key-set assert now includes `narrative` (null when OFF); frontend `explainability.
+test.tsx` (narrative panel renders / omitted for a SHAP-only row) + `buildPayload.test.ts` (llm_narratives
+guard). **All 346 backend pytest green (+9) · 124 frontend vitest green (+2) · `tsc -b` + `vite build` clean.**
+`openai>=1.40,<2` added to requirements.txt (+ pins in requirements.lock); `AZURE_OPEN_AI_*` added to
+`.env.example` (commented, optional). **No plan_tweak entry** — additive feature realizing an owner request;
+the version bump is the sanctioned additive path, and calling an external LLM HTTP client follows the same
+opt-in/lazy-import pattern as `shap`/`optuna` (not a web-server dependency in the engine).
+**Same-session follow-up — reasoning-model compatibility (verified live against the owner's Azure `gpt-5`
+deployment).** The first cut used `max_tokens` + `temperature=0.2`; both are rejected by reasoning models
+(o1/o3/gpt-5): `gpt-5` 400s with "use `max_completion_tokens`" and only accepts the default temperature — so
+every call failed→`None` and no narratives appeared. Fixed in `llm_explain.py`: send **`max_completion_tokens`**
+(never `max_tokens`), leave **temperature unset by default** (`None` → not sent; a caller-set value is dropped
+on a one-shot retry if the model rejects it), and raise the token budget to **1200** (reasoning models spend
+part of the budget on hidden reasoning tokens — observed ~384 — so a small budget starves the visible answer
+and returns empty). `.env` values are now `.strip()`-ed (a stray `KEY= value` space no longer corrupts the
+endpoint/key). Verified end-to-end via `ModelRunner` on `policy_lapse.csv` with the live deployment: a real
+reason-code paragraph attaches to every explained row. **Operator note:** the API server must be RESTARTED after
+adding the `AZURE_OPEN_AI_*` vars — `load_dotenv()` runs once at startup and `--reload` won't re-read `.env` on
+its own.)
+**Prior update:** 2026-07-01
 **Updated by:** Claude Code (**NEW — Explainability REWIRED: real per-row SHAP, opt-in (full stack, additive
 `1.5 → 1.6`)**. Explainability was unwired at two levels — the UI page was hidden (unwire.md #3) *because*
 the backend was a stateless `/explain` stub deferred to a v2.0 "model persistence / MLflow" item. Both are

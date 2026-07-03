@@ -85,6 +85,17 @@ class ExplainabilityConfig(BaseModel):
     enabled: bool = False
     sample_rows: int = 20  # first N held-out TEST rows per model to explain
     background_size: int = 100  # TRAIN rows sampled as the SHAP reference distribution
+    # NEW in schema 1.7 (request-side): opt-in Azure OpenAI reason-code narrative per explained
+    # row (requires ``enabled``; credentials come from the AZURE_OPEN_AI_* env vars). Absent
+    # credentials / a failed call degrade to SHAP-only, so a run stays valid either way.
+    llm_narratives: bool = False
+    # Dataset/domain context that shapes the LLM prompt ONLY (never touches the ML). ``context_mode``
+    # (given | derived | both) chooses whether the model sees the analyst text below, engine-derived
+    # facts (headers + a sample row + light stats + class base rates), or both. Request-side only —
+    # forwarded to build_config (authoritative validator); no response-shape / schema_version change.
+    dataset_context: str = ""
+    column_context: dict[str, str] = Field(default_factory=dict)
+    context_mode: str = "both"
 
 
 class UserFeatureSpec(BaseModel):
@@ -450,6 +461,10 @@ class ExplanationRow(BaseModel):
     base_value: float
     prediction: float
     contributions: dict[str, float] = Field(default_factory=dict)
+    # NEW in schema 1.7 (additive, optional): an LLM-authored plain-language reason-code
+    # paragraph for this row (Azure OpenAI). ``None`` when LLM narratives were OFF (the default),
+    # credentials were absent, or the call failed — so a SHAP-only run is unchanged from 1.6.
+    narrative: str | None = None
 
 
 class ModelExplanation(BaseModel):
@@ -536,6 +551,10 @@ class RunResponse(BaseModel):
     #     decision policy applied per model). All earlier fields unchanged.
     # 1.6 (additive): added the optional ``result.explanations`` block (per-row SHAP — LOCAL
     #     explainability). ``None`` when explainability was OFF (default). All earlier fields unchanged.
-    schema_version: str = "1.6"
+    # 1.7 (additive): added the optional ``result.explanations[model].rows[].narrative`` field
+    #     (LLM-authored reason-code paragraph, Azure OpenAI). ``None`` unless the opt-in
+    #     ``explainability.llm_narratives`` was on AND credentials were configured. All earlier
+    #     fields unchanged.
+    schema_version: str = "1.7"
     result: RunResult | None = None
     error: str | None = None
