@@ -133,7 +133,7 @@ def test_binary_run_envelope(binary_run_response) -> None:
     assert binary_run_response.status_code == 200
     body = binary_run_response.json()
     assert body["status"] == "ok"
-    assert body["schema_version"] == "1.7"
+    assert body["schema_version"] == "1.8"
     assert RESULT_KEYS == set(body["result"].keys())
 
 
@@ -188,7 +188,7 @@ def test_explanations_block_shape_and_additivity(explain_run_response) -> None:
     """
     assert explain_run_response.status_code == 200
     body = explain_run_response.json()
-    assert body["schema_version"] == "1.7"
+    assert body["schema_version"] == "1.8"
     expl = body["result"]["explanations"]
     assert isinstance(expl, dict) and set(expl) == {"RandomForest", "LogisticRegression"}
     assert expl["RandomForest"]["method"] == "shap.TreeExplainer"
@@ -203,9 +203,14 @@ def test_explanations_block_shape_and_additivity(explain_run_response) -> None:
                 "base_value",
                 "prediction",
                 "contributions",
+                "feature_values",  # NEW in 1.8 — raw value per contributed feature
                 "narrative",  # NEW in 1.7 — null here (LLM narratives OFF for this fixture)
             }
             assert row["narrative"] is None
+            # feature_values is present whenever SHAP is (not gated on the LLM flag) and is keyed
+            # by the same engineered features as contributions.
+            assert isinstance(row["feature_values"], dict)
+            assert set(row["feature_values"]) == set(row["contributions"])
             recon = row["base_value"] + sum(row["contributions"].values())
             assert math.isclose(recon, row["prediction"], abs_tol=1e-6)
 
@@ -262,6 +267,8 @@ def test_llm_narratives_flow_through_when_narrator_stubbed(api_client, monkeypat
     result = resp.json()["result"]
     rows = result["explanations"]["LogisticRegression"]["rows"]
     assert rows and all(r["narrative"] == "Reason code for LogisticRegression row." for r in rows)
+    # feature_values (1.8) coexists with the narrative — present + keyed like contributions.
+    assert all(set(r["feature_values"]) == set(r["contributions"]) for r in rows)
     # The narrator received a RunContext carrying the analyst context, and ORIGINAL row values.
     ctx = seen["run_context"]
     assert ctx is not None and ctx.dataset_context.startswith("Policy lapse")
@@ -356,7 +363,7 @@ def test_tuned_threshold_run_reports_operating_point(api_client) -> None:
         threshold_mode="tuned", threshold_metric="f1",
     )
     body = api_client.post("/api/v1/run", json=payload).json()
-    assert body["schema_version"] == "1.7"
+    assert body["schema_version"] == "1.8"
     ok = [m for m in body["result"]["models"] if m["status"] == "ok"]
     assert ok
     for m in ok:
@@ -519,7 +526,7 @@ def test_tuned_run_exposes_best_params(api_client) -> None:
     resp = api_client.post("/api/v1/run", json=payload)
     assert resp.status_code == 200
     body = resp.json()
-    assert body["schema_version"] == "1.7"
+    assert body["schema_version"] == "1.8"
 
     tuning = body["result"]["tuning"]
     assert tuning is not None
@@ -570,8 +577,8 @@ def test_run_with_user_features_creates_columns(api_client) -> None:
     body = resp.json()
     assert body["status"] == "ok"
     # user_features is request-side only — it adds no response field of its own; the version
-    # reflects the current contract default (1.7).
-    assert body["schema_version"] == "1.7"
+    # reflects the current contract default (1.8).
+    assert body["schema_version"] == "1.8"
     active = body["result"]["run"]["active_features"]
     assert "premium_per_sum" in active
     assert "start_year" in active

@@ -353,6 +353,9 @@ def _explanations(runner: ModelRunner) -> dict[str, dict[str, Any]] | None:
                     "base_value": row["base_value"],
                     "prediction": row["prediction"],
                     "contributions": row["contributions"],
+                    # NEW in 1.8 (additive): each feature's original raw value, keyed like
+                    # ``contributions``; absent (→ {} default) if values weren't resolved.
+                    "feature_values": row.get("feature_values") or {},
                     # NEW in 1.7 (additive): the LLM reason-code narrative when present; absent
                     # (→ None via the Pydantic default) for a SHAP-only row.
                     "narrative": row.get("narrative"),

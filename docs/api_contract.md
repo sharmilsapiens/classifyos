@@ -41,7 +41,16 @@
 > field was renamed, retyped, or removed. The response envelope now reports `"schema_version": "1.5"`. Old
 > clients ignore the new fields.
 >
-> **`1.7` (additive, current default).** Adds one new **optional** field —
+> **`1.8` (additive, current default).** Adds one new field —
+> `result.explanations[model].rows[].feature_values` — a `{feature: value}` map giving each contributed
+> feature's **original (raw) value**, keyed identically to `contributions`, so a client can render the
+> waterfall as `feature = value` (the reason-code convention). A one-hot `col_cat` feature resolves to its
+> source column's raw category; a derived/interaction feature with no raw source is `null`. It is present
+> whenever `result.explanations` is (it is **not** gated on the LLM narrative flag). No `1.0`–`1.7` field was
+> renamed, retyped, or removed. The response envelope now reports `"schema_version": "1.8"`. Old clients
+> ignore the new field.
+>
+> **`1.7` (additive).** Adds one new **optional** field —
 > `result.explanations[model].rows[].narrative` — an LLM-authored plain-language reason-code paragraph for
 > that row (Azure OpenAI), grounded in the same SHAP contributions. It is `null` unless the request-side
 > opt-in `explainability.llm_narratives` was `true` **and** the `AZURE_OPEN_AI_*` credentials were configured
@@ -317,6 +326,7 @@ missing/wrong-typed column is skipped and logged — it never aborts the run).
             "base_value": 0.36,    // model's average output — the waterfall's start
             "prediction": 0.87,    // == base_value + Σ contributions (SHAP-additive)
             "contributions": {"num_late_payments": 0.40, "policy_tenure_years": 0.11},  // signed per-feature push
+            "feature_values": {"num_late_payments": "3", "policy_tenure_years": "8.0"},  // NEW in 1.8 (additive); raw value per feature (null for derived/interaction)
             "narrative": "The model flags this policy as high lapse risk chiefly because of a high number of late payments, which pushed the prediction up, only partly offset by a longer policy tenure."  // NEW in 1.7 (additive); null unless llm_narratives on AND creds configured
           }
         ]
@@ -403,6 +413,13 @@ missing/wrong-typed column is skipped and logged — it never aborts the run).
   `explanations_summary.csv` (only when enabled). [RISK] leakage — the SHAP background is a TRAIN reference
   sample (never fitted on); explained rows are read-only test rows; nothing is refit. Pure plumbing — the
   engine already computed the values.
+- **`result.explanations[model].rows[].feature_values` (1.8, additive)** is a `{feature: value}` map giving
+  each contributed feature's **original (raw, pre-preprocessing) value**, keyed identically to
+  `contributions`, so a client can render each waterfall step as `feature = value` (the reason-code
+  convention). A one-hot `col_cat` feature resolves to its source column's raw category; a derived/interaction
+  feature with no raw source is `null`. Present whenever `result.explanations` is — it is **not** gated on the
+  LLM narrative flag. The `explanations_summary.csv` gains a `feature_value` column (empty when unresolved).
+  Pure plumbing — resolved from the held-out test frame the engine already retains; no refit, no ML.
 - **`result.explanations[model].rows[].narrative` (1.7, additive, optional)** is an LLM-authored
   plain-language reason-code paragraph for that row (Azure OpenAI chat), grounded in the same SHAP
   contributions plus the row's model-space feature values. Gated by the request-side opt-in
@@ -441,6 +458,9 @@ covering all six models; opt-in via the request `explainability` block); all `1.
 _`1.7` (additive): added the optional `result.explanations[model].rows[].narrative` field (LLM-authored
 reason-code paragraph, Azure OpenAI; opt-in via the request `explainability.llm_narratives` + `AZURE_OPEN_AI_*`
 server credentials); all `1.0`–`1.6` fields are unchanged._
+_`1.8` (additive): added `result.explanations[model].rows[].feature_values` (each contributed feature's raw
+value, keyed like `contributions`, for `feature = value` reason codes; present whenever `result.explanations`
+is — not gated on the LLM flag); all `1.0`–`1.7` fields are unchanged._
 _2026-06-26 (default-value change only, **no schema/version change** — field shapes unchanged):
 `tuning.timeout_seconds` now defaults to `null` (no per-model wall-clock cap; `n_trials` bounds
 the study) rather than `600`. `tuning.search_space_overrides` (always present in `1.0`) is now

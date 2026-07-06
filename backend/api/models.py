@@ -461,6 +461,12 @@ class ExplanationRow(BaseModel):
     base_value: float
     prediction: float
     contributions: dict[str, float] = Field(default_factory=dict)
+    # NEW in schema 1.8 (additive): each contributed feature's ORIGINAL (raw, pre-preprocessing)
+    # value, keyed identically to ``contributions`` — so the waterfall can show "feature = value"
+    # (the reason-code convention). A one-hot ``col_cat`` feature resolves to its source column's
+    # raw category; a derived/interaction feature with no raw source resolves to ``None``. Present
+    # whenever SHAP explanations are (not gated on the LLM flag); empty when unresolved.
+    feature_values: dict[str, str | None] = Field(default_factory=dict)
     # NEW in schema 1.7 (additive, optional): an LLM-authored plain-language reason-code
     # paragraph for this row (Azure OpenAI). ``None`` when LLM narratives were OFF (the default),
     # credentials were absent, or the call failed — so a SHAP-only run is unchanged from 1.6.
@@ -555,6 +561,10 @@ class RunResponse(BaseModel):
     #     (LLM-authored reason-code paragraph, Azure OpenAI). ``None`` unless the opt-in
     #     ``explainability.llm_narratives`` was on AND credentials were configured. All earlier
     #     fields unchanged.
-    schema_version: str = "1.7"
+    # 1.8 (additive): added ``result.explanations[model].rows[].feature_values`` — each explained
+    #     feature's ORIGINAL (raw) value, keyed identically to ``contributions`` (so the waterfall
+    #     can show "feature = value"). Present whenever SHAP explanations are; ``null`` per feature
+    #     for derived/interaction features with no raw source. All earlier fields unchanged.
+    schema_version: str = "1.8"
     result: RunResult | None = None
     error: str | None = None

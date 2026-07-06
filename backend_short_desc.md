@@ -509,6 +509,31 @@ three real drivers in business terms — and the model figures out what the colu
   change (reuses the existing `context_mode`). +1 LLM call per run. Tests extended; hallucination
   check ✅ (same `openai` chat API, no new libraries).
 
+## Explainability — feature values shown next to their SHAP push (✅ Done, 2026-07-03)
+**In one line:** The waterfall now shows each feature's **actual value** beside its contribution
+(`num_late_payments = 3` pushed the prediction up), so a reason code says not just *which* feature
+mattered but *what its value was* — the missing half of an adverse-action explanation.
+- **Why:** SHAP is complete without it (base value + all pushes = the prediction), but a bare
+  "num_late_payments pushed +0.10" doesn't tell you the value that drove it. The canonical SHAP
+  waterfall labels each row `feature = value`, and the insurance reason-code use case needs the value
+  to be actionable. Tellingly, the LLM-narrative path already resolved these raw values internally —
+  they were just locked inside prose and never surfaced for the chart.
+- **How:** the conductor (ModelRunner) now attaches, to every explained row, each contributed
+  feature's **original (raw, pre-preprocessing) value** — reusing the exact resolver the narrative
+  path already uses, so a one-hot `col_cat` feature maps back to its source column's category and a
+  derived/interaction feature with no raw source stays value-less rather than faked. It reads the
+  retained held-out test frame the engine already keeps; no re-fitting, no new library calls, no
+  leakage surface.
+- **Always on with SHAP (not gated on the LLM flag).** Feature values appear whenever per-row
+  explainability is on, independent of whether the Azure narrative is enabled.
+- **Surfaced additively.** The API gained `result.explanations[model].rows[].feature_values` (locked
+  contract bumped `1.7 → 1.8`, additive — present whenever explanations are), the
+  `explanations_summary.csv` gained a `feature_value` column, and the dashboard waterfall renders
+  `feature = value` next to each bar (falling back to the plain name when a value can't be resolved).
+  Engine + API + dashboard; new tests across all three (**360 backend pytest · 128 frontend vitest**,
+  `tsc -b` + `vite build` clean). Verified live on `policy_lapse.csv` (values like `age = 61`,
+  `annual_premium = 6904` resolved). Hallucination check ✅ — no new library calls.
+
 ---
 
 ## How to read this project

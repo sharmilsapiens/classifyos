@@ -270,6 +270,11 @@ class ModelRunner:
                 background_size=int(expl_cfg.get("background_size", 100)),
                 random_state=cfg.get("random_state", 42),
             )
+            # Attach each explained row's ORIGINAL feature values (resolved from the raw TEST
+            # frame) alongside the SHAP contributions, so the waterfall can show "feature = value"
+            # — the reason-code convention. Runs whenever SHAP is on (NOT gated on the LLM flag);
+            # report-only, no external calls, no refit.
+            self._add_feature_values(cfg, problem_type)
             # Optional LLM reason-code narratives on top of the SHAP numbers (opt-in; Azure
             # OpenAI). Report-only: absent credentials / a failed call leave SHAP untouched.
             if expl_cfg.get("llm_narratives", False):
@@ -737,6 +742,53 @@ class ModelRunner:
                 out[name] = None
         return out
 
+    def _original_row(
+        self, idx: int, feature_cols: list[str]
+    ) -> dict[str, Any] | None:
+        """The raw (pre-preprocessing) values of ``feature_cols`` for one TEST row, or ``None``.
+
+        Reads ``self.test_df_`` (post-split, pre-preprocessing) at the given 0-based position;
+        returns ``None`` when there are no usable columns or the index is out of range. Shared by
+        :meth:`_add_feature_values` and :meth:`_add_llm_narratives` so both resolve values from an
+        identical raw-row dict.
+        """
+        raw_test = self.test_df_
+        if raw_test is None or not feature_cols or not (0 <= idx < len(raw_test)):
+            return None
+        return raw_test.iloc[idx][feature_cols].to_dict()
+
+    def _add_feature_values(self, cfg: dict[str, Any], problem_type: str) -> None:
+        """Attach each explained row's ORIGINAL feature values to the SHAP explanations, in place.
+
+        For every model that produced SHAP explanations, resolve each contributed feature back to
+        its raw (un-preprocessed) value from ``self.test_df_`` and store the display string on the
+        row under ``feature_values`` — keyed identically to ``contributions``. Reuses
+        :func:`classifyos.analysis.llm_explain._resolve_feature_display`, so a one-hot ``col_cat``
+        feature maps to its source column's raw category and a derived/interaction feature (no raw
+        source) resolves to ``None`` rather than a fabricated value. Runs whenever SHAP is on (not
+        gated on the LLM flag); report-only, no external calls, no refit, no data mutation.
+        """
+        from .analysis.llm_explain import _resolve_feature_display
+
+        if problem_type == "multilabel" or not self.explanations_:
+            return
+        if self.test_df_ is None or self.test_df_.empty:
+            return
+
+        feature_cols = [c for c in (cfg.get("feature_cols") or []) if c in self.test_df_.columns]
+        if not feature_cols:
+            return
+
+        for result in self.explanations_.values():
+            if not result or not result.get("rows"):
+                continue
+            for row in result["rows"]:
+                original_row = self._original_row(row["sample_index"], feature_cols)
+                row["feature_values"] = {
+                    feature: _resolve_feature_display(feature, original_row)[1]
+                    for feature in row["contributions"]
+                }
+
     def _add_llm_narratives(
         self, cfg: dict[str, Any], problem_type: str, *, sample_rows: int
     ) -> None:
@@ -802,7 +854,6 @@ class ModelRunner:
                 or ""
             )
 
-        raw_test = self.test_df_
         contexts: dict[str, RunContext] = {}
 
         def context_for(model_name: str) -> RunContext:
@@ -830,11 +881,7 @@ class ModelRunner:
             run_context = context_for(name)
             for row in result["rows"]:
                 idx = row["sample_index"]
-                original_row = (
-                    raw_test.iloc[idx][feature_cols].to_dict()
-                    if feature_cols and 0 <= idx < len(raw_test)
-                    else None
-                )
+                original_row = self._original_row(idx, feature_cols)
                 jobs.append(
                     {
                         "key": (name, idx),
@@ -1036,6 +1083,9 @@ class ModelRunner:
             "prediction",
             "feature",
             "contribution",
+            # The feature's ORIGINAL (raw, pre-preprocessing) value for this row; empty string for a
+            # derived/interaction feature with no raw source (or when values weren't resolved).
+            "feature_value",
             # Optional LLM reason-code narrative (repeated per feature row of a given model+row
             # group); empty string when narratives were OFF or a call failed (opt-in).
             "narrative",
@@ -1046,7 +1096,9 @@ class ModelRunner:
                 continue
             for row in result["rows"]:
                 narrative = row.get("narrative", "")
+                feature_values = row.get("feature_values", {})
                 for feature, contribution in row["contributions"].items():
+                    value = feature_values.get(feature)
                     rows.append(
                         {
                             "model": name,
@@ -1056,6 +1108,7 @@ class ModelRunner:
                             "prediction": row["prediction"],
                             "feature": feature,
                             "contribution": float(contribution),
+                            "feature_value": value if value is not None else "",
                             "narrative": narrative,
                         }
                     )

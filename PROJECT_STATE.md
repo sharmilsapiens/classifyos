@@ -5,7 +5,38 @@
 > planning/overseer chat stays in sync with the local repo.
 
 **Last updated:** 2026-07-03
-**Updated by:** Claude Code (**NEW — Data Profile correlation excludes identifier-like columns (engine-only,
+**Updated by:** Claude Code (**NEW — feature VALUES surfaced alongside per-row SHAP contributions (full stack,
+additive `1.7 → 1.8`)**. User asked whether the explainability output should carry each feature's *value*
+alongside its SHAP contribution so the waterfall reads `feature = value` — the reason-code / adverse-action
+convention. Not mathematically required (SHAP is self-contained: `base_value + Σ contributions == prediction`),
+but strongly worth it for the insurance reason-code use case, and the raw-value resolution logic **already
+existed** in the LLM-narrative path (`_resolve_feature_display` + retained `test_df_`) — it was locked inside
+prose and never surfaced structurally. **Engine:** new `ModelRunner._add_feature_values(cfg, problem_type)`
+(runner.py) — for every model that produced SHAP, resolves each contributed engineered feature back to its
+ORIGINAL (raw, pre-preprocessing) value from `self.test_df_` via the reused `_resolve_feature_display` and
+stores `row["feature_values"] = {feature: value_str | None}` (keyed identically to `contributions`); a one-hot
+`col_cat` maps to its source column's category, a derived/interaction feature with no raw source → `None`
+(never faked). Called **right after** `_compute_explanations` and **independent of** the LLM-narrative gate, so
+SHAP-only runs get values too; report-only, no external calls, no refit, no data mutation. Factored the shared
+`original_row` builder into `ModelRunner._original_row(idx, feature_cols)` (reused by `_add_feature_values` and
+`_add_llm_narratives`; removed the now-dead `raw_test` local from the latter). `_build_explanations_df` gained a
+`feature_value` column (empty string when None). `explain.py` UNCHANGED — it stays model-space/pure (value
+resolution lives in the runner, which owns `test_df_`). **API:** `ExplanationRow.feature_values: dict[str, str |
+None] = Field(default_factory=dict)`; `_explanations` route helper passes `row.get("feature_values") or {}`
+through; **`schema_version` `1.7 → 1.8` (additive)**; `docs/api_contract.md` updated (header note, response
+example, notes bullet, footer, version). **UI:** `Explainability.tsx` waterfall now renders `feature = value`
+beside each bar when the value resolves (plain feature name otherwise / for the folded "Other" step);
+`ExplanationRow.feature_values?: Record<string, string | null>` TS type added. **Tests:** engine
+`test_explain.py` (+resolve numeric passthrough / one-hot → source / derived → None; +`feature_value` CSV
+column populated), API `test_api_run.py` (explained rows carry `feature_values` keyed like `contributions`;
+coexists with narratives; **five** `schema_version` `1.7 → 1.8` bumps incl. sweep + user-features + tuning),
+frontend `explainability.test.tsx` (a resolved feature shows `= value`, a null-valued one stays plain).
+**All 360 backend pytest green · 128 frontend vitest green · `tsc -b` + `vite build` clean.** Verified live on
+`policy_lapse.csv` (real resolved values `age = 61`, `annual_premium = 6904`, 15/15 features resolved).
+Hallucination check ✅ — no new library calls (pure reuse of `_resolve_feature_display`, pandas
+`.iloc`/`.to_dict`, Pydantic). **No plan_tweak entry** — additive feature realizing a user request via the
+sanctioned version-bump path; logged as a Decisions-log row.)
+**Prior update (same day):** Claude Code (**NEW — Data Profile correlation excludes identifier-like columns (engine-only,
 no API/contract change)**. The upload Data-Profile's Pearson **correlation grid** was computed over *all*
 numeric columns, including ones already flagged **`identifier`** (near-unique, `n_unique/n_rows >= 0.99` — a
 numeric `policy_id`, a running index). A correlation over near-unique ID values is noise, not signal, so those

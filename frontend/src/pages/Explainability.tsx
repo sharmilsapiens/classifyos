@@ -217,10 +217,15 @@ function Waterfall({ row }: { row: ExplanationRow }) {
             const left = pct(Math.min(s.start, s.end))
             const width = Math.max(pct(Math.max(s.start, s.end)) - left, 0.5)
             const up = s.value > 0
+            // The feature's original value (schema 1.8), shown as "feature = value" — the
+            // reason-code convention. Absent for the folded "Other" step and for
+            // derived/interaction features with no raw source (value null).
+            const value = row.feature_values?.[s.feature]
+            const label = value != null ? `${s.feature} = ${value}` : s.feature
             return (
               <div key={s.feature} className="flex items-center gap-3 text-xs">
-                <div className="w-40 shrink-0 truncate text-right font-mono" title={s.feature}>
-                  {s.feature}
+                <div className="w-40 shrink-0 truncate text-right font-mono" title={label}>
+                  {label}
                 </div>
                 <div className="relative h-5 flex-1 rounded bg-muted/40">
                   <div

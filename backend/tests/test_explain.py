@@ -15,10 +15,12 @@ from __future__ import annotations
 import math
 
 import numpy as np
+import pandas as pd
 import pytest
 
 from classifyos.analysis.explain import explain_rows
 from classifyos.models.registry import build_model
+from classifyos.runner import ModelRunner
 
 
 def _fitted(name, matrices, *, calibrate=True):
@@ -104,3 +106,81 @@ def test_empty_explain_set_returns_none(binary_matrices) -> None:
     model = _fitted("RandomForest", binary_matrices)
     empty = binary_matrices.X_test.head(0)
     assert explain_rows(model, binary_matrices.X_train, empty, "binary") is None
+
+
+# --- feature_values (schema 1.8): raw values attached to explained rows ----------------------
+#
+# ``ModelRunner._add_feature_values`` resolves each contributed engineered feature back to its
+# ORIGINAL value from the retained test frame (reusing the LLM path's ``_resolve_feature_display``),
+# so the waterfall can show ``feature = value``. These tests exercise that wiring directly on a
+# minimal runner (no full run needed) — the resolution semantics themselves are covered in
+# test_llm_explain.py.
+
+
+def _runner_with_explanations(test_df, explanations):
+    """A bare ModelRunner carrying only the state ``_add_feature_values`` reads."""
+    runner = ModelRunner({}, storage=None)  # __init__ only stores config/storage + inits state
+    runner.test_df_ = test_df
+    runner.explanations_ = explanations
+    return runner
+
+
+def test_feature_values_resolves_raw_passthrough_onehot_and_derived() -> None:
+    """Numeric → raw value, one-hot ``col_cat`` → source column value, derived/unknown → None."""
+    test_df = pd.DataFrame({"num_late_payments": [3], "region": ["West"]})
+    explanations = {
+        "RandomForest": {
+            "method": "shap.TreeExplainer",
+            "rows": [
+                {
+                    "sample_index": 0,
+                    "explained_class": "1",
+                    "base_value": 0.3,
+                    "prediction": 0.8,
+                    "contributions": {
+                        "num_late_payments": 0.4,   # raw numeric column → passthrough
+                        "region_West": 0.1,         # one-hot → source column "region"
+                        "mystery_interaction": 0.05,  # no raw source → None
+                    },
+                }
+            ],
+        }
+    }
+    runner = _runner_with_explanations(test_df, explanations)
+    cfg = {"feature_cols": ["num_late_payments", "region"], "target": "will_lapse"}
+
+    runner._add_feature_values(cfg, "binary")
+
+    values = runner.explanations_["RandomForest"]["rows"][0]["feature_values"]
+    assert values == {
+        "num_late_payments": "3",
+        "region_West": "West",
+        "mystery_interaction": None,
+    }
+
+
+def test_feature_values_written_to_summary_csv() -> None:
+    """``_build_explanations_df`` gains a populated ``feature_value`` column (empty when None)."""
+    test_df = pd.DataFrame({"num_late_payments": [3]})
+    explanations = {
+        "RandomForest": {
+            "method": "shap.TreeExplainer",
+            "rows": [
+                {
+                    "sample_index": 0,
+                    "explained_class": "1",
+                    "base_value": 0.3,
+                    "prediction": 0.8,
+                    "contributions": {"num_late_payments": 0.4, "mystery": 0.1},
+                }
+            ],
+        }
+    }
+    runner = _runner_with_explanations(test_df, explanations)
+    runner._add_feature_values({"feature_cols": ["num_late_payments"]}, "binary")
+
+    df = runner._build_explanations_df()
+    assert "feature_value" in df.columns
+    by_feature = dict(zip(df["feature"], df["feature_value"]))
+    assert by_feature["num_late_payments"] == "3"
+    assert by_feature["mystery"] == ""  # unresolved (None) → empty string in the CSV

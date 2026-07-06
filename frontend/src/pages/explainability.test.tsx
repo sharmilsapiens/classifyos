@@ -23,7 +23,7 @@ import Explainability from "./Explainability"
 function envelopeWithExplanations(): RunResponse {
   return {
     status: "ok",
-    schema_version: "1.7",
+    schema_version: "1.8",
     error: null,
     result: {
       explanations: {
@@ -36,6 +36,8 @@ function envelopeWithExplanations(): RunResponse {
               base_value: 0.3,
               prediction: 0.62,
               contributions: { num_late_payments: 0.25, policy_tenure_years: 0.07 },
+              // schema 1.8: raw value per feature — one resolved (shows "= 3"), one null (plain).
+              feature_values: { num_late_payments: "3", policy_tenure_years: null },
               narrative:
                 "This policy is flagged high lapse risk chiefly due to a high number of late payments.",
             },
@@ -91,8 +93,9 @@ describe("Explainability (per-row SHAP)", () => {
 
     // The explainer used for the default (first) model is surfaced as a badge.
     expect(screen.getByText("shap.TreeExplainer")).toBeInTheDocument()
-    // Feature contributions render (a couple of the RandomForest row's features).
-    expect(screen.getByText("num_late_payments")).toBeInTheDocument()
+    // Feature contributions render. A resolved feature shows its raw value ("feature = value",
+    // schema 1.8); a null-valued feature falls back to the plain feature name.
+    expect(screen.getByText("num_late_payments = 3")).toBeInTheDocument()
     expect(screen.getByText("policy_tenure_years")).toBeInTheDocument()
     // The additive framing is present.
     expect(screen.getByText(/base value \+ all contributions = prediction/i)).toBeInTheDocument()

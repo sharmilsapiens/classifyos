@@ -376,6 +376,12 @@ export interface ExplanationRow {
   /** signed per-feature push toward the explained class. */
   contributions: Record<string, number>
   /**
+   * schema 1.8: each feature's ORIGINAL (raw) value, keyed like `contributions` — so the
+   * waterfall can show "feature = value". A derived/interaction feature with no raw source is
+   * null. Present whenever SHAP explanations are (not gated on LLM narratives).
+   */
+  feature_values?: Record<string, string | null>
+  /**
    * schema 1.7 (optional): LLM-authored plain-language reason-code paragraph for this row
    * (Azure OpenAI). null/absent unless `explainability.llm_narratives` was on AND the server
    * had AZURE_OPEN_AI_* credentials.
