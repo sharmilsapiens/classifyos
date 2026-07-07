@@ -50,8 +50,9 @@ ENV_MODEL = "AZURE_OPEN_AI_MODEL"
 ENV_DEPLOYMENT = "AZURE_OPEN_AI_DEPLOYMENT_NAME"
 
 #: Top-N features (by |contribution|) handed to the model — the rest are summarised as a net
-#: residual. Kept small so the narrative focuses on the handful of real drivers, not a long list.
-DEFAULT_MAX_FEATURES = 5
+#: residual. Aligned with the prompt (``_ROLE_INSTRUCTIONS`` asks the model to weigh the top 10
+#: drivers), so the model actually receives the features it is told to reason over.
+DEFAULT_MAX_FEATURES = 10
 #: Temperature is left UNSET by default (``None`` → not sent). Reasoning models (o1/o3/gpt-5)
 #: only accept the default temperature and 400 on any explicit value; leaving it unset works for
 #: those AND for the classic chat models. A caller may still pass a float (honoured by models that

@@ -201,7 +201,7 @@ def test_role_instructions_forbid_printing_numbers() -> None:
     text = _ROLE_INSTRUCTIONS.lower()
     assert "do not print" in text
     assert "code" in text  # coded-categorical guidance present
-    assert "2-3" in _ROLE_INSTRUCTIONS  # focus on the few strongest drivers
+    assert "top 10" in _ROLE_INSTRUCTIONS  # name the strongest drivers (top 10)
 
 
 def test_build_system_message_includes_inferred_understanding() -> None:
