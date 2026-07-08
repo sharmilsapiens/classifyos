@@ -131,6 +131,14 @@ describe("buildPayload", () => {
     ).toBe(true)
   })
 
+  it("logs to MLflow by default (UI default ON, differs from the engine's OFF); flips when toggled off", () => {
+    // The UI deliberately defaults mlflow logging ON — more helpful than the engine/API default of
+    // OFF (see DEFAULT_FORM_STATE), same pattern as threshold_mode.
+    expect(buildPayload(form).mlflow).toEqual({ enabled: true })
+    // Toggling the form field off sends enabled: false.
+    expect(buildPayload({ ...form, mlflow_enabled: false }).mlflow).toEqual({ enabled: false })
+  })
+
   it("carries user-defined feature specs through to the payload verbatim", () => {
     const specs = [
       { name: "premium_per_sum", type: "numeric" as const, op: "divide", col_a: "premium", col_b: "sum_assured" },

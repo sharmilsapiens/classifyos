@@ -450,6 +450,31 @@ saved model's load URI — so the persistence that the backend already reports i
   unchanged. Frontend-only — no API or contract change; the `MlflowInfo` TS type was added to the
   typed client, mirroring the API model exactly. **139 vitest green (+2) · tsc + build clean.**
 
+## Run tracking — turn MLflow logging on/off from Configuration (✅ Done, 2026-07-08)
+**In one line:** A new **"Run tracking"** card on the Configuration page lets you switch MLflow
+run-logging on or off, so you no longer have to hand-craft an API request to record a run — and it
+defaults **ON** so runs land in the Runs page by default.
+- **Why it exists.** MLflow logging has worked at the engine + API layer since Phase A (the
+  `mlflow.enabled` flag, carried in the request's `mlflow` block since schema 1.9), but no page
+  exposed it — so the only way to enable it was to POST a hand-built request. This adds the missing
+  dial. It pairs with the **Runs** page (which lists logged runs) and the **Overview MLflow card**
+  (which shows where a run was saved).
+- **The control.** A small dedicated **"Run tracking"** card (after "Post-training analysis") with
+  one switch — **"Log this run to MLflow (run history + saved models)"** — and a hint that it
+  records the run to the server's MLflow store and is **silently skipped if that store isn't
+  configured or reachable** (no error; the run still completes and returns normally).
+- **On by default (deliberately).** The UI defaults the toggle **ON**, sending `mlflow.enabled: true`
+  — more helpful than the engine/API default of OFF (what a raw API/CLI caller gets). This is the
+  same UI-default-vs-engine-default pattern as the decision-threshold mode (UI "auto-tune" vs engine
+  "default"); a code comment records it so it isn't "corrected" to match the engine.
+- **Minimal + additive.** Only the `enabled` dial is surfaced; the experiment name and run name stay
+  at their server defaults (a run-name UI is a pending follow-up). The form carries a new
+  `mlflow_enabled` field; `buildPayload` emits `mlflow: { enabled }`; the request-side `MlflowConfig`
+  TS type was added (the response-side `MlflowInfo` already existed from 1.9). **No engine/API/
+  contract change and no `schema_version` bump** — the `mlflow` request block already shipped in 1.9;
+  this just surfaces it. New build-payload + Configure render tests cover the default-ON payload and
+  the toggle flip. **142 vitest green (+3) · tsc + build clean.**
+
 ---
 
 ## How to read this project

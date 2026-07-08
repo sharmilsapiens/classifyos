@@ -68,6 +68,22 @@ export interface ExplainabilityConfig {
   column_context: Record<string, string>
 }
 
+/**
+ * Request-side MLflow run-logging dials (schema 1.9; Databricks integration Phase A). Mirrors
+ * backend/api/models.py `MlflowConfig`. OFF by default at the engine/API — when `enabled`, the run
+ * is logged to MLflow AFTER training and the response carries a `result.mlflow` pointer
+ * ({@link MlflowInfo}). The tracking store is chosen server-side via the `MLFLOW_TRACKING_URI`
+ * env var (never a request field). `experiment`/`run_name` are optional here — omitting them lets
+ * the server defaults apply ("classifyos" / auto-generated); the UI only surfaces `enabled`.
+ */
+export interface MlflowConfig {
+  enabled: boolean
+  /** MLflow experiment name to log under (server default "classifyos" when omitted). */
+  experiment?: string
+  /** Optional run name (server default: null → MLflow auto-generates). */
+  run_name?: string | null
+}
+
 export type ProblemType = "binary" | "multiclass" | "multilabel"
 export type ClassBalance = "smote" | "undersample" | "class_weight" | "none"
 
@@ -138,6 +154,8 @@ export interface RunConfig {
   tuning: TuningConfig
   /** OPTIONAL; opt-in per-row SHAP → result.explanations (schema 1.6). OFF → block absent. */
   explainability: ExplainabilityConfig
+  /** OPTIONAL; opt-in MLflow run logging → result.mlflow (schema 1.9). OFF at engine/API default. */
+  mlflow: MlflowConfig
   /** OPTIONAL; [] / omitted → no user-defined features (request unchanged). */
   user_features: UserFeatureSpec[]
 }

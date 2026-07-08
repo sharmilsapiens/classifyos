@@ -74,6 +74,9 @@ export interface ConfigFormState {
   explain_dataset_context: string
   /** per-column meaning {column: note} for the narrator (context_mode !== "derived"). */
   explain_column_context: Record<string, string>
+  // run tracking
+  /** log this run to the server's MLflow store (run history + saved models). */
+  mlflow_enabled: boolean
   // user-defined structured features (built via the feature-builder panel)
   user_features: UserFeatureSpec[]
 }
@@ -126,6 +129,11 @@ export const DEFAULT_FORM_STATE: ConfigFormState = {
   explain_context_mode: "both",
   explain_dataset_context: "",
   explain_column_context: {},
+  // UI default is ON (log the run to MLflow) — deliberately more helpful than the engine/API default
+  // of OFF, which is what a raw API/CLI caller gets. Same UI-default-vs-engine-default pattern as
+  // threshold_mode above; do NOT "correct" this to false to match the engine. Silently skipped by the
+  // engine if no MLflow store is configured/reachable, so ON-by-default is safe.
+  mlflow_enabled: true,
   user_features: [],
 }
 
@@ -209,6 +217,11 @@ export function buildPayload(form: ConfigFormState): RunConfig {
       context_mode: form.explain_context_mode,
       dataset_context: form.explain_dataset_context,
       column_context: form.explain_column_context,
+    },
+    // Only the enabled dial is surfaced; experiment/run_name stay at their server defaults
+    // ("classifyos" / auto-generated). The tracking store is a server-side env concern.
+    mlflow: {
+      enabled: form.mlflow_enabled,
     },
     // Structured specs only — assembled from dropdowns; never a free-text formula.
     user_features: form.user_features,

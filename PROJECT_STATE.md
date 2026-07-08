@@ -5,7 +5,35 @@
 > planning/overseer chat stays in sync with the local repo.
 
 **Last updated:** 2026-07-08
-**Updated by:** Claude Code (**NEW — MLflow polish: two small ADDITIVE follow-ups to the merged MLflow work
+**Updated by:** Claude Code (**NEW — Configuration toggle to turn MLflow run-logging on/off (FRONTEND-ONLY;
+NO engine/API/contract change, NO `schema_version` bump — stays 1.10)**. MLflow logging has existed at the
+engine + API layer since Phase A (the `mlflow.enabled` config flag, surfaced in the API's `RunConfig.mlflow`
+block at schema 1.9), but there was **no UI control** — a user could only enable it by hand-crafting an API
+request. This adds the missing dashboard dial. **(1) UI:** a small dedicated **"Run tracking"** card on
+Configuration (after "Post-training analysis") with one `Switch` — "Log this run to MLflow (run history +
+saved models)" — plus a hint that it records the run to the server's MLflow store and is **silently skipped
+if that store isn't configured/reachable** (no error; the run still completes). **(2) Form plumbing:** new
+`mlflow_enabled: boolean` on `ConfigFormState`, defaulted **ON** in `DEFAULT_FORM_STATE` (send `true` by
+default) — **deliberately differing from the engine/API default of OFF**, exactly the same UI-default-vs-
+engine-default pattern as `threshold_mode` (UI "tuned" vs engine "default"); a code comment records this so it
+isn't "corrected" to false later. `buildPayload` now emits `mlflow: { enabled: form.mlflow_enabled }` — **only
+the `enabled` dial**; `experiment`/`run_name` stay at their server defaults ("classifyos" / auto-generated;
+`run_name` has a separate pending follow-up). **(3) Types:** added the request-side `MlflowConfig` interface
+(`enabled` + optional `experiment?`/`run_name?`, mirroring `backend/api/models.py` `MlflowConfig`) and a
+`mlflow: MlflowConfig` field on `RunConfig` — the response-side `MlflowInfo` already existed from 1.9; this
+adds the missing request-side type. **NO `schema_version` bump** — the `mlflow` request block shipped in 1.9;
+this only surfaces it in the UI. **Tests:** `buildPayload.test.ts` +1 (`mlflow.enabled` true by default; false
+when toggled off) + `configure.test.tsx` +2 (the toggle renders checked-by-default; toggling off calls
+`updateForm({ mlflow_enabled: false })`). **142 frontend vitest green (+3, was 139) · `tsc -b` + `vite build`
+clean** (backend untouched). **Hallucination check ✅ N/A** — no new library calls (pure React + existing
+`@/api/types`); the field maps to the already-shipped schema-1.9 request block. Generation prompt archived at
+`prompts/frontend_phases/mlflow_run_logging_toggle.md`. **No plan_tweak entry** — additive UI over an existing
+request-side field, realizing the task; the UI-default-ON is the sanctioned UI-default-vs-engine-default
+pattern (row for `threshold_mode`), not a plan deviation. **Out of scope (untouched, still deferred):** the
+`experiment`/`run_name` inputs (defaults only; run_name UI is a pending follow-up), the Databricks phases
+(B volume adapter, C Model Serving), the `/explain`→persisted-model wiring, and the dashboard input
+table/query picker.)
+**Prior update (same day):** Claude Code (**NEW — MLflow polish: two small ADDITIVE follow-ups to the merged MLflow work
 (Phase A + Interim 2a/2b), NO `/run` schema change and NO `schema_version` bump (stays 1.10). (1) Meaningful
 default MLflow run name (ENGINE).** `ModelRunner._log_to_mlflow` forwarded `mlflow.run_name`, which is unset by
 default → MLflow auto-generated a whimsical name (`capable-fox-123`) that reads as random in the Runs view. New

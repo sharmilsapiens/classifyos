@@ -247,6 +247,23 @@ describe("Configure — decision threshold policy", () => {
   })
 })
 
+describe("Configure — run tracking (MLflow)", () => {
+  it("shows the MLflow logging toggle, checked by default (UI default ON)", () => {
+    renderConfigure()
+    expect(
+      screen.getByText("Log this run to MLflow (run history + saved models)"),
+    ).toBeInTheDocument()
+    // DEFAULT_FORM_STATE.mlflow_enabled is true, so the switch reads checked.
+    expect(screen.getByLabelText("Log run to MLflow")).toBeChecked()
+  })
+
+  it("flips the mlflow_enabled form field when toggled off", () => {
+    renderConfigure()
+    fireEvent.click(screen.getByLabelText("Log run to MLflow"))
+    expect(mockApp.updateForm).toHaveBeenCalledWith({ mlflow_enabled: false })
+  })
+})
+
 describe("Configure — LLM narrative context", () => {
   function renderWithForm(overrides: Record<string, unknown>) {
     mockApp = {
