@@ -192,6 +192,30 @@ additively (`schema_version` now reports `"1.1"`).
   run into a **404** — never a 500. Verified live end-to-end against a real local Postgres.
   `docs/api_contract.md` updated (header note, endpoint table, a dedicated endpoints section, footer).
 
+## Postgres input source — draw a run's data from a database (request-side; no version bump) — 2026-07-08
+- **What it adds.** A run can now optionally pull its data from a SQL database instead of an
+  uploaded file (Interim 2b of `docs/databricks_integration.md` §6.5). A new request block
+  `input_source` picks the source: the default `{ "type": "file" }` reads `input_file` from
+  storage exactly as before, and `{ "type": "postgres", "connection_env": "…", "table": "…" }`
+  (or `"query": "…"`) runs the table/query and feeds the result into the pipeline.
+- **How (materialize-to-file, Option B).** Before the run, the configured table/query is executed
+  **once** and the result is written to `input_file` under DATA_DIR (a `.parquet`/`.csv` snapshot)
+  through the StorageAdapter; the engine then loads that file **unchanged**. So there is **no new
+  response field and no `schema_version` bump** — it stays `1.10` — and the snapshot is a durable,
+  auditable copy of exactly the rows the run saw.
+- **Credentials never travel in the request.** `connection_env` is the **name** of a server-side
+  environment variable (in `backend/.env`, gitignored) holding the SQLAlchemy DSN — the request
+  carries the env-var name, never a credential. `build_config` is the authoritative validator: an
+  unknown `type`, both/neither of `table`/`query`, a missing `connection_env`, an unsafe table
+  identifier, or a non-`.parquet`/`.csv` destination → **HTTP 422**. A source that cannot be read
+  at run time (unset env var, unreachable DB, failed query, empty result) → the `status: "error"`
+  envelope (**HTTP 400**), like a missing input file.
+- **Reproducibility note.** A SQL table is a *set*: a bare `table`/`SELECT *` may return rows in a
+  different order than a CSV, and the seeded train/test split is order-sensitive — add an `ORDER BY`
+  to the `query` for a byte-for-byte reproducible snapshot (verified to match the CSV exactly).
+  Driver: `SQLAlchemy` + `psycopg2` (pinned). `docs/api_contract.md` updated (request example +
+  a dedicated request-side note). Dashboard UI to pick a table/query is a follow-up.
+
 ---
 
 ## How to read this project

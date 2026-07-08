@@ -103,6 +103,26 @@ class ExplainabilityConfig(BaseModel):
     context_mode: str = "both"
 
 
+class InputSourceConfig(BaseModel):
+    """Where the run's data comes from (Interim 2b). Default ``file`` = today's behaviour.
+
+    Mirrors ``DEFAULT_CONFIG['input_source']``. ``type="postgres"`` materializes a table/query to
+    ``input_file`` under DATA_DIR BEFORE the run (Option B, materialize-to-file), then the pipeline
+    reads that snapshot file unchanged. The DB connection is referenced by ``connection_env`` — the
+    NAME of a server-side env var (in ``backend/.env``) holding the SQLAlchemy DSN — never a
+    credential in the request. Provide EITHER ``table`` (→ ``SELECT * FROM <table>``) OR ``query``.
+    Request-side dial only; ``build_config`` is the authoritative validator of the values.
+    """
+
+    # Reject unknown keys so a typo'd field is a clear 422, not a silent no-op.
+    model_config = ConfigDict(extra="forbid")
+
+    type: str = "file"
+    connection_env: str = "CLASSIFYOS_PG_DSN"
+    table: str | None = None
+    query: str | None = None
+
+
 class MlflowConfig(BaseModel):
     """MLflow logging dials (Databricks integration — Phase A). OFF by default.
 
@@ -253,6 +273,11 @@ class RunConfig(BaseModel):
     permutation_metric: str = "f1_weighted"
 
     # --- nested capability configs ---
+    # Input source (Interim 2b). Default ``file`` = today's behaviour (reads ``input_file`` from
+    # storage). ``postgres`` materializes a table/query to ``input_file`` under DATA_DIR before the
+    # run. Request-side dial only; forwarded to build_config (authoritative validator). The DSN is
+    # a server-side env concern (``connection_env`` names the env var, never a credential here).
+    input_source: InputSourceConfig = Field(default_factory=InputSourceConfig)
     feature_engineering: FeatureEngineeringConfig = Field(default_factory=FeatureEngineeringConfig)
     interaction_features: InteractionFeaturesConfig = Field(default_factory=InteractionFeaturesConfig)
     tuning: TuningConfig = Field(default_factory=TuningConfig)

@@ -29,6 +29,7 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import JSONResponse
 
 from classifyos.evaluation.curves import compute_curve_points
+from classifyos.io.sql_source import InputSourceError
 from classifyos.io.storage import StorageAdapter
 from classifyos.runner import RESULTS_CSV_KEY, ModelRunner
 
@@ -74,8 +75,10 @@ async def run_endpoint(
     runner = ModelRunner(engine_config, storage)
     try:
         await run_in_threadpool(runner.run)
-    except (FileNotFoundError, ValueError) as exc:
-        # Known input problems surfaced at run time (missing file, unparseable column, …).
+    except (FileNotFoundError, ValueError, InputSourceError) as exc:
+        # Known input problems surfaced at run time: a missing file, an unparseable column, or a
+        # postgres input source that could not be read/materialized (Interim 2b — unset connection
+        # env var, unreachable DB, failed query, empty result). All are 400-style run errors.
         body = RunResponse(status="error", result=None, error=f"{type(exc).__name__}: {exc}")
         return JSONResponse(status_code=400, content=body.model_dump())
 

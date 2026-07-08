@@ -185,6 +185,11 @@ problem there is returned as HTTP 422.
   "test_size": 0.2,
   "stratify": true,
   "time_split_col": null,
+  "input_source": {                     // Interim 2b — OPTIONAL; default reads input_file from storage (unchanged)
+    "type": "file",                     // file | postgres
+    "connection_env": "CLASSIFYOS_PG_DSN", // NAME of a server-side env var holding the SQLAlchemy DSN (never a credential here)
+    "table": null,                      // postgres: SELECT * FROM <table> (safe identifier) — provide table OR query, not both
+    "query": null },                    // postgres: a raw SQL SELECT
   "algorithms": ["LogisticRegression", "RandomForest", "XGBoost"],
   "class_balance": "smote",           // smote | undersample | class_weight | none
   "missing_strategy": "median",       // LEGACY GLOBAL default (back-compat); per-type keys below override it
@@ -239,6 +244,23 @@ problem there is returned as HTTP 422.
   ]
 }
 ```
+
+**`input_source` (request-side only; response schema UNCHANGED — Interim 2b).** Selects where the
+run's data comes from. Default `type: "file"` reads `input_file` from storage exactly as before
+(byte-identical). `type: "postgres"` runs a table/query **once** against the database whose
+SQLAlchemy DSN is held by the environment variable **named** in `connection_env` (a server-side
+`.env` value — never a credential in the request) and materializes the result to `input_file`
+under `DATA_DIR` (which must end in `.parquet` or `.csv`) **before** the pipeline runs
+(materialize-to-file, Option B). The engine then loads that snapshot file unchanged, so there is
+**no new response field and no `schema_version` bump**. Provide **exactly one** of `table`
+(→ `SELECT * FROM <table>`, validated to a safe SQL identifier) or `query` (a raw SQL SELECT);
+a bad `input_source` (unknown `type`, both/neither of `table`/`query`, missing `connection_env`,
+non-`.parquet`/`.csv` destination) → HTTP 422. A postgres source that cannot be read at run time
+(unset env var, unreachable DB, failed query, empty result) → the `status: "error"` envelope
+(HTTP 400), like a missing input file. **Reproducibility:** a SQL table is a *set* (unordered), so
+a bare `table`/`SELECT *` may return rows in a different order than a source CSV — the snapshot
+holds the same rows, but the seeded train/test split is order-sensitive; add an `ORDER BY` to the
+`query` for a byte-for-byte reproducible snapshot (verified to match the CSV exactly).
 
 **`user_features` (request-side only; response schema UNCHANGED).** The created columns are
 real engineered columns, so they already surface in the existing `result.run.active_features`

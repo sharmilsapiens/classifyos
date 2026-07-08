@@ -327,6 +327,57 @@ def test_run_bad_context_mode_is_422(api_client) -> None:
     assert api_client.post("/api/v1/run", json=body).status_code == 422
 
 
+# --------------------------------------------------------------------------- #
+# input_source (Interim 2b) — request-side dial, response schema UNCHANGED     #
+# --------------------------------------------------------------------------- #
+
+
+def test_run_accepts_explicit_file_input_source(api_client) -> None:
+    """An explicit ``input_source: {type: file}`` behaves exactly like the default (200)."""
+    body = {
+        **_VALID,
+        "algorithms": ["LogisticRegression"],
+        "class_balance": "none",
+        "interaction_features": {"max_auto_pairs": 0},
+        "input_source": {"type": "file"},
+    }
+    resp = api_client.post("/api/v1/run", json=body)
+    assert resp.status_code == 200
+    body = resp.json()
+    # Request-side only — the response envelope is byte-identical to a plain run (no new field).
+    assert body["schema_version"] == "1.10"
+    assert set(body["result"]) == RESULT_KEYS
+
+
+def test_run_bad_input_source_is_422(api_client) -> None:
+    """A postgres input_source missing both table and query is rejected by build_config (422)."""
+    body = {**_VALID, "input_source": {"type": "postgres", "connection_env": "CLASSIFYOS_PG_DSN"}}
+    assert api_client.post("/api/v1/run", json=body).status_code == 422
+
+
+def test_run_postgres_source_unset_env_is_error_envelope(api_client) -> None:
+    """A valid-shape postgres source whose DSN env var is unset → status=error (400), not 500.
+
+    Proves the InputSourceError → error-envelope wiring end-to-end without needing a live database:
+    the config passes validation (parquet destination, table given), then materialize fails cleanly
+    at run time because the named env var is unset — surfaced as the 400 ``status="error"`` envelope.
+    """
+    body = {
+        **_VALID,
+        "input_file": "pg_snapshot.parquet",
+        "input_source": {
+            "type": "postgres",
+            "connection_env": "CLASSIFYOS_NO_SUCH_DSN",
+            "table": "policy_lapse",
+        },
+    }
+    resp = api_client.post("/api/v1/run", json=body)
+    assert resp.status_code == 400
+    payload = resp.json()
+    assert payload["status"] == "error"
+    assert "CLASSIFYOS_NO_SUCH_DSN" in payload["error"]
+
+
 def test_binary_run_meta_block(binary_run_response) -> None:
     run = binary_run_response.json()["result"]["run"]
     assert RUN_KEYS == set(run.keys())

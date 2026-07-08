@@ -13,6 +13,7 @@ contract.
 from __future__ import annotations
 
 import copy
+import re
 from typing import Any
 
 # --- allowed value sets (kept next to the defaults so validation can't drift) ---
@@ -49,6 +50,23 @@ MISSING_STRATEGIES_BY_COLUMN = MISSING_STRATEGIES_NUMERIC
 ENCODING_METHODS = ("onehot", "label", "ordinal", "target")
 SCALING_METHODS = ("standard", "minmax", "robust", "none")
 OUTLIER_METHODS = ("iqr", "zscore", "none")
+
+# --- input source (Interim 2b — Databricks integration §6.5, Option B) ----------------
+#: Where a run's data comes from. ``file`` (default) reads ``input_file`` from DATA_DIR exactly
+#: as today (byte-identical behaviour). ``postgres`` runs a table/query against a SQL database
+#: ONCE and materializes the result to ``input_file`` under DATA_DIR (via ``StorageAdapter``)
+#: BEFORE the pipeline runs — so ``data_loader`` and everything downstream are unchanged and the
+#: load → split → fit-on-train leakage discipline stays literally intact (see
+#: ``classifyos.io.sql_source``). Snapshotting to a file is intended (reproducibility / audit).
+INPUT_SOURCE_TYPES = ("file", "postgres")
+#: Snapshot file formats a ``postgres`` source may be written to; the ``input_file`` suffix
+#: selects it, symmetric with ``data_loader``'s reader. Typed Parquet is preferred; CSV works.
+INPUT_SNAPSHOT_FORMATS = ("parquet", "csv")
+#: A ``table`` name is interpolated into ``SELECT * FROM <table>``, so it must be a safe SQL
+#: identifier (optionally schema-qualified) — an allowlist guard against injection, since a table
+#: identifier cannot be a bound parameter. A raw ``query`` is the analyst's own SQL ([RISK] noted
+#: in sql_source): opt-in, local, and their responsibility.
+_SQL_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)?$")
 #: Metrics a tuning study may optimise (Section 8B). These reuse ``evaluate_model``'s
 #: own metric keys so the value a trial maximises is exactly the value reported later.
 #: All are higher-is-better except ``log_loss`` (the tuner negates it internally).
@@ -132,6 +150,19 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "input_file": "",
     "target": "",
     "feature_cols": [],
+    # --- input source (Interim 2b — Databricks integration §6.5, Option B) --------
+    # Default "file": read ``input_file`` from DATA_DIR as today (byte-identical behaviour).
+    # "postgres": run ``query`` (or ``SELECT * FROM <table>``) ONCE against the database whose
+    # SQLAlchemy DSN is held by the env var named in ``connection_env`` (NEVER a credential in
+    # the config), materialize the result to ``input_file`` under DATA_DIR via ``StorageAdapter``,
+    # then run the normal file pipeline on that snapshot. Provide EITHER ``table`` OR ``query``.
+    # ``data_loader`` and everything downstream are unchanged (see classifyos/io/sql_source.py).
+    "input_source": {
+        "type": "file",
+        "connection_env": "CLASSIFYOS_PG_DSN",
+        "table": None,
+        "query": None,
+    },
     # --- problem framing ---
     "problem_type": "binary",
     "test_size": 0.2,
@@ -409,6 +440,7 @@ def _validate_config(config: dict[str, Any]) -> None:
     _validate_tuning(config["tuning"])
     _validate_explainability(config["explainability"])
     _validate_mlflow(config["mlflow"])
+    _validate_input_source(config.get("input_source", {}), config["input_file"])
     _validate_user_features(config["user_features"])
 
 
@@ -547,6 +579,56 @@ def _validate_mlflow(m: Any) -> None:
     if run_name is not None and not isinstance(run_name, str):
         raise ValueError(
             f"'mlflow.run_name' must be a string or None, got {run_name!r}"
+        )
+
+
+def _validate_input_source(src: Any, input_file: str) -> None:
+    """Validate the ``input_source`` block (Interim 2b — optional Postgres input source).
+
+    ``type`` must be a member of :data:`INPUT_SOURCE_TYPES`. For the default ``file`` source the
+    other fields are ignored (a file run is unchanged). For ``postgres`` the connection is
+    referenced by ``connection_env`` — the NAME of an environment variable holding the SQLAlchemy
+    DSN, never a credential in the config — and EXACTLY ONE of ``table`` / ``query`` must be given.
+    A ``table`` must be a safe SQL identifier (it is interpolated into ``SELECT * FROM <table>``),
+    and ``input_file`` (the snapshot destination) must end in a :data:`INPUT_SNAPSHOT_FORMATS`
+    suffix. The database is NOT contacted here — this only validates the request shape (a bad
+    value → ``ValueError`` → HTTP 422 at the API boundary). The query runs later, at materialize
+    time (:func:`classifyos.io.sql_source.materialize_source`).
+    """
+    if not isinstance(src, dict):
+        raise ValueError("'input_source' must be a dict")
+    source_type = src.get("type", "file")
+    _require_choice(source_type, INPUT_SOURCE_TYPES, "input_source.type")
+    if source_type == "file":
+        return
+
+    # --- postgres source ---
+    connection_env = src.get("connection_env")
+    if not isinstance(connection_env, str) or not connection_env.strip():
+        raise ValueError(
+            "'input_source.connection_env' must name the environment variable holding the "
+            "database DSN (a non-empty string) for a postgres source; a credential is never "
+            "put in the config itself"
+        )
+    table = src.get("table")
+    query = src.get("query")
+    has_table = isinstance(table, str) and table.strip() != ""
+    has_query = isinstance(query, str) and query.strip() != ""
+    if has_table == has_query:
+        raise ValueError(
+            "a postgres 'input_source' must set EXACTLY ONE of 'table' or 'query' "
+            "(got both or neither)"
+        )
+    if has_table and not _SQL_IDENTIFIER_RE.match(table.strip()):
+        raise ValueError(
+            "'input_source.table' must be a simple SQL identifier (optionally schema-qualified), "
+            f"got {table!r}"
+        )
+    suffix = input_file.lower().rsplit(".", 1)[-1] if "." in input_file else ""
+    if suffix not in INPUT_SNAPSHOT_FORMATS:
+        raise ValueError(
+            "for a postgres 'input_source', 'input_file' (the snapshot destination) must end in "
+            f"one of {list(INPUT_SNAPSHOT_FORMATS)}, got {input_file!r}"
         )
 
 

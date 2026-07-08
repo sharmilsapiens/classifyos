@@ -570,6 +570,41 @@ as history, and the trained models can be shared and re-loaded (locally now; Dat
   params, metrics, 11 artifacts, and 3 loadable models across all three flavors; an off-run wrote
   nothing extra). Databricks packaging (Phase B) and Model Serving (Phase C) are **not** built yet.
 
+## Postgres input source — read a run's data from a database (✅ Done, 2026-07-08)
+**In one line:** A run can now optionally draw its data from a SQL database (e.g. a Postgres
+table) instead of an uploaded file — by exporting the table/query to a snapshot file first, so
+the whole pipeline runs exactly as before.
+- **Why:** the next step of the Databricks-integration plan (`docs/databricks_integration.md` §6.5,
+  Interim 2b) — a database-backed input, delivered locally now, that carries forward to Databricks
+  unchanged. It follows Phase A (MLflow logging) and Interim 2a (MLflow's history in Postgres).
+- **What it does:** a new `input_source` setting picks where the data comes from. The default
+  `file` reads the uploaded file as always. `postgres` runs a chosen **table** (→ `SELECT * FROM
+  <table>`) or a **raw SQL query** once, and writes the result to the run's input file (a Parquet
+  or CSV) in the data folder — after which the ordinary file pipeline loads it and everything
+  downstream is **completely unchanged**.
+- **"Materialize to a file" on purpose (Option B).** Rather than teaching the engine to read a
+  database (which would bend the "all reads go through one file gateway" rule and complicate the
+  no-leakage discipline), the query result is *snapshotted to a file* first. That keeps the storage
+  rule and the load→split→learn-from-train-only rule **literally intact**, and the snapshot is a
+  durable, auditable record of exactly the rows the run saw.
+- **Credentials are never in the request/config.** The database connection is referenced by the
+  **name** of an environment variable (in `backend/.env`, machine-local, gitignored) that holds the
+  connection string — never a password written into a run's configuration. A bad setting (unknown
+  source type, both/neither of table/query, a missing connection name, an unsafe table name, or a
+  non-Parquet/CSV destination) is rejected the moment the config is built.
+- **OFF by default & safe to fail.** With no `input_source` (or `type: file`) a run is byte-for-byte
+  identical to before. The database libraries (SQLAlchemy + the Postgres driver) are imported
+  **only** when a database source is actually used. A source that can't be read (unset connection
+  name, unreachable DB, failed query, empty result) fails with a clear message, not a crash.
+- **Verified:** loading `policy_lapse.csv` into a local Postgres table and running with
+  `source = postgres` reproduces the direct-CSV run **bit-for-bit** when the query preserves row
+  order (`ORDER BY`); the snapshot holds the identical set of rows either way. (A SQL table has no
+  inherent row order, so a plain `SELECT *` can shuffle the rows and slightly change the seeded
+  train/test split — documented; add an `ORDER BY` for an exact reproduction.) Engine + API; new
+  `classifyos/io/sql_source.py`; new tests; `SQLAlchemy` pinned. Dashboard UI to pick a
+  table/query is a follow-up. Databricks packaging (Phase B) and Model Serving (Phase C) are **not**
+  built yet.
+
 ---
 
 ## How to read this project

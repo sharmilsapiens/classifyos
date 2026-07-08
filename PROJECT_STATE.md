@@ -5,7 +5,58 @@
 > planning/overseer chat stays in sync with the local repo.
 
 **Last updated:** 2026-07-08
-**Updated by:** Claude Code (**NEW — Interim 2a: MLflow backend store → local Postgres + a persistence read-path
+**Updated by:** Claude Code (**NEW — Interim 2b: opt-in Postgres INPUT source via materialize-to-file
+(Option B); engine + API, additive, request-side only — NO response-schema/`schema_version` change (stays
+1.10)**. Implements `docs/databricks_integration.md` §6.5 **Interim 2b** — local-only, no Databricks, no push;
+follows Phase A + Interim 2a. **Hallucination check ✅ FIRST** against installed **SQLAlchemy 2.0.51 /
+psycopg2 2.9.12 / pandas 2.3.3**: verified `sqlalchemy.create_engine(url, **kw)→Engine`, `sqlalchemy.text`, and
+`pandas.read_sql(sql, con, …)→DataFrame` before coding. **Design decision (locked in the note):** materialize
+**to a file** (Option B), NOT direct `pd.read_sql` into the pipeline (Option A) — so ALL engine reads stay
+behind `StorageAdapter`, the leakage discipline (load → split → fit-on-train) stays literally intact, and the
+query result is snapshotted for audit/repro. **(1) Config:** new `input_source` block in `DEFAULT_CONFIG`
+(`type`: `file` default | `postgres`; `connection_env`; `table` | `query`) + `_validate_input_source` (the
+authoritative validator → bad value = 422): `type` ∈ allowlist; for `postgres`, `connection_env` a non-empty
+string (the NAME of an env var, never a credential in config), EXACTLY ONE of `table`/`query`, a `table`
+matched to a safe SQL-identifier regex (injection guard — an identifier can't be a bound param), and the
+`input_file` destination suffix ∈ `INPUT_SNAPSHOT_FORMATS` (parquet/csv). **(2) Engine:** new pure module
+`classifyos/io/sql_source.py::materialize_source(config, storage)` — **no-op for `file`** (returns
+`input_file`, imports nothing); for `postgres` lazily imports SQLAlchemy/pandas, reads the DSN from the env var
+named by `connection_env` (`_resolve_connection_url`), runs `query` or `SELECT * FROM <table>` ONCE via
+`create_engine`+`read_sql(text(...))`, writes the frame to `input_file` under DATA_DIR through
+`StorageAdapter.save_input` (`_write_snapshot`: BytesIO → `to_parquet`/`to_csv`), and `engine.dispose()`s.
+`InputSourceError` for unset env / unreachable DB / failed query / empty result / bad suffix. Wired as a
+**pre-step in `ModelRunner._load` BEFORE `data_loader`** — `data_loader` and everything downstream are
+byte-for-byte unchanged (still read a plain file). Same opt-in/lazy-import/clean-fail discipline as
+shap/optuna/openai/mlflow (SQLAlchemy is a normal Python dep, not a web dep — engine stays web-free). **(3)
+API (additive, request-side only):** `InputSourceConfig` (extra-forbid) + `RunConfig.input_source` forwarded
+via `to_engine_config`→`build_config`; `/run` catches `InputSourceError` → the `status="error"` (400)
+envelope (like a missing file). **NO `result` field added, NO version bump** — `/run` request+response stay
+1.10 (same discipline as the request-side `user_features`/`permutation_metric` additions). `docs/api_contract.md`
+updated (request example + a dedicated request-side note incl. the reproducibility caveat). **(4) Deps/env:**
+`SQLAlchemy>=2.0,<3` pinned in requirements.txt (psycopg2-binary already pinned from 2a; both already in
+requirements.lock); `CLASSIFYOS_PG_DSN` documented (commented) in `.env.example`, set in local `.env`.
+**Tests:** new `test_sql_source.py` (+18 — config validation incl. injection/both-or-neither/missing-env/bad
+suffix; `materialize_source` against a **sqlite** DSN so CI needs no live Postgres — parquet+csv round-trips,
+query-filter, unset-env/empty-result/bad-DSN → InputSourceError; **end-to-end postgres==csv metric equivalence**)
++ 3 API tests in test_api_run.py (explicit file source unchanged & envelope byte-identical; bad postgres source
+→ 422; unset-DSN postgres → error envelope). **Backend 402 pytest green (+21: test_sql_source 18
++ 3 API), full suite confirmed (was 381 at Interim 2a)** (frontend untouched — dashboard UI to pick a
+table/query is a follow-up). **Verified LIVE end-to-end** against a real local Postgres (created a
+dedicated `classifyos_data` DB, loaded `policy_lapse.csv` → `policy_lapse` table, PostgreSQL 17): the
+materialized snapshot holds the **identical 3000-row set** as the CSV, and a `SELECT * … ORDER BY policy_id`
+run reproduces the direct-CSV per-model metrics **BIT-FOR-BIT** (0.00e0 diff, LR+RF); an unordered `SELECT *`
+differs by ≤2e-2 purely because a SQL table is a *set* (no inherent order) so the seeded train/test split picks
+different rows — documented in `sql_source.py`/the contract (add `ORDER BY` for a byte-reproducible snapshot;
+the snapshot file itself is deterministic once written). **plan_tweak #46 logged** (the interim-phase deviation
+the design note asked to record). **⚠ Row-order caveat** is the one thing reviewers should note: re-materializing
+an unordered query is not guaranteed to reproduce a prior run's split. **Known limitation / future hardening
+(deferred — NOT in this changeset):** make the snapshot deterministic by default rather than relying on the
+operator remembering `ORDER BY` — e.g. `materialize_source` could log a warning when a postgres `table`/`query`
+has no `ORDER BY`, or apply a stable order for the bare-`table` case. Captured as a known limitation only.
+**Out of scope (still deferred):** Phase B
+(`DatabricksVolumeStorage`), Phase C (Model Registry/Serving), `/explain`→persisted-model wiring, and the
+dashboard table/query picker.)
+**Prior update (same day):** Claude Code (**NEW — Interim 2a: MLflow backend store → local Postgres + a persistence read-path
 (config + API + frontend; additive `1.9 → 1.10`; NO engine change)**. Implements
 `docs/databricks_integration.md` §6.5 **Interim 2a** — local-only, no Databricks, no push. Databricks stays
 deferred; this delivers real persistence now (results survive a browser refresh AND a server restart).

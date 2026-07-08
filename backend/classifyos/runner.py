@@ -333,9 +333,18 @@ class ModelRunner:
     # ------------------------------------------------------------- pipeline steps --
 
     def _load(self, cfg: dict[str, Any]) -> pd.DataFrame:
-        """Stage 1 — load the dataset (imported lazily to keep the import graph flat)."""
-        from .io.loader import data_loader
+        """Stage 1 — load the dataset (imported lazily to keep the import graph flat).
 
+        Interim 2b: when ``input_source.type == "postgres"``, the configured table/query is run
+        ONCE and materialized to ``cfg["input_file"]`` under DATA_DIR (Option B) BEFORE the file
+        is read — a no-op for the default ``file`` source, so the load path below is unchanged.
+        ``data_loader`` and everything downstream still read a plain file (leakage discipline +
+        StorageAdapter rule stay literally intact).
+        """
+        from .io.loader import data_loader
+        from .io.sql_source import materialize_source
+
+        materialize_source(cfg, self.storage)
         return data_loader(cfg, self.storage)
 
     def _engineer(
