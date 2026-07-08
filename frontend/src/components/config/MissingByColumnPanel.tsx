@@ -15,6 +15,7 @@
 
 import type { ColumnProfile } from "@/api/types"
 import { Select } from "@/components/ui/select"
+import { fmtInt, fmtPct } from "@/lib/format"
 import { cn } from "@/lib/utils"
 
 // Strategy option lists — mirror config.py MISSING_STRATEGIES_NUMERIC / _CATEGORICAL.
@@ -83,14 +84,31 @@ export default function MissingByColumnPanel({
       </p>
       <div className="space-y-2">
         {cols.map((col) => {
-          const numeric = isNumeric(profileByName.get(col))
+          const profile = profileByName.get(col)
+          const numeric = isNumeric(profile)
           const opts = numeric ? NUMERIC_OPTS : CATEGORICAL_OPTS
           const def = numeric ? numericDefault : categoricalDefault
           const overridden = Boolean(value[col])
+          // Surface how much of THIS column is missing right where its imputation
+          // method is chosen — a column with no gaps needs no strategy at all.
+          const nMissing = profile?.n_missing ?? 0
           return (
             <div key={col} className="flex items-center gap-3">
               <span className="min-w-0 flex-1 truncate text-sm" title={col}>
                 {col}
+              </span>
+              <span
+                className={cn(
+                  "shrink-0 rounded px-1.5 py-0.5 text-xs",
+                  nMissing > 0
+                    ? "bg-amber-100 text-amber-700"
+                    : "bg-muted text-muted-foreground",
+                )}
+                title={nMissing > 0 ? `${fmtInt(nMissing)} missing values` : "No missing values"}
+              >
+                {nMissing > 0
+                  ? `${fmtInt(nMissing)} missing (${fmtPct(profile?.missing_pct)})`
+                  : "no gaps"}
               </span>
               <span
                 className={cn(

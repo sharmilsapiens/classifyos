@@ -92,6 +92,11 @@ export default function Configure() {
   const profileByName = new Map<string, ColumnProfile>(
     (inspect.column_profiles ?? []).map((p) => [p.name, p]),
   )
+  // How much of the selected feature columns is actually missing, split the same way
+  // the two selectors are (numeric vs everything else) — so the imputation choice is
+  // made knowing whether (and how much) there is anything to impute.
+  const numericMissing = missingSummary(form.feature_cols, profileByName, true)
+  const categoricalMissing = missingSummary(form.feature_cols, profileByName, false)
 
   function toggleFeature(col: string) {
     const next = form.feature_cols.includes(col)
@@ -286,14 +291,14 @@ export default function Configure() {
               </Select>
             </Field>
             <Field label="Missing values · numeric"
-              hint={missingNumericHint(form.missing_strategy_numeric)}>
+              hint={<>{numericMissing}{missingNumericHint(form.missing_strategy_numeric)}</>}>
               <Select value={form.missing_strategy_numeric}
                 onChange={(e) => updateForm({ missing_strategy_numeric: e.target.value })}>
                 {MISSING_NUMERIC.map((c) => <option key={c} value={c}>{c}</option>)}
               </Select>
             </Field>
             <Field label="Missing values · categorical"
-              hint={missingCategoricalHint(form.missing_strategy_categorical)}>
+              hint={<>{categoricalMissing}{missingCategoricalHint(form.missing_strategy_categorical)}</>}>
               <Select value={form.missing_strategy_categorical}
                 onChange={(e) => updateForm({ missing_strategy_categorical: e.target.value })}>
                 {MISSING_CATEGORICAL.map((c) => <option key={c} value={c}>{c}</option>)}
@@ -788,6 +793,40 @@ function missingNumericHint(strategy: string): string | undefined {
     default:
       return undefined
   }
+}
+
+/** A one-line missingness summary for the selected feature columns of one kind
+ *  (numeric vs everything-else), rendered above the per-strategy hint so the
+ *  imputation choice is made knowing how much there is to impute. Mirrors the
+ *  numeric/categorical split of the two selectors (and MissingByColumnPanel's
+ *  `isNumeric`). Returns null when no profiled feature column of that kind is
+ *  selected (so an older upload with no profile, or none picked, shows nothing). */
+function missingSummary(
+  featureCols: string[],
+  profileByName: Map<string, ColumnProfile>,
+  numeric: boolean,
+): ReactNode {
+  const cols = featureCols
+    .map((c) => profileByName.get(c))
+    .filter((p): p is ColumnProfile => !!p && (p.dtype_group === "numeric") === numeric)
+  if (cols.length === 0) return null
+  const withGaps = cols.filter((p) => p.n_missing > 0)
+  const totalMissing = withGaps.reduce((sum, p) => sum + p.n_missing, 0)
+  const kind = numeric ? "numeric" : "categorical"
+  if (withGaps.length === 0) {
+    return (
+      <span className="text-emerald-600">
+        No missing values in the {cols.length} selected {kind} column
+        {cols.length === 1 ? "" : "s"}.{" "}
+      </span>
+    )
+  }
+  return (
+    <span className="font-medium text-amber-700">
+      {withGaps.length} of {cols.length} {kind} column{cols.length === 1 ? "" : "s"} with gaps
+      ({fmtInt(totalMissing)} missing cell{totalMissing === 1 ? "" : "s"}).{" "}
+    </span>
+  )
 }
 
 /** Strategy-specific note for the CATEGORICAL (non-numeric) missing-values selector.

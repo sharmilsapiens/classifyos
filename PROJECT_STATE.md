@@ -4,7 +4,30 @@
 > A copy is uploaded to the ClassifyOS Claude Project knowledge after each update so the
 > planning/overseer chat stays in sync with the local repo.
 
-**Last updated:** 2026-07-03
+**Last updated:** 2026-07-08
+**Updated by:** Claude Code (**NEW — missingness surfaced WHERE imputation is chosen (frontend-only, no engine/API/
+contract change)**. User question: "we let users pick imputation methods, but where do we show that some data is
+missing?" Audit found missingness was shown on the **Data Profile** page (a dataset-level missingness scan + a
+`N missing (X%)` badge on each column card) and the **Upload** inspect table (`n_missing` per column) — but **not**
+on **Configuration**, where the analyst actually picks imputation strategies, so the choice was made blind to
+whether (or how much) a column had gaps. User chose to close the gap on BOTH the per-column panel and the per-type
+selectors. **Fix (all frontend, reads data the `/upload` profile already returns — `ColumnProfile.n_missing` /
+`.missing_pct`):** (1) `components/config/MissingByColumnPanel.tsx` — each listed feature column now shows a badge
+beside its strategy dropdown: amber `N missing (X%)` when the column has gaps, muted "no gaps" when clean.
+(2) `pages/Configure.tsx` — a new `missingSummary(featureCols, profileByName, numeric)` helper renders a one-line
+summary ABOVE each per-type selector's existing strategy hint (numeric vs everything-else, mirroring the two
+selectors' split and the panel's `isNumeric`): amber "K of N numeric column(s) with gaps (T missing cell(s))." when
+there are gaps, emerald "No missing values in the N selected numeric column(s)." when clean, nothing when no
+profiled feature column of that kind is selected (so an older upload with no profile shows nothing). **DRY:** the
+`fmtPct` formatter (0–100 → one-decimal %) was moved out of `DataProfile.tsx` into the shared `lib/format.ts` and
+imported by DataProfile + the panel, so a column's missing share reads identically on Data Profile and Configure
+(same single-source-of-truth pattern as `fmtNum`). **Tests:** `configure.test.tsx` +3 (a column's `2 missing
+(33.3%)` badge renders beside its selector; the per-type numeric summary "1 of 1 numeric column with gaps (2 missing
+cells)"; the clean-state "No missing values in the 1 selected numeric column."). **131 frontend vitest green (+3) ·
+`tsc -b` + `vite build` clean** (backend untouched). Hallucination check N/A — no new library calls (existing
+`@/api/types` fields + `fmtInt`/`fmtPct`). **No plan_tweak entry** — additive UI over data the profile already
+returns, realizing a user request; not a plan deviation.)
+**Prior update:** 2026-07-03
 **Updated by:** Claude Code (**NEW — feature VALUES surfaced alongside per-row SHAP contributions (full stack,
 additive `1.7 → 1.8`)**. User asked whether the explainability output should carry each feature's *value*
 alongside its SHAP contribution so the waterfall reads `feature = value` — the reason-code / adverse-action

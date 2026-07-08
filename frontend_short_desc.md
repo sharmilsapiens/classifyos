@@ -314,6 +314,23 @@ default" and it keeps the type setting.
   shows a short "select feature columns above" note instead of an empty table. New build-payload +
   Configure render tests cover the map default, the override write, and the numeric option set.
 
+## Missingness shown where you choose imputation (✅ Done, 2026-07-08)
+**In one line:** The Configuration page now shows **how much data is missing** right where you pick the
+fill method — both a running summary above each per-type selector and a per-column badge — so the choice
+isn't made blind (previously missingness only appeared on the Data Profile page and the Upload table).
+- **Per-type summary.** Above *Missing values · numeric* and *Missing values · categorical*, a one-line
+  note summarises the selected feature columns of that kind: amber "K of N numeric columns with gaps
+  (T missing cells)" when there are gaps, or a reassuring emerald "No missing values in the N selected
+  numeric columns" when clean. It splits numeric vs everything-else exactly like the two selectors do.
+- **Per-column badge.** In the "Missing values · per column" card, each column now carries a badge beside
+  its strategy dropdown — amber "N missing (X%)" when it has gaps, a muted "no gaps" when it's complete —
+  so you can see at a glance which columns even need a strategy.
+- **No new data, no waiting.** It reads the `n_missing`/`missing_pct` the upload profile already returns
+  (the same numbers the Data Profile missingness scan uses) — **no extra server call and no engine/API/
+  contract change**. The `fmtPct` percentage formatter was moved into a shared helper so the missing share
+  reads identically on Data Profile and Configuration. New render tests cover the badge, the per-type
+  summary, and the clean state. **131 vitest green · tsc + build clean.**
+
 ## Feature picker enrichment on Configuration (✅ Done, 2026-07-01)
 **In one line:** The feature-selection list on the Configuration page — previously just a checkbox
 and a column name — now shows, for each column, a smooth distribution curve and key numbers for

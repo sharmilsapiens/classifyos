@@ -30,18 +30,13 @@ import { ArrowRight, ArrowUp, Hash, Type as TypeIcon } from "lucide-react"
 
 import type { ColumnProfile, CorrelationMatrix, InspectProfile } from "@/api/types"
 import { useApp } from "@/store/AppStore"
-import { fmtInt, fmtNum } from "@/lib/format"
+import { fmtInt, fmtNum, fmtPct } from "@/lib/format"
 import { ColumnFlags } from "@/lib/columnFlags"
 import { cn } from "@/lib/utils"
 import { buttonVariants } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { EmptyState, PageHeader } from "@/components/common/States"
-
-function fmtPct(value: number | null | undefined): string {
-  if (value === null || value === undefined || Number.isNaN(value)) return "—"
-  return `${value.toFixed(1)}%`
-}
 
 export default function DataProfile() {
   const { inspect } = useApp()

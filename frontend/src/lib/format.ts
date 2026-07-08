@@ -23,6 +23,14 @@ export function fmtNum(value: number | null | undefined): string {
   return Number(value.toFixed(3)).toLocaleString("en-US")
 }
 
+/** A percentage value (already on the 0–100 scale) to one decimal + "%", or "—".
+    Shared by the Data Profile missingness views and the Configuration imputation
+    controls so a column's missing share reads identically in both places. */
+export function fmtPct(value: number | null | undefined): string {
+  if (value === null || value === undefined || Number.isNaN(value)) return "—"
+  return `${value.toFixed(1)}%`
+}
+
 /** Bytes → a short human size (for artifact lists). */
 export function fmtBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`

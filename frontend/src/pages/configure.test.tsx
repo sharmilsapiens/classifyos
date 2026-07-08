@@ -186,6 +186,56 @@ describe("Configure — per-column imputation", () => {
   })
 })
 
+describe("Configure — missingness surfaced with imputation", () => {
+  // A profile where the numeric feature `age` has real gaps, so the imputation
+  // controls can show how much there is to impute.
+  function renderWithMissing() {
+    const withGaps: InspectProfile = {
+      ...PROFILE,
+      n_missing: { ...PROFILE.n_missing, age: 2 },
+      column_profiles: (PROFILE.column_profiles ?? []).map((p) =>
+        p.name === "age" ? { ...p, n_missing: 2, missing_pct: 33.3 } : p,
+      ),
+    }
+    mockApp = {
+      inspect: withGaps,
+      serverPath: withGaps.server_path,
+      form: { ...DEFAULT_FORM_STATE, target: "", feature_cols: ["age"] },
+      updateForm: vi.fn(),
+      runPipeline: vi.fn(),
+      formErrors: () => [] as string[],
+    }
+    render(
+      <MemoryRouter>
+        <Configure />
+      </MemoryRouter>,
+    )
+  }
+
+  it("shows a column's missing count beside its per-column imputation selector", () => {
+    renderWithMissing()
+    const sel = screen.getByLabelText("Imputation method for age")
+    const row = sel.closest("div")
+    expect(within(row as HTMLElement).getByText(/2 missing \(33\.3%\)/)).toBeInTheDocument()
+  })
+
+  it("summarises total numeric missingness above the per-type selector", () => {
+    renderWithMissing()
+    // age is the only selected numeric feature and it has gaps → an amber summary.
+    expect(
+      screen.getByText(/1 of 1 numeric column with gaps \(2 missing cells\)/),
+    ).toBeInTheDocument()
+  })
+
+  it("reassures when the selected columns of a type have no gaps", () => {
+    // Default PROFILE has no missing values anywhere.
+    renderConfigure()
+    expect(
+      screen.getByText(/No missing values in the 1 selected numeric column\./),
+    ).toBeInTheDocument()
+  })
+})
+
 describe("Configure — decision threshold policy", () => {
   it("defaults to Auto-tune and shows the metric selector, not a value box", () => {
     renderConfigure()
