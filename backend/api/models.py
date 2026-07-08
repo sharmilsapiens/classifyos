@@ -98,6 +98,21 @@ class ExplainabilityConfig(BaseModel):
     context_mode: str = "both"
 
 
+class MlflowConfig(BaseModel):
+    """MLflow logging dials (Databricks integration — Phase A). OFF by default.
+
+    Mirrors ``DEFAULT_CONFIG['mlflow']``. When ``enabled``, the run is logged to MLflow AFTER
+    training — the config as params, each model's headline TEST metrics, the artifact files, and
+    one saved model per fitted algorithm (flavor-native). Local ``./mlruns`` by default; a managed
+    tracking server is selected server-side via the ``MLFLOW_TRACKING_URI`` env var (not a request
+    field). Request-side dial only; ``build_config`` is the authoritative validator of the values.
+    """
+
+    enabled: bool = False
+    experiment: str = "classifyos"
+    run_name: str | None = None
+
+
 class UserFeatureSpec(BaseModel):
     """One user-defined STRUCTURED feature spec (UserFeatureBuilder).
 
@@ -239,6 +254,10 @@ class RunConfig(BaseModel):
     # Per-row SHAP explainability (Explainability page). OFF by default; when enabled the run
     # returns a ``result.explanations`` block. Forwarded to build_config (authoritative validator).
     explainability: ExplainabilityConfig = Field(default_factory=ExplainabilityConfig)
+    # MLflow run logging + model persistence (Phase A). OFF by default; when enabled the run is
+    # logged to MLflow and the response carries a ``result.mlflow`` pointer. Request-side dial;
+    # forwarded to build_config (authoritative validator). The tracking store is server-side env.
+    mlflow: MlflowConfig = Field(default_factory=MlflowConfig)
     # User-defined structured features (UserFeatureBuilder). Empty/omitted → no user features
     # (unchanged behaviour). Each spec is validated against the engine's allowlists above.
     user_features: list[UserFeatureSpec] = Field(default_factory=list)
@@ -512,6 +531,22 @@ class RunTuning(BaseModel):
     best_params: dict[str, dict[str, Any]] = Field(default_factory=dict)
 
 
+class MlflowInfo(BaseModel):
+    """``result.mlflow`` — where this run was logged in MLflow (NEW in schema 1.9).
+
+    Present only when the opt-in ``mlflow.enabled`` was set AND logging succeeded; ``None``
+    otherwise (so a run without MLflow logging is byte-identical to earlier schemas). ``models``
+    maps each fitted algorithm to its logged-model URI, loadable via ``mlflow.<flavor>.load_model``
+    (a partial map if a particular model failed to serialize). ``tracking_uri`` is where the run
+    was recorded (a local ``./mlruns`` folder by default, or a configured tracking server).
+    """
+
+    run_id: str
+    experiment_id: str
+    tracking_uri: str
+    models: dict[str, str] = Field(default_factory=dict)
+
+
 class RunResult(BaseModel):
     """``result`` — the whole reshaped run output."""
 
@@ -541,6 +576,10 @@ class RunResult(BaseModel):
     # (LOCAL explainability — why THIS prediction). ``None`` when explainability was OFF (the
     # default) or produced nothing, so a run without it is byte-identical to earlier schemas.
     explanations: dict[str, ModelExplanation] | None = None
+    # NEW in schema 1.9 (additive, optional): a pointer to where this run was logged in MLflow
+    # (run id + per-model saved-model URIs). ``None`` when the opt-in ``mlflow.enabled`` was OFF
+    # (the default) or logging failed, so a run without MLflow logging is byte-identical to 1.8.
+    mlflow: MlflowInfo | None = None
 
 
 class RunResponse(BaseModel):
@@ -565,6 +604,10 @@ class RunResponse(BaseModel):
     #     feature's ORIGINAL (raw) value, keyed identically to ``contributions`` (so the waterfall
     #     can show "feature = value"). Present whenever SHAP explanations are; ``null`` per feature
     #     for derived/interaction features with no raw source. All earlier fields unchanged.
-    schema_version: str = "1.8"
+    # 1.9 (additive): added the optional ``result.mlflow`` block (run id + per-model saved-model
+    #     URIs) reporting where the run was logged in MLflow. ``None`` unless the opt-in
+    #     ``mlflow.enabled`` was on AND logging succeeded, so a run without it is byte-identical to
+    #     1.8. All earlier fields unchanged.
+    schema_version: str = "1.9"
     result: RunResult | None = None
     error: str | None = None

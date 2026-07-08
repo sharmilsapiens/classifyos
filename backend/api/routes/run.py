@@ -106,6 +106,7 @@ def _build_result(runner: ModelRunner, storage: StorageAdapter) -> dict[str, Any
         "feature_importance": _feature_importance(runner),
         "permutation_importance": _permutation_importance(runner),
         "explanations": _explanations(runner),
+        "mlflow": _mlflow(runner),
     }
 
 
@@ -364,6 +365,25 @@ def _explanations(runner: ModelRunner) -> dict[str, dict[str, Any]] | None:
             ],
         }
     return out or None
+
+
+def _mlflow(runner: ModelRunner) -> dict[str, Any] | None:
+    """``result.mlflow`` — pointer to where the run was logged in MLflow (NEW in schema 1.9, additive).
+
+    Passes through the runner's ``mlflow_run_`` ({run_id, experiment_id, tracking_uri, models} or
+    ``None``). Present only when the opt-in ``mlflow.enabled`` config was set AND logging
+    succeeded; ``None`` otherwise, so a run without MLflow logging matches the earlier schema
+    exactly. No ML here — pure plumbing of the pointer the engine already recorded (post-training).
+    """
+    info = getattr(runner, "mlflow_run_", None)
+    if not info or not info.get("run_id"):
+        return None
+    return {
+        "run_id": info.get("run_id"),
+        "experiment_id": info.get("experiment_id"),
+        "tracking_uri": info.get("tracking_uri"),
+        "models": info.get("models", {}) or {},
+    }
 
 
 def _tuning(runner: ModelRunner) -> dict[str, Any] | None:

@@ -534,6 +534,42 @@ mattered but *what its value was* — the missing half of an adverse-action expl
   `tsc -b` + `vite build` clean). Verified live on `policy_lapse.csv` (values like `age = 61`,
   `annual_premium = 6904` resolved). Hallucination check ✅ — no new library calls.
 
+## MLflow run logging & model persistence — Databricks integration Phase A (✅ Done, 2026-07-08)
+**In one line:** A run can now be **recorded in MLflow** — its settings, each model's scores, all
+the output files, and a **saved copy of every trained model** — so results survive, runs stack up
+as history, and the trained models can be shared and re-loaded (locally now; Databricks later).
+- **The gap it closes:** until now the engine kept **nothing** between runs — trained models lived
+  only in memory and were thrown away, and the output files used fixed names so each run overwrote
+  the last. This is the first piece of the "run it on Databricks" plan (`docs/databricks_integration.md`
+  §6, Phase A), and it also fixes those persistence/overwrite gaps immediately.
+- **What it does when switched on:** after training finishes, the runner logs to MLflow — the run
+  **config** (as searchable parameters), each model's **headline test metrics**, the **existing
+  artifact files** (the CSVs, the charts, the run profile), and **one saved model per algorithm**
+  using the right serializer for each (`mlflow.xgboost` / `mlflow.lightgbm` / `mlflow.sklearn`). Each
+  saved model is the trained algorithm itself (the calibration/threshold wrapper is peeled off first —
+  the same unwrap the feature-importance read-out already does, and the only form the XGBoost/LightGBM
+  savers accept). Every saved model was verified to **load back and predict**.
+- **OFF by default, and safe to fail.** It's opt-in (a new `mlflow` config block, `enabled` false by
+  default) and follows the exact same discipline as the SHAP/Optuna/OpenAI features — the `mlflow`
+  library is imported **only when asked for**, and **every failure is swallowed** (a missing package,
+  an unreachable store, a model that won't serialize) so logging can never abort a training run. A run
+  with it off is byte-for-byte identical to before.
+- **No leakage, all I/O through the gateway.** Logging happens strictly **after** training and reads
+  nothing back into the model-fitting; it only serializes already-trained models and copies
+  already-written files. Every artifact path is resolved through the StorageAdapter (no hardcoded
+  paths); MLflow's own store is its internal mechanism (like Optuna's).
+- **Where it logs.** Locally by default — MLflow's out-of-the-box local store (a small `mlflow.db`
+  database + an `./mlruns` folder), no server needed. The engine sets **no** tracking location itself,
+  so pointing one environment variable (`MLFLOW_TRACKING_URI`) at a database or a Databricks-managed
+  server later "lights it up" with **no code change** — exactly what the interim Postgres phase and the
+  Databricks phases need.
+- **Surfaced additively.** The API gained a request toggle (`mlflow.enabled`) and an optional
+  `result.mlflow` block (the run id + a load URI per saved model), locked contract bumped `1.8 → 1.9`
+  (additive — `null` when logging was off, so an old run is unchanged). Engine + API + tests; the new
+  `mlflow` dependency is pinned in requirements. Verified live on `policy_lapse.csv` (a run logged with
+  params, metrics, 11 artifacts, and 3 loadable models across all three flavors; an off-run wrote
+  nothing extra). Databricks packaging (Phase B) and Model Serving (Phase C) are **not** built yet.
+
 ---
 
 ## How to read this project

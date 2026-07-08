@@ -5,7 +5,46 @@
 > planning/overseer chat stays in sync with the local repo.
 
 **Last updated:** 2026-07-08
-**Updated by:** Claude Code (**NEW — missingness surfaced WHERE imputation is chosen (frontend-only, no engine/API/
+**Updated by:** Claude Code (**NEW — opt-in MLflow logging + model persistence (Databricks integration Phase A) —
+full stack, additive `1.8 → 1.9`**. Implements `docs/databricks_integration.md` §6 **Phase A**: an opt-in,
+lazy-imported, **report-only** MLflow layer that logs a run AFTER training (no leakage surface — logging reads
+nothing back into fit/transform; it serializes already-fitted models and copies already-written artifacts).
+**Hallucination check ✅ FIRST** — installed **mlflow 3.14.0** and verified `mlflow.set_experiment`/`start_run`/
+`log_params`/`log_metrics`/`log_artifact`/`set_tags` + `mlflow.sklearn`/`mlflow.xgboost`/`mlflow.lightgbm`
+`.log_model(model, name=…)` → `ModelInfo.model_uri` + `load_model` round-trip (incl. a base XGBClassifier fit on
+renamed `f0..fn` cols and a multilabel `OneVsRestClassifier` via cloudpickle) against the live package before
+coding. **Key finding:** MLflow 3.x's local default is a **sqlite `mlflow.db` backend + `./mlruns` artifacts**
+(the plain-file store is maintenance-mode; the engine sets `MLFLOW_ALLOW_FILE_STORE` only for an explicit `file:`
+URI). **Engine:** new pure module `classifyos/mlflow_logging.py` (`log_run`) — same OFF-by-default / lazy-import /
+report-only discipline as shap/optuna/openai; logs the flattened config as params, each successful model's headline
+TEST metrics (namespaced `<model>.<metric>`), the existing artifacts (CSVs/PNGs/`run_profile.json`, paths resolved
+via `StorageAdapter.path_for` — no hardcoded paths), and **one saved model per fitted algorithm** with the
+flavor-native serializer (`mlflow.xgboost`/`mlflow.lightgbm`/`mlflow.sklearn`+cloudpickle), each **unwrapped to its
+base estimator via `unwrap_base_estimator`** exactly as `feature_importance()` does — required so the xgboost/lightgbm
+flavors receive the native booster, not the calibration/threshold wrapper. `config.py` gains a default-OFF `mlflow`
+block (`enabled`/`experiment`/`run_name`) + `_validate_mlflow` (mirrors `explainability.enabled`). `ModelRunner.run()`
+calls `_log_to_mlflow` as **step 10, AFTER `_save_all`** (so artifact files exist) when enabled, storing `mlflow_run_`
+= `{run_id, experiment_id, tracking_uri, models}`; the engine sets **NO tracking URI** → the store is swappable by
+`MLFLOW_TRACKING_URI` alone (Interim-2a Postgres becomes a pure config change). **API:** `RunConfig.mlflow`
+(`MlflowConfig`, auto-forwarded via `to_engine_config` → `build_config`, the authoritative validator → bad value =
+422); new `MlflowInfo` response model + optional `result.mlflow`; **`schema_version` `1.8 → 1.9` (additive)**;
+`_mlflow` reshape helper; `docs/api_contract.md` updated (header note incl. re-labelling 1.5/1.8 off "current default",
+request + response examples, notes bullet). Request-side dial only; the tracking store is a server-side env concern.
+**Deps/config:** `mlflow>=3.1,<4` added to requirements.txt; `.gitignore` ignores `mlruns/` + `mlflow.db`;
+`.env.example` documents the optional `MLFLOW_TRACKING_URI`. **Tests:** engine `test_mlflow_logging.py` (config
+validation, pure helpers `_flatten_params`/`_headline_metrics`/`_maybe_allow_file_store`, report-only degradation, + a
+real 3-flavor run logged to a temp store with all models loadable, + an OFF run logs nothing) + API `test_api_run.py`
+(mlflow off → `result.mlflow` null, an enabled run surfaces the block, bad `experiment` → 422, `RESULT_KEYS` +=
+`mlflow`, five `schema_version` `1.8 → 1.9` bumps) + `test_use_case_sweep` `1.8 → 1.9`. **All 377 backend pytest
+green (+17 net new; frontend untouched).** Verified live on `policy_lapse.csv` — a flag-ON run logged params,
+per-model metrics, 11 artifacts, and 3 loadable models (LR/XGB/LGBM across all three flavors); a flag-OFF run wrote
+nothing extra (byte-identical artifact set, `mlflow_run_` None, no `mlruns`/`mlflow.db` created). **plan_tweak #44
+logged** — MLflow/model-persistence was a deferred **v2.0** item (row #29), pulled forward as Phase A while Databricks
+Phases B/C stay deferred (§6.5). **Out of scope (not built, later phases):** the interim Postgres backend store +
+run-history dashboard (Interim 2a), Postgres input source (Interim 2b), `DatabricksVolumeStorage` (Phase B), Model
+Registry / Serving (Phase C); the `/explain` stub is NOT yet wired to load persisted models. The frontend is
+version-tolerant (row #39) so the 1.9 field surfaces as a follow-up, not this session.)
+**Prior update (same day):** Claude Code (**NEW — missingness surfaced WHERE imputation is chosen (frontend-only, no engine/API/
 contract change)**. User question: "we let users pick imputation methods, but where do we show that some data is
 missing?" Audit found missingness was shown on the **Data Profile** page (a dataset-level missingness scan + a
 `N missing (X%)` badge on each column card) and the **Upload** inspect table (`n_missing` per column) — but **not**

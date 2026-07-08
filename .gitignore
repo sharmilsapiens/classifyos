@@ -19,6 +19,13 @@ backend/.env
 classification_output/
 backend/classification_output/
 
+# --- MLflow local tracking store (Phase A; opt-in mlflow logging) ---
+# MLflow 3.x's local default is a sqlite backend (mlflow.db) + an ./mlruns artifact folder.
+mlruns/
+backend/mlruns/
+mlflow.db
+backend/mlflow.db
+
 # --- Node / frontend ---
 node_modules/
 frontend/dist/

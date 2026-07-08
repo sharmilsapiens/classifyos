@@ -31,7 +31,7 @@
 > expose no native importance. The block is `null`/absent when it could not be computed for any model. No
 > `1.0`–`1.3` field was renamed, retyped, or removed. Old clients ignore the new field.
 >
-> **`1.5` (additive, current default).** Adds two **optional** fields to each `result.models[]` row —
+> **`1.5` (additive).** Adds two **optional** fields to each `result.models[]` row —
 > `decision_threshold` and `calibrated` — reporting the **decision policy** applied to that model.
 > `decision_threshold` is the effective positive-class operating threshold for a **binary** problem (the
 > tuned best threshold, the analyst's fixed value, or `0.5` for the default argmax); it is `null` for
@@ -41,7 +41,16 @@
 > field was renamed, retyped, or removed. The response envelope now reports `"schema_version": "1.5"`. Old
 > clients ignore the new fields.
 >
-> **`1.8` (additive, current default).** Adds one new field —
+> **`1.9` (additive, current default).** Adds one new **optional** block — `result.mlflow` —
+> a pointer to where the run was logged in **MLflow** (Databricks integration Phase A): `run_id`,
+> `experiment_id`, `tracking_uri`, and `models` (a `{model_name: model_uri}` map, each loadable via
+> `mlflow.<flavor>.load_model`). It is `null` unless the request-side opt-in `mlflow.enabled` was `true`
+> **and** logging succeeded (MLflow is logged AFTER training — params, per-model headline test metrics, the
+> artifact files, and one saved model per fitted algorithm); absent/broken MLflow degrades to `null`, so a
+> run stays valid either way. No `1.0`–`1.8` field was renamed, retyped, or removed. The response envelope
+> now reports `"schema_version": "1.9"`. Old clients ignore the new field.
+>
+> **`1.8` (additive).** Adds one new field —
 > `result.explanations[model].rows[].feature_values` — a `{feature: value}` map giving each contributed
 > feature's **original (raw) value**, keyed identically to `contributions`, so a client can render the
 > waterfall as `feature = value` (the reason-code convention). A one-hot `col_cat` feature resolves to its
@@ -197,6 +206,9 @@ problem there is returned as HTTP 422.
                       "context_mode": "both",           // given | derived | both — how dataset context reaches the narrator (request-only)
                       "dataset_context": "",            // free-text: what the data/target mean (used when context_mode != "derived")
                       "column_context": {} },           // {column: note} per-column meaning (used when context_mode != "derived"); OPTIONAL; OFF → block absent
+  "mlflow": { "enabled": false,                 // OFF by default; ON → log the run to MLflow + a saved model per algorithm (schema 1.9 result.mlflow)
+              "experiment": "classifyos",       // MLflow experiment name to log under
+              "run_name": null },               // optional run name (null → MLflow auto-generates); tracking store is server-side via MLFLOW_TRACKING_URI
 
   "user_features": [            // OPTIONAL; [] / omitted → no user features (unchanged)
     // STRUCTURED specs only — NO free-text formula, nothing is ever eval()'d. Each spec
@@ -331,6 +343,15 @@ missing/wrong-typed column is skipped and logged — it never aborts the run).
           }
         ]
       }
+    },
+    "mlflow": {                    // NEW in 1.9 (additive); null/absent when mlflow logging was OFF (default) or failed
+      "run_id": "a427600d82104747a49ec8bbabdfe4e3",
+      "experiment_id": "326595411761779270",
+      "tracking_uri": "file:///C:/Projects/classifyos/backend/mlruns",  // local ./mlruns by default; a tracking server when MLFLOW_TRACKING_URI is set
+      "models": {                  // per fitted algorithm → its logged-model URI (mlflow.<flavor>.load_model)
+        "LogisticRegression": "models:/m-a99731321d5844418f7d5a21f98f3dcd",
+        "XGBoost": "models:/m-1b2c3d4e5f60718293a4b5c6d7e8f900"
+      }
     }
   },
   "error": null                    // top-level string when status == "error"
@@ -433,6 +454,16 @@ missing/wrong-typed column is skipped and logged — it never aborts the run).
   (column headers + a sample row + light stats + class base rates + the global feature ranking) and the row's
   ORIGINAL (un-scaled) values, so a narrative can cite `num_late_payments = 3` in business terms rather than a
   scaled float. [RISK] privacy — `derived`/`both` send sample data values to Azure OpenAI (opt-in).
+- **`result.mlflow` (1.9, additive, optional)** is a pointer to where the run was logged in MLflow —
+  `{run_id, experiment_id, tracking_uri, models}`, where `models` maps each fitted algorithm to its
+  logged-model URI (loadable via `mlflow.<flavor>.load_model`). Gated by the request-side opt-in
+  `mlflow.enabled`; logging happens AFTER training (params = the run config, metrics = each model's headline
+  TEST scalars, artifacts = the CSVs/PNGs/`run_profile.json`, plus one flavor-native saved model per model —
+  `mlflow.xgboost`/`mlflow.lightgbm`/`mlflow.sklearn`, each unwrapped to its base estimator). It is `null`
+  when logging was OFF (the default) or failed — a report-only layer that never aborts a run. The tracking
+  store is a **server-side** concern (a local `./mlruns` folder by default, or the `MLFLOW_TRACKING_URI`
+  target — Postgres/Databricks later), NOT a request field. [RISK] leakage — logging reads nothing back into
+  fit/transform; it serializes fitted models and copies written artifacts only.
 
 ### Execution model (limitation)
 

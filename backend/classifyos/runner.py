@@ -43,6 +43,7 @@ from __future__ import annotations
 import copy
 import json
 import logging
+import os
 from datetime import datetime, timezone
 from typing import Any
 
@@ -76,6 +77,32 @@ FEATURE_IMPORTANCE_CSV_KEY = "feature_importance_summary.csv"
 PERMUTATION_IMPORTANCE_CSV_KEY = "permutation_importance_summary.csv"
 EXPLANATIONS_CSV_KEY = "explanations_summary.csv"
 RUN_PROFILE_KEY = "run_profile.json"
+
+#: The Section 14 / Section 5 plot filenames a run may write (plot6 only when interactions are
+#: on). Kept here so the optional MLflow layer can attach them as artifacts without the engine
+#: importing the API-layer artifact list (the engine has no web dependency).
+_PLOT_KEYS = (
+    "plot1_confusion_matrix.png",
+    "plot2_roc_pr_curves.png",
+    "plot3_feature_importance.png",
+    "plot4_feature_impact.png",
+    "plot5_calibration_curve.png",
+    "plot6_interaction_summary.png",
+)
+#: Every artifact key a run may produce, in a stable order (CSVs + run profile, then the plots).
+#: The MLflow layer resolves each to a concrete path via the StorageAdapter and logs only those
+#: that actually exist on disk. Mirrors ``backend/api/artifacts.py::ARTIFACT_KEYS`` (which the
+#: engine must not import) — the two lists must stay in sync.
+_ARTIFACT_KEYS = (
+    RESULTS_CSV_KEY,
+    METRICS_CSV_KEY,
+    CLASS_REPORT_CSV_KEY,
+    FEATURE_IMPORTANCE_CSV_KEY,
+    PERMUTATION_IMPORTANCE_CSV_KEY,
+    EXPLANATIONS_CSV_KEY,
+    RUN_PROFILE_KEY,
+    *_PLOT_KEYS,
+)
 
 
 class ModelRunner:
@@ -153,6 +180,12 @@ class ModelRunner:
         self.classes_: list[Any] = []
         self.problem_type_: str = "binary"
         self.run_profile_: dict[str, Any] | None = None
+        #: MLflow run pointer when ``config["mlflow"]["enabled"]`` is set AND logging succeeded;
+        #: ``None`` otherwise (OFF by default, or a report-only logging failure). Shape:
+        #: ``{"run_id", "experiment_id", "tracking_uri", "models": {name: model_uri}}`` — the
+        #: API surfaces it as the additive ``result.mlflow`` block (schema 1.9). Populated by
+        #: :meth:`_log_to_mlflow` after all artifacts are written. See classifyos.mlflow_logging.
+        self.mlflow_run_: dict[str, Any] | None = None
 
     # --------------------------------------------------------------------- run --
 
@@ -287,6 +320,14 @@ class ModelRunner:
 
         # -- 9. save everything ------------------------------------------------
         self._save_all(cfg, class_weight)
+
+        # -- 10. optional MLflow logging (opt-in, report-only) -----------------
+        # OFF by default. Runs AFTER _save_all so the artifact files exist on disk to attach.
+        # [RISK] leakage — logging reads nothing back into fit/transform; it serializes the
+        # already-fitted models and copies the already-written artifacts. Report-only: a logging
+        # failure is swallowed inside the helper and never affects the run (mlflow_run_ stays None).
+        if cfg.get("mlflow", {}).get("enabled", False):
+            self.mlflow_run_ = self._log_to_mlflow(cfg)
         return self
 
     # ------------------------------------------------------------- pipeline steps --
@@ -636,6 +677,45 @@ class ModelRunner:
             logger.exception("ModelRunner: plot_results (plot1/2/3/5) failed")
 
         logger.info("ModelRunner: artifacts written to OUTPUT_DIR")
+
+    def _log_to_mlflow(self, cfg: dict[str, Any]) -> dict[str, Any] | None:
+        """Stage 10 — log this run to MLflow (opt-in, report-only). Returns the run pointer or ``None``.
+
+        Assembles the inputs the pure :func:`classifyos.mlflow_logging.log_run` helper needs —
+        the config, each model's headline metrics row, the fitted model wrappers, and the
+        concrete paths of every artifact that actually exists — then delegates the MLflow
+        mechanics to it. ALL artifact paths are resolved through the StorageAdapter (no hardcoded
+        paths); ``mlflow_logging`` imports ``mlflow`` lazily and swallows every failure, so this
+        never aborts a run. Called only when ``cfg["mlflow"]["enabled"]`` is set.
+        """
+        from .mlflow_logging import log_run
+
+        mlflow_cfg = cfg.get("mlflow", {}) or {}
+        metrics_records = (
+            self.metrics_df_.to_dict(orient="records")
+            if self.metrics_df_ is not None and not self.metrics_df_.empty
+            else []
+        )
+        # Resolve the concrete path of every artifact that was actually written (via the storage
+        # adapter — the sanctioned way to obtain a filesystem path). plot6 / explanations_summary
+        # are conditional, so only existing files are attached.
+        artifact_paths: list[str] = []
+        for key in _ARTIFACT_KEYS:
+            try:
+                path = self.storage.path_for(key, output=True)
+            except Exception:  # noqa: BLE001 — a bad key must not break logging
+                continue
+            if os.path.exists(path):
+                artifact_paths.append(path)
+
+        return log_run(
+            config=cfg,
+            metrics_records=metrics_records,
+            models=self.models_,
+            artifact_paths=artifact_paths,
+            experiment=mlflow_cfg.get("experiment", "classifyos") or "classifyos",
+            run_name=mlflow_cfg.get("run_name"),
+        )
 
     def _build_class_report(self) -> pd.DataFrame:
         """Flatten every successful model's per-class classification report to rows.

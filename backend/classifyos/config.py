@@ -257,6 +257,21 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "column_context": {},    # {column: short note}; per-column meaning for the narrator
         "context_mode": "both",  # given | derived | both — how dataset context reaches the LLM
     },
+    # --- MLflow run logging + model persistence (Databricks integration — Phase A) --------
+    # OFF by default (opt-in). When enabled, the runner logs the run to MLflow AFTER training
+    # (see classifyos.mlflow_logging): the config as params, each successful model's headline
+    # TEST metrics, the existing artifact files, and one saved model per fitted algorithm with
+    # the flavor-native serializer (mlflow.xgboost / mlflow.lightgbm / mlflow.sklearn). Local
+    # ./mlruns this phase; the SAME code targets a managed tracking server unchanged when the
+    # MLFLOW_TRACKING_URI env var is set (a server-side concern, not a config field). Follows the
+    # shap/optuna/openai discipline — lazy import, report-only: a logging failure never aborts a
+    # run. [RISK] leakage — logging reads nothing back into fit/transform. See
+    # docs/databricks_integration.md §6 (Phase A).
+    "mlflow": {
+        "enabled": False,            # OFF by default
+        "experiment": "classifyos",  # MLflow experiment name the run is logged under
+        "run_name": None,            # optional MLflow run name (None → MLflow auto-generates)
+    },
     "random_state": 42,
 }
 
@@ -393,6 +408,7 @@ def _validate_config(config: dict[str, Any]) -> None:
     _validate_feature_engineering(config["feature_engineering"])
     _validate_tuning(config["tuning"])
     _validate_explainability(config["explainability"])
+    _validate_mlflow(config["mlflow"])
     _validate_user_features(config["user_features"])
 
 
@@ -509,6 +525,29 @@ def _validate_explainability(e: Any) -> None:
                 f"'explainability.column_context[{col!r}]' must be "
                 f"<= {EXPLAIN_COLUMN_CONTEXT_VALUE_MAX} chars"
             )
+
+
+def _validate_mlflow(m: Any) -> None:
+    """Validate the ``mlflow`` sub-dict (Phase A — opt-in MLflow logging).
+
+    Mirrors the ``explainability.enabled`` discipline: ``enabled`` is a bool, ``experiment`` a
+    non-empty string, and ``run_name`` a string or ``None``. This is the authoritative validator
+    the API forwards to via ``build_config`` (a bad value → ``ValueError`` → HTTP 422).
+    """
+    if not isinstance(m, dict):
+        raise ValueError("'mlflow' must be a dict")
+    if "enabled" in m and not isinstance(m["enabled"], bool):
+        raise ValueError(f"'mlflow.enabled' must be a bool, got {m['enabled']!r}")
+    experiment = m.get("experiment", "classifyos")
+    if not isinstance(experiment, str) or not experiment.strip():
+        raise ValueError(
+            f"'mlflow.experiment' must be a non-empty string, got {experiment!r}"
+        )
+    run_name = m.get("run_name")
+    if run_name is not None and not isinstance(run_name, str):
+        raise ValueError(
+            f"'mlflow.run_name' must be a string or None, got {run_name!r}"
+        )
 
 
 def _validate_user_features(specs: Any) -> None:

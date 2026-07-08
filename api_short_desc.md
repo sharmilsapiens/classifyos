@@ -151,6 +151,22 @@ additively (`schema_version` now reports `"1.1"`).
   `docs/api_contract.md` request example + notes updated. [RISK] privacy — `derived`/`both` cause
   the server to send sample data values to Azure OpenAI (opt-in).
 
+## MLflow run logging + model persistence on `/run` (schema 1.8 → 1.9, additive) — 2026-07-08
+- The `/run` request gained an optional `mlflow` block (`{enabled, experiment, run_name}`, OFF by
+  default), and the response gained an optional `result.mlflow` pointer (`{run_id, experiment_id,
+  tracking_uri, models}`). When `mlflow.enabled` is on, the engine logs the run to MLflow **after**
+  training — the config as params, each model's headline test metrics, the artifact files, and one
+  saved model per algorithm — and the response reports where it landed (`models` maps each algorithm
+  to a load URI). This is the first piece of the Databricks-integration roadmap (Phase A) and also
+  fixes the "runs kept nothing / overwrote each other" gap. It is `null` when logging was OFF (the
+  default) or failed, so a run without it is byte-identical to `1.8`; the `schema_version` was bumped
+  **`1.8 → 1.9`** (additive — no earlier field renamed/retyped/removed). The API still just plumbs a
+  pointer the engine recorded — no ML. A bad `mlflow` value (e.g. an empty `experiment`) is rejected
+  by `build_config` with a precise 422. **Where it logs is a server-side concern**, not a request
+  field: unset → MLflow's local default (a `mlflow.db` + `./mlruns` next to the process); set the
+  `MLFLOW_TRACKING_URI` env var to point at a database/managed server later with no code change.
+  `docs/api_contract.md` updated (header note, request + response examples, notes bullet).
+
 ---
 
 ## How to read this project
