@@ -135,6 +135,33 @@ describe("DataProfile", () => {
     expect(screen.getByText(/Correlation · numeric columns/)).toBeInTheDocument()
     // a correlation cell shows the off-diagonal value.
     expect(screen.getAllByText("0.42").length).toBeGreaterThan(0)
+
+    // Per-column missingness is stated both ways: the numeric `age` (1 gap) shows
+    // its count, and the clean categorical `region` explicitly says "No missing values".
+    expect(screen.getByText(/1 missing \(16\.7%\)/)).toBeInTheDocument()
+    expect(screen.getByText("No missing values")).toBeInTheDocument()
+  })
+
+  it("states there are no missing values at all when the file is clean", () => {
+    const clean: InspectProfile = {
+      ...PROFILE,
+      n_missing: { age: 0, region: 0, joined: 0 },
+      column_profiles: (PROFILE.column_profiles ?? []).map((c) => ({
+        ...c,
+        n_missing: 0,
+        missing_pct: 0,
+      })),
+    }
+    mockApp = { ...mockApp, inspect: clean }
+    render(
+      <MemoryRouter>
+        <DataProfile />
+      </MemoryRouter>,
+    )
+    // Dataset-level: the "Missing values" card gives the all-clear (no chart).
+    expect(screen.getByText(/No missing values in any column/)).toBeInTheDocument()
+    // Per-column: the numeric + categorical cards each state it too.
+    expect(screen.getAllByText("No missing values").length).toBeGreaterThanOrEqual(2)
   })
 
   it("shows an empty state with an Upload link when nothing is uploaded", () => {

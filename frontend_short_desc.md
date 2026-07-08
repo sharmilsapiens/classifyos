@@ -330,6 +330,12 @@ isn't made blind (previously missingness only appeared on the Data Profile page 
   contract change**. The `fmtPct` percentage formatter was moved into a shared helper so the missing share
   reads identically on Data Profile and Configuration. New render tests cover the badge, the per-type
   summary, and the clean state. **131 vitest green · tsc + build clean.**
+- **The no-missing case is stated on Data Profile too (follow-up).** The Data Profile page already showed a
+  dataset-level "No missing values in any column. 🎉" when the whole file is clean (and its missingness bar
+  chart when there are gaps). Now each **numeric and categorical column card** also states it per column —
+  "N missing (X%)" when it has gaps, "No missing values" when complete — matching the per-column badge on
+  Configuration and the datetime card (which always showed a Missing row). So the missing / no-missing
+  status is now explicit on both surfaces, at both the dataset and the per-column level. **132 vitest green.**
 
 ## Feature picker enrichment on Configuration (✅ Done, 2026-07-01)
 **In one line:** The feature-selection list on the Configuration page — previously just a checkbox

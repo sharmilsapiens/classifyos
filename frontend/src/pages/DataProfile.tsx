@@ -323,11 +323,11 @@ function NumericCard({ col, nRows }: { col: ColumnProfile; nRows: number }) {
             </div>
           ))}
         </dl>
-        {col.n_missing > 0 && (
-          <p className="mt-3 text-xs text-muted-foreground">
-            {fmtInt(col.n_missing)} missing ({fmtPct(col.missing_pct)})
-          </p>
-        )}
+        <p className="mt-3 text-xs text-muted-foreground">
+          {col.n_missing > 0
+            ? `${fmtInt(col.n_missing)} missing (${fmtPct(col.missing_pct)})`
+            : "No missing values"}
+        </p>
       </CardContent>
     </Card>
   )
@@ -396,11 +396,11 @@ function CategoricalCard({ col, nRows }: { col: ColumnProfile; nRows: number }) 
             </p>
           )}
           {col.truncated && <p>Showing top {values.length} of {fmtInt(col.n_unique)} values.</p>}
-          {col.n_missing > 0 && (
-            <p>
-              {fmtInt(col.n_missing)} missing ({fmtPct(col.missing_pct)})
-            </p>
-          )}
+          <p>
+            {col.n_missing > 0
+              ? `${fmtInt(col.n_missing)} missing (${fmtPct(col.missing_pct)})`
+              : "No missing values"}
+          </p>
         </div>
       </CardContent>
     </Card>

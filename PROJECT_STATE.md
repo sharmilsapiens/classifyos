@@ -26,7 +26,18 @@ imported by DataProfile + the panel, so a column's missing share reads identical
 cells)"; the clean-state "No missing values in the 1 selected numeric column."). **131 frontend vitest green (+3) ·
 `tsc -b` + `vite build` clean** (backend untouched). Hallucination check N/A — no new library calls (existing
 `@/api/types` fields + `fmtInt`/`fmtPct`). **No plan_tweak entry** — additive UI over data the profile already
-returns, realizing a user request; not a plan deviation.)
+returns, realizing a user request; not a plan deviation.
+**Same-session follow-up — no-missing case stated consistently on Data Profile too.** User asked to also mention the
+no-missing case on the Data Profile page (confirming the missing-data case is already shown there). Audit: the
+dataset-level "Missing values" card ALREADY says "No missing values in any column. 🎉" when clean (and the per-column
+DatetimeCard always shows a Missing row), but the numeric + categorical per-column cards only mentioned missingness
+when `n_missing > 0` — silent when a column was complete. Fixed `DataProfile.tsx` NumericCard + CategoricalCard to
+always state it per column: "N missing (X%)" when there are gaps, "No missing values" when clean (mirrors the config
+per-column badge + the DatetimeCard's always-shown row). The dataset-level 🎉 and the Configuration per-type emerald
+summary already covered the aggregate no-missing case, so those were left as-is. `dataProfile.test.tsx` +1 (an
+all-clean file shows the dataset "No missing values in any column" all-clear AND each per-column card states it);
+the existing render test now also asserts the "1 missing (16.7%)" count + a clean column's "No missing values" line.
+**132 frontend vitest green (+1) · `tsc -b` + `vite build` clean.**)
 **Prior update:** 2026-07-03
 **Updated by:** Claude Code (**NEW — feature VALUES surfaced alongside per-row SHAP contributions (full stack,
 additive `1.7 → 1.8`)**. User asked whether the explainability output should carry each feature's *value*
