@@ -723,8 +723,33 @@ class ModelRunner:
             models=self.models_,
             artifact_paths=artifact_paths,
             experiment=mlflow_cfg.get("experiment", "classifyos") or "classifyos",
-            run_name=mlflow_cfg.get("run_name"),
+            # A meaningful default when the config supplied no run_name (an explicit one still
+            # wins) — otherwise MLflow auto-generates a whimsical name ("capable-fox-123") that
+            # reads as random in the Runs view.
+            run_name=mlflow_cfg.get("run_name") or self._default_mlflow_run_name(cfg),
         )
+
+    def _default_mlflow_run_name(self, cfg: dict[str, Any]) -> str:
+        """Build a meaningful default MLflow run name — ``"<target> · <YYYY-MM-DD HH:MM>"``.
+
+        Used only when the config supplied no ``mlflow.run_name`` (an explicit name still wins),
+        so the Runs view shows the target plus when the run happened instead of MLflow's
+        whimsical auto-generated name. **Reuses the timestamp the run profile already computed**
+        (``run_profile.json``, written by :meth:`_save_all` at step 9 — before this step 10 log)
+        rather than reading a fresh clock; falls back to the current UTC time only if the profile
+        is somehow absent or its timestamp unparseable (never raises — this is display polish).
+
+        Display-only: MLflow keys the run record and its id-based artifact folder off the run
+        *id* (a UUID), so this name only sets the ``mlflow.runName`` tag the Runs view reads — it
+        never touches the artifact folder names or the Postgres→file mapping.
+        """
+        target = str(cfg.get("target", "run"))
+        stamp = (self.run_profile_ or {}).get("timestamp")
+        try:
+            when = datetime.fromisoformat(stamp) if stamp else datetime.now(timezone.utc)
+        except (TypeError, ValueError):
+            when = datetime.now(timezone.utc)
+        return f"{target} · {when:%Y-%m-%d %H:%M}"
 
     def _build_class_report(self) -> pd.DataFrame:
         """Flatten every successful model's per-class classification report to rows.

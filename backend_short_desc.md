@@ -605,6 +605,23 @@ the whole pipeline runs exactly as before.
   table/query is a follow-up. Databricks packaging (Phase B) and Model Serving (Phase C) are **not**
   built yet.
 
+## MLflow — meaningful default run name (✅ Done, 2026-07-08)
+**In one line:** When a run is logged to MLflow without a name set, it's now recorded as
+"<target> · <date time>" (e.g. `will_lapse · 2026-07-08 14:30`) instead of MLflow's random
+whimsical name ("capable-fox-123"), so the dashboard's Runs list reads meaningfully.
+- **Why:** the engine forwarded the config's `mlflow.run_name`, which is empty by default, so
+  MLflow auto-generated a cute-but-random name for every run — unhelpful when scanning the run
+  history. Now, only when no name was supplied, the engine builds a sensible default from the
+  target column plus when the run happened.
+- **Reuses the run's own timestamp.** It formats the timestamp the run profile already computed
+  (`run_profile.json`, written just before logging) rather than reading the clock again — one
+  source of truth for "when this run happened."
+- **An explicit name still wins.** If a caller sets `mlflow.run_name`, that is used unchanged; the
+  default only fills the gap. Display-only: the name sets MLflow's `mlflow.runName` tag (which the
+  Runs list reads) and never touches the id-based artifact folder names or the Postgres→file
+  mapping. Pure standard-library date formatting — no new dependency, no schema/version change.
+  +4 engine tests (**406 backend pytest green**).
+
 ---
 
 ## How to read this project

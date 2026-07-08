@@ -14,6 +14,7 @@ Two layers are covered:
 from __future__ import annotations
 
 import math
+import re
 
 import pytest
 
@@ -130,6 +131,65 @@ def test_log_run_returns_none_when_mlflow_unavailable(monkeypatch: pytest.Monkey
         run_name=None,
     )
     assert out is None
+
+
+# --------------------------------------------------------------------------- #
+# default run name — "<target> · <YYYY-MM-DD HH:MM>", reusing the run-profile   #
+# timestamp; an explicit mlflow.run_name still wins                            #
+# --------------------------------------------------------------------------- #
+
+
+def _capture_forwarded_run_name(storage, monkeypatch: pytest.MonkeyPatch, cfg: dict, *,
+                                timestamp: str | None = "2026-07-08T14:30:59.123456+00:00") -> str | None:
+    """Call ``ModelRunner._log_to_mlflow`` with ``log_run`` stubbed to capture ``run_name``.
+
+    Avoids a full (expensive) training run: we construct the runner, seed only the run-profile
+    timestamp the default name reuses, and stub ``log_run`` (imported lazily inside the method) to
+    record the ``run_name`` the runner forwards.
+    """
+    captured: dict = {}
+
+    def _capture(**kwargs):
+        captured.update(kwargs)
+        return {"run_id": "r", "experiment_id": "0", "tracking_uri": "file:x", "models": {}}
+
+    monkeypatch.setattr(mlflow_logging, "log_run", _capture)
+    runner = ModelRunner(cfg, storage)
+    runner.run_profile_ = {"timestamp": timestamp} if timestamp is not None else None
+    runner._log_to_mlflow(cfg)
+    return captured.get("run_name")
+
+
+def test_default_run_name_uses_target_and_profile_timestamp(storage) -> None:
+    """No config run_name → ``"<target> · <YYYY-MM-DD HH:MM>"`` from the run-profile timestamp."""
+    cfg = build_config("policy_lapse.csv", "will_lapse", ["age"], mlflow={"enabled": True})
+    runner = ModelRunner(cfg, storage)
+    runner.run_profile_ = {"timestamp": "2026-07-08T14:30:59.123456+00:00"}
+    # minute precision (seconds/micros dropped); UTC as stored on the profile.
+    assert runner._default_mlflow_run_name(cfg) == "will_lapse · 2026-07-08 14:30"
+
+
+def test_default_run_name_falls_back_when_no_profile_timestamp(storage) -> None:
+    """Missing/absent run profile → still a well-formed ``"<target> · <date time>"`` (no crash)."""
+    cfg = build_config("policy_lapse.csv", "will_lapse", ["age"], mlflow={"enabled": True})
+    runner = ModelRunner(cfg, storage)  # run_profile_ is None (nothing computed yet)
+    name = runner._default_mlflow_run_name(cfg)
+    assert re.fullmatch(r"will_lapse · \d{4}-\d{2}-\d{2} \d{2}:\d{2}", name)
+
+
+def test_log_to_mlflow_defaults_run_name_when_unset(storage, monkeypatch: pytest.MonkeyPatch) -> None:
+    """When the config supplies no run_name, the runner forwards the meaningful default."""
+    cfg = build_config("policy_lapse.csv", "will_lapse", ["age"], mlflow={"enabled": True})
+    assert _capture_forwarded_run_name(storage, monkeypatch, cfg) == "will_lapse · 2026-07-08 14:30"
+
+
+def test_log_to_mlflow_keeps_explicit_run_name(storage, monkeypatch: pytest.MonkeyPatch) -> None:
+    """An explicit ``mlflow.run_name`` wins — the default is NOT applied over it."""
+    cfg = build_config(
+        "policy_lapse.csv", "will_lapse", ["age"],
+        mlflow={"enabled": True, "run_name": "quarterly-refresh"},
+    )
+    assert _capture_forwarded_run_name(storage, monkeypatch, cfg) == "quarterly-refresh"
 
 
 # --------------------------------------------------------------------------- #

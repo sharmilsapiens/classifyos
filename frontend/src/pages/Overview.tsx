@@ -32,7 +32,7 @@ import {
 } from "recharts"
 
 import { useApp } from "@/store/AppStore"
-import type { ModelMetrics } from "@/api/types"
+import type { MlflowInfo, ModelMetrics } from "@/api/types"
 import { outputUrl } from "@/api/client"
 import { fmtBytes, fmtInt, fmtMetric } from "@/lib/format"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -358,6 +358,11 @@ export default function Overview() {
         </CardContent>
       </Card>
 
+      {/* MLflow — where this run was logged. Rendered only when the opt-in mlflow.enabled was
+          on AND logging succeeded (result.mlflow present); a non-MLflow run shows nothing here,
+          so its Overview is unchanged. */}
+      {run.mlflow && <MlflowCard mlflow={run.mlflow} />}
+
       {/* Quick links to the detail pages. */}
       <Card className="mt-5">
         <CardHeader>
@@ -441,6 +446,52 @@ function OverfitGapCell({ test, train }: { test: number | null; train: number | 
       {sign}
       {fmtMetric(gap)}
     </td>
+  )
+}
+
+/**
+ * MLflow card — a small, read-only summary of where this run was logged (schema 1.9). Shows the
+ * run id, the tracking store URI, how many models were saved, and each model's logged-model URI.
+ * Rendered by Overview only when `result.mlflow` is present, so a non-MLflow run is unaffected.
+ */
+function MlflowCard({ mlflow }: { mlflow: MlflowInfo }) {
+  const modelEntries = Object.entries(mlflow.models)
+  return (
+    <Card className="mt-5">
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          MLflow
+          <Badge variant="success">logged</Badge>
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-2.5 text-sm">
+        <Row k="Run id" v={mlflow.run_id} mono />
+        <Row k="Experiment id" v={mlflow.experiment_id} mono />
+        <Row k="Tracking store" v={mlflow.tracking_uri} mono />
+        <Row k="Models logged" v={`${modelEntries.length}`} mono />
+        {modelEntries.length > 0 && (
+          <div className="pt-1">
+            <div className="mb-1.5 text-xs text-muted-foreground">Saved model URIs</div>
+            <ul className="space-y-1.5">
+              {modelEntries.map(([name, uri]) => (
+                <li
+                  key={name}
+                  className="flex flex-col gap-0.5 border-b border-dashed border-border pb-1.5 last:border-0 sm:flex-row sm:items-baseline sm:justify-between sm:gap-4"
+                >
+                  <span className="shrink-0 font-semibold">{name}</span>
+                  <span className="truncate text-right font-mono text-xs text-muted-foreground" title={uri}>
+                    {uri}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+        <p className="pt-1 text-xs text-muted-foreground">
+          Load a saved model with <code className="font-mono">mlflow.&lt;flavor&gt;.load_model(uri)</code>.
+        </p>
+      </CardContent>
+    </Card>
   )
 }
 

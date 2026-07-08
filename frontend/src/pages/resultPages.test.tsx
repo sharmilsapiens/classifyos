@@ -206,6 +206,42 @@ describe("ROC / PR Curves", () => {
   })
 })
 
+describe("MLflow card (Overview)", () => {
+  it("renders the run id, tracking store, model count and per-model URIs when result.mlflow is present", () => {
+    const withMlflow = {
+      ...binary,
+      result: {
+        ...binary.result!,
+        mlflow: {
+          run_id: "abc123def456",
+          experiment_id: "7",
+          tracking_uri: "postgresql://classifyos@localhost:5432/mlflow",
+          models: {
+            LogisticRegression: "runs:/abc123def456/LogisticRegression",
+            XGBoost: "runs:/abc123def456/XGBoost",
+          },
+        },
+      },
+    } as unknown as RunResponse
+
+    renderPage(<Overview />, withMlflow)
+    // Exact string matches (not regex): the collapsed raw-envelope <pre> also contains these
+    // substrings, so an unanchored regex would match twice — the card's own <span>s match exactly.
+    expect(screen.getByText("MLflow")).toBeInTheDocument()
+    expect(screen.getByText("abc123def456")).toBeInTheDocument()
+    expect(screen.getByText("postgresql://classifyos@localhost:5432/mlflow")).toBeInTheDocument()
+    // "Models logged" count == 2, and each model's URI is shown.
+    expect(screen.getByText("runs:/abc123def456/LogisticRegression")).toBeInTheDocument()
+    expect(screen.getByText("runs:/abc123def456/XGBoost")).toBeInTheDocument()
+  })
+
+  it("shows no MLflow card when result.mlflow is null (a non-MLflow run is unchanged)", () => {
+    // The captured binary fixture predates 1.9 and carries no mlflow block.
+    renderPage(<Overview />, binary)
+    expect(screen.queryByText("MLflow")).not.toBeInTheDocument()
+  })
+})
+
 describe("failed-model handling", () => {
   it("renders a status:failed model row (greyed) without crashing the Overview", () => {
     // Clone the binary envelope and append a failed model.

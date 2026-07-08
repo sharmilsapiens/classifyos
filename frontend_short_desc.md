@@ -432,6 +432,24 @@ server restart, not just the current session.
   screen. New typed client calls (`listRuns`/`loadRun`) + `RunSummary`/`RunsListResponse` types
   mirror the contract exactly. **137 vitest green (+5) · tsc + build clean.**
 
+## MLflow card on Overview — where this run was logged (✅ Done, 2026-07-08)
+**In one line:** When a run was recorded in MLflow, the Overview page now shows a small,
+read-only "MLflow" card — the run id, the tracking store, how many models were saved, and each
+saved model's load URI — so the persistence that the backend already reports is finally visible.
+- **Why it exists.** Since schema 1.9 the `/run` result has carried an optional `mlflow` block
+  (run id + tracking store + a load URI per saved model) whenever the opt-in MLflow logging was
+  on — but no page displayed it, so a user turning logging on saw no confirmation of *where* their
+  models were saved. This surfaces exactly that block; it's the version-tolerant follow-up the 1.9
+  work anticipated, not a contract change.
+- **The card.** It sits on the Overview result page beneath the artifacts, reusing the existing
+  Card / Badge / key-value-row components: the **run id**, the **tracking store** URI (a local
+  `./mlruns` folder or a configured Postgres-backed store), a **models-logged** count, and a list
+  of each algorithm's **saved-model URI** (loadable with `mlflow.<flavor>.load_model`).
+- **Invisible unless relevant.** When the run carried no MLflow block (logging was off — the
+  default), the card renders **nothing at all**, so a non-MLflow run's Overview is byte-for-byte
+  unchanged. Frontend-only — no API or contract change; the `MlflowInfo` TS type was added to the
+  typed client, mirroring the API model exactly. **139 vitest green (+2) · tsc + build clean.**
+
 ---
 
 ## How to read this project

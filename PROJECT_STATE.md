@@ -5,7 +5,41 @@
 > planning/overseer chat stays in sync with the local repo.
 
 **Last updated:** 2026-07-08
-**Updated by:** Claude Code (**NEW — Interim 2b: opt-in Postgres INPUT source via materialize-to-file
+**Updated by:** Claude Code (**NEW — MLflow polish: two small ADDITIVE follow-ups to the merged MLflow work
+(Phase A + Interim 2a/2b), NO `/run` schema change and NO `schema_version` bump (stays 1.10). (1) Meaningful
+default MLflow run name (ENGINE).** `ModelRunner._log_to_mlflow` forwarded `mlflow.run_name`, which is unset by
+default → MLflow auto-generated a whimsical name (`capable-fox-123`) that reads as random in the Runs view. New
+`ModelRunner._default_mlflow_run_name(cfg)` builds `"<target> · <YYYY-MM-DD HH:MM>"` and is applied ONLY when the
+config supplied no `run_name` (`run_name = mlflow_cfg.get("run_name") or self._default_mlflow_run_name(cfg)` — an
+explicit name still wins). **Reuses the run's OWN timestamp** — it formats `self.run_profile_["timestamp"]` (the
+UTC ISO stamp `_build_run_profile` already wrote into `run_profile.json` at step 9, before this step-10 log) via
+`datetime.fromisoformat(...).strftime` rather than reading a fresh clock; falls back to `datetime.now(timezone.utc)`
+only if the profile/stamp is absent or unparseable (never raises — display polish). **Display-only:** MLflow keys
+the run record + its id-based artifact folder off the run *id* (a UUID), so this only sets the `mlflow.runName`
+tag the Runs view already reads (`api/mlflow_read.py` reads `tags["mlflow.runName"]`) — it does NOT touch artifact
+folder names or the Postgres→file mapping. **Pure stdlib** (`datetime`, already imported) — no new dependency,
+`mlflow_logging.log_run` unchanged (still a pass-through of the `run_name` it's handed). **(2) result.mlflow
+surfaced on Overview (FRONTEND).** The API has returned the optional `result.mlflow` block (`{run_id,
+experiment_id, tracking_uri, models: {name: uri}}`) since schema 1.9, but no page showed it. Added a small,
+read-only **MLflow card** on the Overview result page (beneath Artifacts): the run id, the tracking-store URI,
+a models-logged count, and each model's saved-model URI — reusing the existing `Card`/`Badge`/`Row` components.
+**Degrades to nothing** when `result.mlflow` is null (logging off — the default), so a non-MLflow run's Overview
+is byte-for-byte unchanged. Added the `MlflowInfo` TS interface to `api/types.ts` (mirrors `api/models.py`
+`MlflowInfo` exactly) + optional `RunResult.mlflow`. Frontend-only — NO API/contract change. **Hallucination
+check ✅** — only non-trivial call is stdlib `datetime.fromisoformat`/`strftime`, verified against installed
+Python 3.11 (parses the `+00:00`/microsecond run-profile stamp, formats to `YYYY-MM-DD HH:MM`); no library API
+touched on either side. **Tests:** engine `test_mlflow_logging.py` +4 (default name = target + profile timestamp;
+fallback when no profile stamp; `_log_to_mlflow` forwards the default when unset; explicit `run_name` wins) —
+`log_run` stubbed to capture the forwarded name so no full training run is needed; frontend `resultPages.test.tsx`
++2 (Overview MLflow card renders run id/tracking store/per-model URIs when `result.mlflow` present; NO card when
+null). **406 backend pytest green (+4, was 402 at Interim 2b) · 139 frontend vitest green (+2, was 137) · `tsc -b`
++ `vite build` clean.** Generation prompt archived at `prompts/backend_phases/mlflow_run_name_and_overview_card.md`.
+**No plan_tweak entry** — additive polish: the run name is internal to the MLflow record (no schema surface), and
+the Overview card is exactly the version-tolerant "1.9 field surfaces as a follow-up" work the Phase A entry
+anticipated (row #39/#44), not a plan deviation. **Out of scope (untouched, still deferred):** the Databricks
+phases (B volume adapter, C Model Serving), the `/explain`→persisted-model wiring, and the dashboard
+table/query picker.)
+**Prior update (same day):** Claude Code (**NEW — Interim 2b: opt-in Postgres INPUT source via materialize-to-file
 (Option B); engine + API, additive, request-side only — NO response-schema/`schema_version` change (stays
 1.10)**. Implements `docs/databricks_integration.md` §6.5 **Interim 2b** — local-only, no Databricks, no push;
 follows Phase A + Interim 2a. **Hallucination check ✅ FIRST** against installed **SQLAlchemy 2.0.51 /

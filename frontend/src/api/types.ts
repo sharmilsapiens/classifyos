@@ -361,6 +361,26 @@ export interface RunResult {
    * Explainability.
    */
   explanations?: Record<string, ModelExplanation> | null
+  /**
+   * schema 1.9 (additive): where this run was logged in MLflow (run id + per-model saved-model
+   * URIs + the tracking store). null/absent unless the opt-in `mlflow.enabled` was on AND logging
+   * succeeded, so a non-MLflow run is unchanged. Consumed by: Overview (the MLflow card).
+   */
+  mlflow?: MlflowInfo | null
+}
+
+/**
+ * `result.mlflow` (schema 1.9) — where this run was recorded in MLflow. Mirrors
+ * backend/api/models.py `MlflowInfo` EXACTLY. `models` maps each fitted algorithm to its logged
+ * model URI (loadable via `mlflow.<flavor>.load_model`; a partial map if a model failed to
+ * serialize). `tracking_uri` is the store the run was written to (a local `./mlruns` folder by
+ * default, or a configured tracking server / Postgres-backed store).
+ */
+export interface MlflowInfo {
+  run_id: string
+  experiment_id: string
+  tracking_uri: string
+  models: Record<string, string>
 }
 
 /** One explained held-out test row (schema 1.6). base_value + Σ contributions === prediction. */
