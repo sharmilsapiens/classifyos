@@ -134,7 +134,7 @@ def test_binary_run_envelope(binary_run_response) -> None:
     assert binary_run_response.status_code == 200
     body = binary_run_response.json()
     assert body["status"] == "ok"
-    assert body["schema_version"] == "1.9"
+    assert body["schema_version"] == "1.10"
     assert RESULT_KEYS == set(body["result"].keys())
 
 
@@ -189,7 +189,7 @@ def test_explanations_block_shape_and_additivity(explain_run_response) -> None:
     """
     assert explain_run_response.status_code == 200
     body = explain_run_response.json()
-    assert body["schema_version"] == "1.9"
+    assert body["schema_version"] == "1.10"
     expl = body["result"]["explanations"]
     assert isinstance(expl, dict) and set(expl) == {"RandomForest", "LogisticRegression"}
     assert expl["RandomForest"]["method"] == "shap.TreeExplainer"
@@ -263,7 +263,7 @@ def test_run_with_mlflow_surfaces_block(api_client, tmp_path, monkeypatch) -> No
     resp = api_client.post("/api/v1/run", json=payload)
     assert resp.status_code == 200
     body = resp.json()
-    assert body["schema_version"] == "1.9"
+    assert body["schema_version"] == "1.10"
     ml = body["result"]["mlflow"]
     assert isinstance(ml, dict)
     assert ml["run_id"] and ml["experiment_id"] and ml["tracking_uri"]
@@ -407,7 +407,7 @@ def test_tuned_threshold_run_reports_operating_point(api_client) -> None:
         threshold_mode="tuned", threshold_metric="f1",
     )
     body = api_client.post("/api/v1/run", json=payload).json()
-    assert body["schema_version"] == "1.9"
+    assert body["schema_version"] == "1.10"
     ok = [m for m in body["result"]["models"] if m["status"] == "ok"]
     assert ok
     for m in ok:
@@ -570,7 +570,7 @@ def test_tuned_run_exposes_best_params(api_client) -> None:
     resp = api_client.post("/api/v1/run", json=payload)
     assert resp.status_code == 200
     body = resp.json()
-    assert body["schema_version"] == "1.9"
+    assert body["schema_version"] == "1.10"
 
     tuning = body["result"]["tuning"]
     assert tuning is not None
@@ -621,8 +621,8 @@ def test_run_with_user_features_creates_columns(api_client) -> None:
     body = resp.json()
     assert body["status"] == "ok"
     # user_features is request-side only — it adds no response field of its own; the version
-    # reflects the current contract default (1.9).
-    assert body["schema_version"] == "1.9"
+    # reflects the current contract default (1.10).
+    assert body["schema_version"] == "1.10"
     active = body["result"]["run"]["active_features"]
     assert "premium_per_sum" in active
     assert "start_year" in active

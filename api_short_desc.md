@@ -47,6 +47,12 @@ shape was **locked** (frozen) so the frontend can be built against a stable cont
 - **`GET /outputs`** — lists the result files a run produced (name, type, size).
 - **`GET /outputs/{name}`** — downloads one result file (a CSV or a chart PNG). The charts are
   fetched here on demand, never stuffed into the `/run` response.
+- **`GET /runs`** *(1.10)* — lists past runs recorded in MLflow (most-recent first) as lightweight
+  summary rows: when it ran, target, problem type, the algorithms, the best F1, status, and whether
+  it can be reloaded. This is what the dashboard's **Runs** view shows.
+- **`GET /runs/{run_id}`** *(1.10)* — reloads ONE past run: returns the exact same `/run` result it
+  was rendered with, so the dashboard drops it straight into every result page. Unknown run (or one
+  with no saved snapshot) → 404; an unreachable tracking store → 503.
 
 ## The locked `/run` result (the contract)
 
@@ -166,6 +172,25 @@ additively (`schema_version` now reports `"1.1"`).
   field: unset → MLflow's local default (a `mlflow.db` + `./mlruns` next to the process); set the
   `MLFLOW_TRACKING_URI` env var to point at a database/managed server later with no code change.
   `docs/api_contract.md` updated (header note, request + response examples, notes bullet).
+
+## MLflow read-path — list & reload past runs (schema 1.9 → 1.10, additive) — 2026-07-08
+- **The payoff of persistence.** Phase A made runs *log* to MLflow; Interim 2a (design
+  `docs/databricks_integration.md` §6.5) moves MLflow's **backend store** to a local **Postgres**
+  (`postgresql://…` via the `MLFLOW_TRACKING_URI` env var) while keeping artifacts a local folder —
+  **configuration only, no engine code change**. This new read-path is what makes those runs
+  *visible*: two new GET endpoints — **`GET /runs`** (list) and **`GET /runs/{run_id}`** (reload) —
+  back the dashboard's new **Runs** view, so results now survive a browser refresh and a server
+  restart (the state lives in Postgres, not the browser).
+- **How reload is byte-identical.** When a run is logged to MLflow, `/run` now also persists its
+  *rendered* result envelope as a run artifact (`api/run_response.json`) — report-only, so a failure
+  there only makes that run non-reloadable, never affects the response. `GET /runs/{run_id}` returns
+  that saved envelope verbatim, so a reloaded run matches the original exactly.
+- **Additive, `/run` unchanged.** The `POST /run` request/response envelope is byte-identical to
+  `1.9`; only new endpoints were added. The `schema_version` marker moved **`1.9 → 1.10`** to record
+  the contract's advance (locked-contract rule). All reads go through a small `api/mlflow_read.py`
+  helper that imports `mlflow` lazily, turns an unreachable store into a clean **503** and an unknown
+  run into a **404** — never a 500. Verified live end-to-end against a real local Postgres.
+  `docs/api_contract.md` updated (header note, endpoint table, a dedicated endpoints section, footer).
 
 ---
 

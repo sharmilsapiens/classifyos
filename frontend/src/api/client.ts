@@ -19,6 +19,7 @@ import type {
   InspectProfile,
   RunConfig,
   RunResponse,
+  RunsListResponse,
 } from "./types"
 import { parseRunResponse } from "./parse"
 
@@ -136,6 +137,22 @@ export async function run(cfg: RunConfig): Promise<RunResponse> {
   })
   const body = await handleJson<unknown>(res)
   // Validate the shape against the contract before handing it to the UI.
+  return parseRunResponse(body)
+}
+
+/** GET /runs — list past MLflow-logged runs (most-recent first). Consumed by: Runs. */
+export async function listRuns(): Promise<RunsListResponse> {
+  const res = await request(`${API_BASE}/runs`)
+  return handleJson<RunsListResponse>(res)
+}
+
+/**
+ * GET /runs/{run_id} — reload one past run. Returns the SAME locked /run envelope the run was
+ * rendered with, validated through the same parser, so it drops straight into the result pages.
+ */
+export async function loadRun(runId: string): Promise<RunResponse> {
+  const res = await request(`${API_BASE}/runs/${encodeURIComponent(runId)}`)
+  const body = await handleJson<unknown>(res)
   return parseRunResponse(body)
 }
 

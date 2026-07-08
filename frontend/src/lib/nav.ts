@@ -1,10 +1,10 @@
-/* The canonical 13-page navigation, defined in ONE place so the sidebar, the
-   router, and any "next step" links never drift.
+/* The canonical navigation, defined in ONE place so the sidebar, the router, and
+   any "next step" links never drift.
    9a built the Workspace screens; 9b built the six Results pages; 9c built the
    last three (Explainability, Setup Guide, Risk Register) and MERGED the old
-   "Pipeline" page into Overview (nav went 13 → 12, /pipeline redirects to
-   Overview). Phase 12 (this) added the "Tuning Results" page (consumes the
-   schema-1.1 result.tuning block) → back to 13 Results-grouped items. */
+   "Pipeline" page into Overview (/pipeline redirects to Overview). Phase 12 added
+   "Tuning Results"; Explainability was re-wired; and "Runs" (schema 1.10, Interim
+   2a) added the MLflow read-path list/reload view → 15 items. */
 
 import {
   BarChart3,
@@ -12,6 +12,7 @@ import {
   ClipboardList,
   // Combine,  // unused while the Interaction Features nav entry is hidden
   Grid3x3,
+  History,
   LayoutDashboard,
   LineChart,
   Lightbulb,
@@ -37,6 +38,9 @@ export const NAV_ITEMS: NavItem[] = [
   { path: "/upload", label: "Upload Data", icon: Upload, group: "Workspace" },
   { path: "/data-profile", label: "Data Profile", icon: ScanSearch, group: "Workspace" },
   { path: "/configure", label: "Configuration", icon: Settings2, group: "Workspace" },
+  // Runs (schema 1.10, Interim 2a): past runs read back from MLflow — reload one into the
+  // result pages. Persistence read-path; results now survive a refresh + a server restart.
+  { path: "/runs", label: "Runs", icon: History, group: "Workspace" },
 
   { path: "/feature-impact", label: "Feature Impact", icon: BarChart3, group: "Results" },
   // TEMPORARILY HIDDEN — interaction features unwired from the backend.

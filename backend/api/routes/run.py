@@ -83,6 +83,20 @@ async def run_endpoint(
     #    (numpy → Python, NaN/Inf → None) so encoding can never 500.
     result = _build_result(runner, storage)
     response = RunResponse(status="ok", result=safe_jsonify(result))
+
+    # 5. If this run was logged to MLflow (opt-in mlflow.enabled succeeded), persist the rendered
+    #    envelope as a run artifact so the dashboard's Runs view can reload it byte-identically
+    #    (Interim 2a). Report-only — a failure only means the run is not reloadable; the /run
+    #    response is unaffected. [RISK] leakage — this writes the already-rendered result; it
+    #    reads nothing back into fit/transform.
+    mlflow_run = getattr(runner, "mlflow_run_", None)
+    if mlflow_run and mlflow_run.get("run_id"):
+        from ..mlflow_read import snapshot_result
+
+        # by_alias so the snapshot is byte-identical to the wire response FastAPI sends
+        # (e.g. ClassReportRow's ``class`` alias) — a reload then matches the live run exactly.
+        snapshot_result(mlflow_run["run_id"], response.model_dump(by_alias=True))
+
     return response
 
 

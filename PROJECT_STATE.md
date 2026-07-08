@@ -5,7 +5,57 @@
 > planning/overseer chat stays in sync with the local repo.
 
 **Last updated:** 2026-07-08
-**Updated by:** Claude Code (**NEW — opt-in MLflow logging + model persistence (Databricks integration Phase A) —
+**Updated by:** Claude Code (**NEW — Interim 2a: MLflow backend store → local Postgres + a persistence read-path
+(config + API + frontend; additive `1.9 → 1.10`; NO engine change)**. Implements
+`docs/databricks_integration.md` §6.5 **Interim 2a** — local-only, no Databricks, no push. Databricks stays
+deferred; this delivers real persistence now (results survive a browser refresh AND a server restart).
+**Hallucination check ✅ FIRST** against installed **mlflow 3.14.0**: `postgresql` is an accepted backend-store
+scheme (`DATABASE_ENGINES=['postgresql','mysql','sqlite','mssql']`), `postgresql://` uses SQLAlchemy's default
+**psycopg2** dialect (→ pin `psycopg2-binary`), and for a DB-backed store used client-side the artifact root is
+read from env var **`_MLFLOW_SERVER_ARTIFACT_ROOT`** (falls back to `./mlruns`); read API `MlflowClient.
+search_experiments/search_runs/get_run/list_artifacts` + `mlflow.artifacts.download_artifacts` all verified,
+and `log_artifact`/`set_tag` confirmed working on a FINISHED run. **(1) Store move — CONFIGURATION ONLY:**
+`classifyos/mlflow_logging.py` is UNTOUCHED (Phase A left the store swappable by env, plan_tweak #44). Stood up
+**PostgreSQL 17** via winget as a Windows service (auto-start), created a `classifyos` login role owning an
+`mlflow` DB; `MLFLOW_TRACKING_URI=postgresql://classifyos:classifyos@localhost:5432/mlflow` +
+`_MLFLOW_SERVER_ARTIFACT_ROOT=file:///C:/Projects/classifyos_data/mlflow-artifacts` (must be a `file://` URI on
+Windows — a bare `C:/…` path is misparsed as a URI scheme). `psycopg2-binary>=2.9,<3` (==2.9.12) added to
+requirements.txt + lock; both env vars documented (commented) in `.env.example`; local `.env` wired.
+**(2) Read-path (additive API, `1.9 → 1.10`):** new `api/mlflow_read.py` (lazy `mlflow`; `list_runs`/`load_run`/
+`snapshot_result`; `MlflowUnavailable`→503, `RunNotFound`→404, reuses the engine's `_maybe_allow_file_store`
+so it reads the same file/DB stores the engine writes); new `api/routes/runs.py` with **`GET /api/v1/runs`**
+(RunsListResponse — per-run summary from params/tags/metrics: target/problem_type/input_file, algorithms +
+best f1_weighted, status, ISO times, `reloadable`) and **`GET /api/v1/runs/{run_id}`** (returns the byte-identical
+`/run` envelope). `/run` now, when a run was MLflow-logged, persists `response.model_dump(by_alias=True)` as the
+run artifact `api/run_response.json` + a `classifyos.result_artifact` marker tag (report-only — never affects the
+response; `by_alias` so the snapshot matches the wire format incl. ClassReportRow's `class` alias, caught by a
+test). `models.py` gains `SCHEMA_VERSION="1.10"` (single source) + `RunSummary`/`RunsListResponse`; `RunResponse.
+schema_version` bumped to it; the `/run` envelope shape is **byte-identical to 1.9** (only new endpoints).
+`docs/api_contract.md` updated (1.10 header note, endpoint-table rows, a dedicated read-path section, footer).
+**(3) Dashboard "Runs" view:** new `pages/Runs.tsx` (Workspace nav 14→15, `/runs` route) lists past runs from
+`GET /runs` (re-fetches on mount → survives a full refresh, since state lives in Postgres) and **Load**s one via
+`GET /runs/{id}` into the existing result pages (new store action `applyReloadedRun` sets `result` + navigates to
+Overview); reloadable-gated Load button; loading/empty/error(503) states; new client `listRuns`/`loadRun` +
+`RunSummary`/`RunsListResponse` TS types. **Tests:** backend `test_api_runs.py` (+4 — list surfaces a logged run
+with derived fields; reload is byte-identical to the original; unknown id → 404; empty store → []); six
+`schema_version` `1.9 → 1.10` assertions bumped (test_api_run.py + test_use_case_sweep.py); frontend `runs.test.tsx`
+(+5 — list renders, Load → loadRun+applyReloadedRun+navigate, disabled when not reloadable, error, empty) +
+referencePages nav 14→15. **Backend 381 pytest green (+4) · frontend 137 vitest green (+5) · `tsc -b` + `vite build`
+clean.** **Verified LIVE end-to-end** against the real local Postgres (own uvicorn on :8010): two pipelines
+(policy_lapse/binary, risk_tier/multiclass) with `mlflow.enabled` → both appear as rows in the Postgres `runs`
+table with params (target/problem_type/input_file) + 18/16 metrics + the reloadable tag; artifacts (CSVs, 6 PNGs,
+run_profile.json, 4 saved models, the reload snapshot) on disk under `mlflow-artifacts/1/…` (files, NOT the DB);
+`GET /runs` lists both reloadable, `GET /runs/{id}` reloads either, the list is stable across a re-fetch (refresh),
+unknown id → 404. No stray `mlflow.db`/`mlruns` in the repo. **plan_tweak #45 logged** (the interim-phase deviation
+the design note asked to record; the `1.9→1.10` marker moved though the `/run` schema didn't, per the locked-contract
+rule). **⚠ Known dependency to re-check on any MLflow bump:** we rely on **`_MLFLOW_SERVER_ARTIFACT_ROOT`** — an
+underscore-prefixed, semi-private MLflow env var — to set the artifact root client-side when the backend store is a
+DB (verified working on mlflow 3.14.0, and it is the only configuration-only way that leaves `mlflow_logging.py`
+untouched). It is not a stable public API; a future MLflow upgrade should re-verify it (the fallback if it ever
+breaks: pre-create the experiment with an explicit `artifact_location`). Flagged in `.env.example` too. **Out of
+scope (still deferred):** Interim 2b (Postgres INPUT source), Phase B (`DatabricksVolumeStorage`),
+Phase C (Model Registry/Serving), `/explain`→persisted-model wiring.)
+**Prior update (same day):** Claude Code (**NEW — opt-in MLflow logging + model persistence (Databricks integration Phase A) —
 full stack, additive `1.8 → 1.9`**. Implements `docs/databricks_integration.md` §6 **Phase A**: an opt-in,
 lazy-imported, **report-only** MLflow layer that logs a run AFTER training (no leakage surface — logging reads
 nothing back into fit/transform; it serializes already-fitted models and copies already-written artifacts).

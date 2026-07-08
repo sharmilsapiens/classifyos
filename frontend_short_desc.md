@@ -410,6 +410,28 @@ the scoreboard.
   `buildPayload` only when the narrative toggle is on. This is what makes narratives cite real
   values and business meaning. **128 vitest green · tsc + build clean.**
 
+## Runs — reload a past run from MLflow (✅ Done, 2026-07-08)
+**In one line:** A new **Runs** page lists every past pipeline run recorded in MLflow and can
+**reload one back into all the result pages** — so results now survive a browser refresh and a
+server restart, not just the current session.
+- **Why it exists.** Until now the dashboard held the last run only in browser memory: a refresh
+  wiped it. With MLflow's store moved to a local Postgres (backend Interim 2a — configuration only),
+  runs persist; this page is the read side that finally surfaces them.
+- **The page.** A new **"Runs"** entry in the Workspace sidebar (nav 14 → 15) opens a table of past
+  runs, most-recent first: run name, when it ran, target, problem type, model count + best model,
+  best F1, MLflow status, and a **Load** button. It fetches from the new `GET /api/v1/runs` on mount
+  (and a Refresh button) — and because that reads from Postgres, a full page refresh simply re-lists
+  the same runs. The small caption shows which tracking store the runs came from.
+- **Reload.** Clicking **Load** calls `GET /api/v1/runs/{run_id}`, which returns the exact `/run`
+  result envelope that run was rendered with; a new store action (`applyReloadedRun`) drops it in as
+  the current result and the page navigates to Overview — so Overview, Confusion Matrix, Curves,
+  Predictions, Explainability, etc. all repopulate identically. A run with no reloadable snapshot
+  (e.g. one logged outside the API) still lists, but its Load button is disabled with a hint.
+- **Honest states.** Loading, empty ("no runs yet — enable MLflow logging in Configuration"), and a
+  readable error when the tracking store is unreachable (e.g. Postgres stopped) — never a blank
+  screen. New typed client calls (`listRuns`/`loadRun`) + `RunSummary`/`RunsListResponse` types
+  mirror the contract exactly. **137 vitest green (+5) · tsc + build clean.**
+
 ---
 
 ## How to read this project

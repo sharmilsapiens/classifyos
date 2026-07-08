@@ -15,6 +15,7 @@ optuna>=3.6,<5               # hyperparameter tuning (Section 8B)
 shap>=0.46,<1                # per-row SHAP explanations (Explainability; opt-in)
 openai>=1.40,<2              # Azure OpenAI LLM reason-code narratives (Explainability; opt-in)
 mlflow>=3.1,<4               # opt-in run logging + model persistence (Databricks integration Phase A; ./mlruns local)
+psycopg2-binary>=2.9,<3      # PostgreSQL driver for MLflow's SQLAlchemy backend store (Interim 2a; local Postgres)
 joblib>=1.3                   # model persistence
 openpyxl>=3.1                 # .xlsx reads in data_loader (Section 4)
 pyarrow>=15.0                 # .parquet reads in data_loader (Section 4)

@@ -53,6 +53,8 @@ interface AppActions {
   formErrors: () => string[]
   /** Build the payload from the current form and POST /run. Returns the envelope or null. */
   runPipeline: () => Promise<RunResponse | null>
+  /** Drop a reloaded past run (from GET /runs/{id}) into the store so the result pages show it. */
+  applyReloadedRun: (envelope: RunResponse) => void
 }
 
 const INITIAL: AppState = {
@@ -150,10 +152,22 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }
   }, [])
 
+  const applyReloadedRun = useCallback((envelope: RunResponse) => {
+    // A run reloaded from MLflow (persistence read-path) replaces the current result, exactly as
+    // a fresh /run would — every result page reads `result` from here, so they all repopulate.
+    setState((s) => ({
+      ...s,
+      running: false,
+      result: envelope,
+      runError: envelope.status === "error" ? envelope.error : null,
+      runFieldErrors: [],
+    }))
+  }, [])
+
   // useMemo so the context value is stable between renders (avoids needless re-renders).
   const value = useMemo(
-    () => ({ ...state, checkAPI, applyUpload, updateForm, formErrors, runPipeline }),
-    [state, checkAPI, applyUpload, updateForm, formErrors, runPipeline],
+    () => ({ ...state, checkAPI, applyUpload, updateForm, formErrors, runPipeline, applyReloadedRun }),
+    [state, checkAPI, applyUpload, updateForm, formErrors, runPipeline, applyReloadedRun],
   )
 
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>

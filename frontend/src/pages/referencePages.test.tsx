@@ -64,11 +64,12 @@ function renderPage(ui: ReactElement) {
 }
 
 describe("Navigation (post-merge)", () => {
-  it("has exactly 14 items and no Pipeline entry", () => {
+  it("has exactly 15 items and no Pipeline entry", () => {
     // 12 after the 9c merge + "Tuning Results" (Phase 12) + "Train vs Test" (Fit
     // Diagnostics) = 13, + Explainability re-wired (real per-row SHAP via /run,
-    // schema 1.6 — unwire.md #3 restored) = 14.
-    expect(NAV_ITEMS).toHaveLength(14)
+    // schema 1.6 — unwire.md #3 restored) = 14, + "Runs" (MLflow read-path,
+    // schema 1.10, Interim 2a) = 15.
+    expect(NAV_ITEMS).toHaveLength(15)
     expect(NAV_ITEMS.some((i) => i.path === "/pipeline")).toBe(false)
     expect(NAV_ITEMS.some((i) => i.label === "Pipeline")).toBe(false)
   })

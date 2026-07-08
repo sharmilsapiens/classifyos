@@ -34,6 +34,11 @@ from classifyos.config import (
     build_config,
 )
 
+#: Current locked-contract version, reported in every ``/api/v1/run`` response and by the
+#: read-path endpoints. Bump ONLY for additive contract changes (docs/api_contract.md);
+#: never mutate an earlier version's field shapes. History lives on :class:`RunResponse`.
+SCHEMA_VERSION = "1.10"
+
 # --------------------------------------------------------------------------- #
 # Request models                                                              #
 # --------------------------------------------------------------------------- #
@@ -608,6 +613,63 @@ class RunResponse(BaseModel):
     #     URIs) reporting where the run was logged in MLflow. ``None`` unless the opt-in
     #     ``mlflow.enabled`` was on AND logging succeeded, so a run without it is byte-identical to
     #     1.8. All earlier fields unchanged.
-    schema_version: str = "1.9"
+    # 1.10 (additive): NO change to this ``/run`` envelope — its shape is byte-identical to 1.9.
+    #     1.10 adds the MLflow read-path endpoints (``GET /runs`` + ``GET /runs/{run_id}``,
+    #     Interim 2a) that list past runs and reload one; the version marker moves so the
+    #     contract doc's advance is recorded (locked-contract rule). All fields unchanged.
+    schema_version: str = SCHEMA_VERSION
     result: RunResult | None = None
     error: str | None = None
+
+
+# --------------------------------------------------------------------------- #
+# MLflow read-path models (schema 1.10 — Interim 2a; list + reload past runs)  #
+# --------------------------------------------------------------------------- #
+
+
+class RunSummary(BaseModel):
+    """One past MLflow run in ``GET /api/v1/runs`` — a lightweight list-row (NEW in 1.10).
+
+    Derived from the run's MLflow metadata (no artifact download): the flattened-config params
+    the engine logs (``target``/``problem_type``/``input_file``), the ``classifyos.*`` provenance
+    tags, and the per-model headline metrics (keyed ``<model>.<metric>``) — from which the
+    algorithm list and the best F1-weighted are computed. ``reloadable`` is ``true`` when the run
+    carries the API's persisted ``/run`` envelope snapshot (set on runs produced via ``/run``);
+    :class:`RunResult` for such a run can be reloaded byte-identically via ``GET /runs/{run_id}``.
+    """
+
+    run_id: str
+    experiment_id: str
+    experiment_name: str | None = None
+    run_name: str | None = None
+    #: MLflow run lifecycle stage — "FINISHED" | "FAILED" | "RUNNING" | "SCHEDULED" | "KILLED".
+    status: str
+    #: UTC ISO-8601, converted from MLflow's epoch-millis; ``None`` if unset.
+    start_time: str | None = None
+    end_time: str | None = None
+    target: str | None = None
+    problem_type: str | None = None
+    input_file: str | None = None
+    #: Algorithm names logged for this run (from the ``<model>.<metric>`` metric keys).
+    algorithms: list[str] = Field(default_factory=list)
+    models_logged: int = 0
+    #: The headline metric summarised for the list (always ``"f1_weighted"``) + its best value
+    #: across models and the model that achieved it (``None`` when no model logged it).
+    best_metric: str = "f1_weighted"
+    best_value: float | None = None
+    best_model: str | None = None
+    #: ``true`` when a reloadable ``/run`` envelope snapshot is attached (see ``GET /runs/{id}``).
+    reloadable: bool = False
+
+
+class RunsListResponse(BaseModel):
+    """``GET /api/v1/runs`` — past runs read from MLflow, most-recent first (NEW in 1.10).
+
+    Additive read-path endpoint (Interim 2a): the ``/run`` envelope is unchanged. ``runs`` is a
+    LIST (renders with ``.map``) of :class:`RunSummary`; ``tracking_uri`` is the store the API
+    read from (a local ``./mlruns`` folder, or a Postgres backend store when configured).
+    """
+
+    schema_version: str = SCHEMA_VERSION
+    tracking_uri: str
+    runs: list[RunSummary] = Field(default_factory=list)

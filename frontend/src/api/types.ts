@@ -404,6 +404,43 @@ export interface RunResponse {
   error: string | null // top-level string when status === "error"
 }
 
+/* ─────────────────── MLflow read-path (schema 1.10, Interim 2a) ──────────── */
+// Past runs read back from MLflow so results survive a refresh + a server restart.
+// Mirrors backend/api/models.py RunSummary / RunsListResponse EXACTLY. Consumed by: Runs.
+
+/** One past run in GET /api/v1/runs — a lightweight list-row (no artifact download). */
+export interface RunSummary {
+  run_id: string
+  experiment_id: string
+  experiment_name: string | null
+  run_name: string | null
+  /** MLflow lifecycle: "FINISHED" | "FAILED" | "RUNNING" | "SCHEDULED" | "KILLED". */
+  status: string
+  /** UTC ISO-8601 (converted from MLflow's epoch-millis); null if unset. */
+  start_time: string | null
+  end_time: string | null
+  target: string | null
+  problem_type: string | null
+  input_file: string | null
+  /** algorithm names logged for this run (from the <model>.<metric> metric keys). */
+  algorithms: string[]
+  models_logged: number
+  /** the metric summarised for the list (always "f1_weighted") + its best value / model. */
+  best_metric: string
+  best_value: number | null
+  best_model: string | null
+  /** true → GET /runs/{run_id} can reload the full /run envelope for this run. */
+  reloadable: boolean
+}
+
+/** GET /api/v1/runs → past runs, most-recent first. Consumed by: Runs. */
+export interface RunsListResponse {
+  schema_version: string
+  /** the MLflow store the API read from (local ./mlruns, or a Postgres backend store). */
+  tracking_uri: string
+  runs: RunSummary[]
+}
+
 /* ──────────────────────── Other endpoint shapes ─────────────────────────── */
 
 /** GET /api/v1/health → liveness payload. Consumed by: the health banner. */

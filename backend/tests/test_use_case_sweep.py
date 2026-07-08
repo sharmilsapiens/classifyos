@@ -97,7 +97,7 @@ def test_use_case_runs_and_renders(sweep_responses, uid, problem_type, n_classes
     assert resp.status_code == 200, f"{uid}: HTTP {resp.status_code}"
     body = resp.json()
     assert body["status"] == "ok", f"{uid}: {body.get('error')}"
-    assert body["schema_version"] == "1.9"
+    assert body["schema_version"] == "1.10"
 
     result = body["result"]
     assert result["run"]["problem_type"] == problem_type

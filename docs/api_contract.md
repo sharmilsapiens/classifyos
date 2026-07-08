@@ -41,7 +41,18 @@
 > field was renamed, retyped, or removed. The response envelope now reports `"schema_version": "1.5"`. Old
 > clients ignore the new fields.
 >
-> **`1.9` (additive, current default).** Adds one new **optional** block — `result.mlflow` —
+> **`1.10` (additive, current default).** Adds the **MLflow read-path endpoints** (Interim 2a):
+> `GET /api/v1/runs` (list past runs) and `GET /api/v1/runs/{run_id}` (reload one). The `POST /api/v1/run`
+> request/response envelope is **byte-identical to `1.9`** — nothing in it changed. This is what finally
+> makes results survive a browser refresh and a server restart: a run logged to MLflow (opt-in
+> `mlflow.enabled`) now also persists its rendered `/run` envelope as a run artifact, so `GET /runs/{run_id}`
+> can return it verbatim and the dashboard reloads it into the existing result pages. The version marker
+> moves so the contract doc's advance is recorded (locked-contract rule). The tracking store is a
+> **server-side** concern (a local `./mlruns` by default, or the `MLFLOW_TRACKING_URI` target — a local
+> Postgres backend store in Interim 2a); see the endpoint docs below. No `1.0`–`1.9` field was renamed,
+> retyped, or removed; the response envelope now reports `"schema_version": "1.10"`.
+>
+> **`1.9` (additive).** Adds one new **optional** block — `result.mlflow` —
 > a pointer to where the run was logged in **MLflow** (Databricks integration Phase A): `run_id`,
 > `experiment_id`, `tracking_uri`, and `models` (a `{model_name: model_uri}` map, each loadable via
 > `mlflow.<flavor>.load_model`). It is `null` unless the request-side opt-in `mlflow.enabled` was `true`
@@ -97,6 +108,8 @@
 | `GET`  | `/api/v1/health` | Liveness check → `{status, service, version}`. |
 | `POST` | `/api/v1/upload` | Multipart upload of a CSV/Excel/Parquet dataset → stores it under `DATA_DIR/uploads/` via the StorageAdapter and returns the `inspect_file` profile + `server_path` + the additive Data-Profile blocks (`column_profiles`, `correlation`) — see below. |
 | `POST` | `/api/v1/run` | Execute the full pipeline (`ModelRunner`) → the locked envelope below. |
+| `GET`  | `/api/v1/runs` | **(1.10)** List past MLflow-logged runs (most-recent first) → `{schema_version, tracking_uri, runs[]}`. See below. |
+| `GET`  | `/api/v1/runs/{run_id}` | **(1.10)** Reload ONE past run → the same locked `/run` envelope it was rendered with (byte-identical). `404` if the run is unknown or has no persisted snapshot; `503` if the tracking store is unreachable. |
 | `POST` | `/api/v1/explain` | On-demand single-row SHAP — **documented stub** (stateless; would need model persistence). Per-row SHAP is instead produced during a run: set `explainability.enabled` on `/run` and read `result.explanations` (schema 1.6). |
 | `GET`  | `/api/v1/outputs` | List output artifacts → `[{name, suffix, size_bytes}]`. |
 | `GET`  | `/api/v1/outputs/{name}` | Stream one artifact (CSV/PNG) — traversal-guarded by the StorageAdapter. |
@@ -465,6 +478,63 @@ missing/wrong-typed column is skipped and logged — it never aborts the run).
   target — Postgres/Databricks later), NOT a request field. [RISK] leakage — logging reads nothing back into
   fit/transform; it serializes fitted models and copies written artifacts only.
 
+## MLflow read-path — `GET /api/v1/runs`, `GET /api/v1/runs/{run_id}` (1.10, additive)
+
+The persistence read-path (Interim 2a). Once a run is logged to MLflow (opt-in `mlflow.enabled`
+on `/run`), it is recorded in MLflow's backend store — a local `./mlruns` by default, or a **local
+Postgres** backend store when `MLFLOW_TRACKING_URI` points at one (`postgresql://…`; artifacts stay
+a local folder via `_MLFLOW_SERVER_ARTIFACT_ROOT`). The store is a **server-side** concern — never a
+request field. These GET endpoints expose that history so results survive a browser refresh and a
+server restart. They are purely additive: the `/run` envelope is unchanged.
+
+### `GET /api/v1/runs` — list past runs
+
+Lists runs across the active MLflow experiments, most-recent first (capped, newest first). Each row
+is derived from the run's MLflow metadata only (no artifact download).
+
+```jsonc
+{
+  "schema_version": "1.10",
+  "tracking_uri": "postgresql://…@localhost:5432/mlflow",  // the store the API read from
+  "runs": [
+    {
+      "run_id": "c2ce5d32817b488d9c2797178a9fda36",
+      "experiment_id": "1",
+      "experiment_name": "classifyos",
+      "run_name": "spirited-hog-42",       // MLflow run name (null if unset)
+      "status": "FINISHED",                 // MLflow lifecycle: FINISHED | FAILED | RUNNING | …
+      "start_time": "2026-07-08T18:16:30.472000+00:00",  // UTC ISO-8601 (null if unset)
+      "end_time":   "2026-07-08T18:16:46.481000+00:00",
+      "target": "will_lapse",               // from the logged (flattened-config) params
+      "problem_type": "binary",
+      "input_file": "policy_lapse.csv",
+      "algorithms": ["LogisticRegression", "XGBoost"],  // from the <model>.<metric> metric keys
+      "models_logged": 2,
+      "best_metric": "f1_weighted",         // the metric summarised for the list
+      "best_value": 0.71,                   // best f1_weighted across the run's models (null if none)
+      "best_model": "XGBoost",
+      "reloadable": true                    // true → GET /runs/{run_id} can return the full envelope
+    }
+  ]
+}
+```
+
+`503` (with a `{detail}` message) if the tracking store cannot be reached/queried (e.g. Postgres is
+down) — the dashboard shows that state rather than failing.
+
+### `GET /api/v1/runs/{run_id}` — reload one run
+
+Returns the **exact `/run` envelope** the run was rendered with (`{status, schema_version, result,
+error}` — the locked shape documented above), so the dashboard drops it straight into the existing
+result pages. This works because `/run` persists its rendered envelope as the run artifact
+`api/run_response.json` (report-only; a failure there only means the run is not `reloadable`).
+
+- `404` — unknown `run_id`, **or** a run with no persisted snapshot (e.g. one logged by the engine
+  CLI rather than via `/run`; such runs still appear in `GET /runs` with `reloadable: false`).
+- `503` — the tracking store is unreachable.
+
+No leakage surface and no ML: these endpoints only read back what a completed run already logged.
+
 ### Execution model (limitation)
 
 `POST /api/v1/run` is **synchronous**: it runs the pipeline on a worker thread
@@ -492,6 +562,11 @@ server credentials); all `1.0`–`1.6` fields are unchanged._
 _`1.8` (additive): added `result.explanations[model].rows[].feature_values` (each contributed feature's raw
 value, keyed like `contributions`, for `feature = value` reason codes; present whenever `result.explanations`
 is — not gated on the LLM flag); all `1.0`–`1.7` fields are unchanged._
+_`1.9` (additive): added the optional `result.mlflow` block (run id + per-model saved-model URIs) reporting
+where the run was logged in MLflow (opt-in `mlflow.enabled`); all `1.0`–`1.8` fields are unchanged._
+_`1.10` (additive): added the MLflow read-path endpoints `GET /api/v1/runs` (list past runs) and
+`GET /api/v1/runs/{run_id}` (reload one, byte-identical) — Interim 2a. The `POST /api/v1/run` envelope is
+unchanged from `1.9`; the version marker moves to record the new endpoints (locked-contract rule)._
 _2026-06-26 (default-value change only, **no schema/version change** — field shapes unchanged):
 `tuning.timeout_seconds` now defaults to `null` (no per-model wall-clock cap; `n_trials` bounds
 the study) rather than `600`. `tuning.search_space_overrides` (always present in `1.0`) is now

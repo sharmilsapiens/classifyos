@@ -60,6 +60,14 @@ look for data in the wrong place and write artifacts somewhere unexpected. The f
 lines the CLI prints (`DATA_DIR` / `OUTPUT_DIR`) are absolute resolved paths — **always
 glance at them** to confirm `.env` loaded.
 
+⚠️ **API server: restart it after editing `.env`.** The FastAPI layer (`uvicorn api.main:app`)
+also reads `backend/.env` via `load_dotenv()` — but **only once, at startup**, and with
+`override=False` (so a var already exported in the process wins over `.env`). Editing `.env`
+(e.g. adding the MLflow `MLFLOW_TRACKING_URI` / `_MLFLOW_SERVER_ARTIFACT_ROOT` Postgres vars)
+does **not** take effect until you **stop and restart** the server — `--reload` watches *code*,
+not `.env`. Symptom of forgetting: runs keep logging to the old MLflow store (e.g. the local
+`./mlruns` default) instead of Postgres, and the Runs view lists nothing new.
+
 The first lines of every run echo the resolved config:
 
 ```

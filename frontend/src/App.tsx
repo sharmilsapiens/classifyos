@@ -11,6 +11,7 @@ import Overview from "@/pages/Overview"
 import UploadPage from "@/pages/Upload"
 import DataProfile from "@/pages/DataProfile"
 import Configure from "@/pages/Configure"
+import Runs from "@/pages/Runs"
 import FeatureImpact from "@/pages/FeatureImpact"
 // TEMPORARILY HIDDEN — interaction features unwired from the backend.
 // import Interactions from "@/pages/Interactions"
@@ -34,6 +35,8 @@ function App() {
         <Route path="/upload" element={<UploadPage />} />
         <Route path="/data-profile" element={<DataProfile />} />
         <Route path="/configure" element={<Configure />} />
+        {/* Runs — past runs read back from MLflow (schema 1.10, Interim 2a). */}
+        <Route path="/runs" element={<Runs />} />
         {/* 9c: Pipeline merged into Overview — keep the old link working. */}
         <Route path="/pipeline" element={<Navigate to="/" replace />} />
 
