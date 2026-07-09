@@ -94,9 +94,10 @@ export default function Configure() {
   )
   // How much of the selected feature columns is actually missing, split the same way
   // the two selectors are (numeric vs everything else) — so the imputation choice is
-  // made knowing whether (and how much) there is anything to impute.
-  const numericMissing = missingSummary(form.feature_cols, profileByName, true)
-  const categoricalMissing = missingSummary(form.feature_cols, profileByName, false)
+  // made knowing whether (and how much) there is anything to impute. When a category
+  // has selected columns but none with gaps, its selector is locked (nothing to impute).
+  const numericMissing = missingState(form.feature_cols, profileByName, true)
+  const categoricalMissing = missingState(form.feature_cols, profileByName, false)
 
   function toggleFeature(col: string) {
     const next = form.feature_cols.includes(col)
@@ -291,15 +292,19 @@ export default function Configure() {
               </Select>
             </Field>
             <Field label="Missing values · numeric"
-              hint={<>{numericMissing}{missingNumericHint(form.missing_strategy_numeric)}</>}>
-              <Select value={form.missing_strategy_numeric}
+              hint={<>{numericMissing.summary}{!numericMissing.disableSelector && missingNumericHint(form.missing_strategy_numeric)}</>}>
+              <Select aria-label="Missing values · numeric"
+                value={form.missing_strategy_numeric}
+                disabled={numericMissing.disableSelector}
                 onChange={(e) => updateForm({ missing_strategy_numeric: e.target.value })}>
                 {MISSING_NUMERIC.map((c) => <option key={c} value={c}>{c}</option>)}
               </Select>
             </Field>
             <Field label="Missing values · categorical"
-              hint={<>{categoricalMissing}{missingCategoricalHint(form.missing_strategy_categorical)}</>}>
-              <Select value={form.missing_strategy_categorical}
+              hint={<>{categoricalMissing.summary}{!categoricalMissing.disableSelector && missingCategoricalHint(form.missing_strategy_categorical)}</>}>
+              <Select aria-label="Missing values · categorical"
+                value={form.missing_strategy_categorical}
+                disabled={categoricalMissing.disableSelector}
                 onChange={(e) => updateForm({ missing_strategy_categorical: e.target.value })}>
                 {MISSING_CATEGORICAL.map((c) => <option key={c} value={c}>{c}</option>)}
               </Select>
@@ -811,38 +816,50 @@ function missingNumericHint(strategy: string): string | undefined {
   }
 }
 
-/** A one-line missingness summary for the selected feature columns of one kind
- *  (numeric vs everything-else), rendered above the per-strategy hint so the
- *  imputation choice is made knowing how much there is to impute. Mirrors the
- *  numeric/categorical split of the two selectors (and MissingByColumnPanel's
- *  `isNumeric`). Returns null when no profiled feature column of that kind is
- *  selected (so an older upload with no profile, or none picked, shows nothing). */
-function missingSummary(
+/** Missingness state for the selected feature columns of one kind (numeric vs
+ *  everything-else). `summary` is the one-line note rendered above the per-strategy
+ *  hint so the imputation choice is made knowing how much there is to impute; it
+ *  mirrors the numeric/categorical split of the two selectors (and
+ *  MissingByColumnPanel's `isNumeric`).
+ *
+ *  `disableSelector` is true ONLY when there ARE profiled selected columns of this
+ *  kind and NONE of them have gaps: the per-type strategy would never fire, so the
+ *  selector is locked (nothing to impute for this category) — the options stay listed,
+ *  but the analyst can't pick one that has no effect. When no profiled column of that
+ *  kind is selected the missingness is unknown (an older upload with no profile, or
+ *  none picked), so `summary` is null and the selector stays enabled (unchanged). */
+function missingState(
   featureCols: string[],
   profileByName: Map<string, ColumnProfile>,
   numeric: boolean,
-): ReactNode {
+): { summary: ReactNode; disableSelector: boolean } {
   const cols = featureCols
     .map((c) => profileByName.get(c))
     .filter((p): p is ColumnProfile => !!p && (p.dtype_group === "numeric") === numeric)
-  if (cols.length === 0) return null
+  const kind = numeric ? "numeric" : "categorical"
+  if (cols.length === 0) return { summary: null, disableSelector: false }
   const withGaps = cols.filter((p) => p.n_missing > 0)
   const totalMissing = withGaps.reduce((sum, p) => sum + p.n_missing, 0)
-  const kind = numeric ? "numeric" : "categorical"
   if (withGaps.length === 0) {
-    return (
-      <span className="text-emerald-600">
-        No missing values in the {cols.length} selected {kind} column
-        {cols.length === 1 ? "" : "s"}.{" "}
-      </span>
-    )
+    return {
+      summary: (
+        <span className="text-emerald-600">
+          No missing values in the {cols.length} selected {kind} column
+          {cols.length === 1 ? "" : "s"} — nothing to impute for this category.{" "}
+        </span>
+      ),
+      disableSelector: true,
+    }
   }
-  return (
-    <span className="font-medium text-amber-700">
-      {withGaps.length} of {cols.length} {kind} column{cols.length === 1 ? "" : "s"} with gaps
-      ({fmtInt(totalMissing)} missing cell{totalMissing === 1 ? "" : "s"}).{" "}
-    </span>
-  )
+  return {
+    summary: (
+      <span className="font-medium text-amber-700">
+        {withGaps.length} of {cols.length} {kind} column{cols.length === 1 ? "" : "s"} with gaps
+        ({fmtInt(totalMissing)} missing cell{totalMissing === 1 ? "" : "s"}).{" "}
+      </span>
+    ),
+    disableSelector: false,
+  }
 }
 
 /** Strategy-specific note for the CATEGORICAL (non-numeric) missing-values selector.

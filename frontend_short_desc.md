@@ -337,6 +337,29 @@ isn't made blind (previously missingness only appeared on the Data Profile page 
   Configuration and the datetime card (which always showed a Missing row). So the missing / no-missing
   status is now explicit on both surfaces, at both the dataset and the per-column level. **132 vitest green.**
 
+## Imputation controls hidden where there's nothing to impute (✅ Done, 2026-07-09)
+**In one line:** The Configuration imputation controls now only offer a fill method where one is
+actually needed — the "Missing values · per column" card lists **only columns that have gaps**, and a
+per-type selector (*numeric* / *categorical*) is **locked when no selected column of that kind has any
+missing values** — so you never set a strategy that would never run.
+- **Per-column card lists only columns with gaps.** Previously the card showed every selected feature
+  column (each with a "no gaps" or "N missing" badge); a complete column got a dropdown it never used.
+  Now a column appears **only if it has missing values**, so every row is a real decision. When every
+  selected column is complete the card says "None of the selected feature columns have missing values —
+  there is nothing to impute per column"; the older "select feature columns above" note still shows when
+  there's no data profile / nothing picked. (The badge is now always the amber "N missing (X%)" count,
+  since complete columns are filtered out.)
+- **Per-type selector locked when a category is clean.** When there ARE selected columns of a kind but
+  **none** have gaps, that selector is **disabled** (you can't pick a strategy that would never fire) and
+  its summary reads emerald "No missing values in the N selected {numeric/categorical} column — nothing to
+  impute for this category." The dropdown's options are **still listed** (nothing is removed) and the two
+  selects gained an `aria-label` so they're properly named. When the kind's missingness is unknown (an
+  older upload with no profile, or none of that kind picked) the selector stays enabled — unchanged.
+- **No new data, no waiting.** Pure display logic over the `n_missing`/`missing_pct` the upload profile
+  already returns — **no extra server call and no engine/API/contract change**. Render tests cover the
+  gap-only list, the complete-column omission, the "nothing to impute" message, and the locked-vs-editable
+  per-type selector. **153 vitest green · tsc + build clean.**
+
 ## Feature picker enrichment on Configuration (✅ Done, 2026-07-01)
 **In one line:** The feature-selection list on the Configuration page — previously just a checkbox
 and a column name — now shows, for each column, a smooth distribution curve and key numbers for

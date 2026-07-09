@@ -112,6 +112,33 @@ function renderConfigure() {
   )
 }
 
+// A profile where the numeric feature `age` has real gaps, so the imputation controls
+// have something to impute: the per-column list shows `age`, and the numeric per-type
+// selector stays unlocked. `region` (categorical) stays complete.
+const PROFILE_WITH_GAPS: InspectProfile = {
+  ...PROFILE,
+  n_missing: { ...PROFILE.n_missing, age: 2 },
+  column_profiles: (PROFILE.column_profiles ?? []).map((p) =>
+    p.name === "age" ? { ...p, n_missing: 2, missing_pct: 33.3 } : p,
+  ),
+}
+
+function renderConfigureGaps(featureCols: string[] = ["age"]) {
+  mockApp = {
+    inspect: PROFILE_WITH_GAPS,
+    serverPath: PROFILE_WITH_GAPS.server_path,
+    form: { ...DEFAULT_FORM_STATE, target: "", feature_cols: featureCols },
+    updateForm: vi.fn(),
+    runPipeline: vi.fn(),
+    formErrors: () => [] as string[],
+  }
+  render(
+    <MemoryRouter>
+      <Configure />
+    </MemoryRouter>,
+  )
+}
+
 describe("Configure — feature picker enrichment", () => {
   it("shows a numeric column's avg · IQR · variance and a distribution sparkline", () => {
     renderConfigure()
@@ -166,8 +193,8 @@ describe("Configure — feature picker enrichment", () => {
 })
 
 describe("Configure — per-column imputation", () => {
-  it("offers a per-column imputation selector (with the numeric imputers) for a selected numeric feature", () => {
-    renderConfigure()
+  it("offers a per-column imputation selector (with the numeric imputers) for a column that has gaps", () => {
+    renderConfigureGaps()
     const sel = screen.getByLabelText("Imputation method for age")
     expect(sel).toBeInTheDocument()
     // A numeric column is offered the model-based imputers + the type-default option.
@@ -176,7 +203,7 @@ describe("Configure — per-column imputation", () => {
   })
 
   it("writes the chosen per-column strategy into the override map", () => {
-    renderConfigure()
+    renderConfigureGaps()
     fireEvent.change(screen.getByLabelText("Imputation method for age"), {
       target: { value: "knn" },
     })
@@ -184,55 +211,52 @@ describe("Configure — per-column imputation", () => {
       missing_strategy_by_column: { age: "knn" },
     })
   })
+
+  it("lists only columns that have missing values — a complete column gets no selector", () => {
+    // Both `age` (has gaps) and `region` (complete) are selected features.
+    renderConfigureGaps(["age", "region"])
+    expect(screen.getByLabelText("Imputation method for age")).toBeInTheDocument()
+    expect(screen.queryByLabelText("Imputation method for region")).not.toBeInTheDocument()
+  })
+
+  it("says nothing to impute per column when no selected column has gaps", () => {
+    // Default PROFILE is complete everywhere; `age` is the only selected feature.
+    renderConfigure()
+    expect(screen.queryByLabelText("Imputation method for age")).not.toBeInTheDocument()
+    expect(
+      screen.getByText(/None of the selected feature columns have missing values/),
+    ).toBeInTheDocument()
+  })
 })
 
 describe("Configure — missingness surfaced with imputation", () => {
-  // A profile where the numeric feature `age` has real gaps, so the imputation
-  // controls can show how much there is to impute.
-  function renderWithMissing() {
-    const withGaps: InspectProfile = {
-      ...PROFILE,
-      n_missing: { ...PROFILE.n_missing, age: 2 },
-      column_profiles: (PROFILE.column_profiles ?? []).map((p) =>
-        p.name === "age" ? { ...p, n_missing: 2, missing_pct: 33.3 } : p,
-      ),
-    }
-    mockApp = {
-      inspect: withGaps,
-      serverPath: withGaps.server_path,
-      form: { ...DEFAULT_FORM_STATE, target: "", feature_cols: ["age"] },
-      updateForm: vi.fn(),
-      runPipeline: vi.fn(),
-      formErrors: () => [] as string[],
-    }
-    render(
-      <MemoryRouter>
-        <Configure />
-      </MemoryRouter>,
-    )
-  }
-
   it("shows a column's missing count beside its per-column imputation selector", () => {
-    renderWithMissing()
+    renderConfigureGaps()
     const sel = screen.getByLabelText("Imputation method for age")
     const row = sel.closest("div")
     expect(within(row as HTMLElement).getByText(/2 missing \(33\.3%\)/)).toBeInTheDocument()
   })
 
   it("summarises total numeric missingness above the per-type selector", () => {
-    renderWithMissing()
+    renderConfigureGaps()
     // age is the only selected numeric feature and it has gaps → an amber summary.
     expect(
       screen.getByText(/1 of 1 numeric column with gaps \(2 missing cells\)/),
     ).toBeInTheDocument()
+    // …and the per-type numeric selector stays editable (there is something to impute).
+    expect(screen.getByRole("combobox", { name: "Missing values · numeric" })).not.toBeDisabled()
   })
 
-  it("reassures when the selected columns of a type have no gaps", () => {
-    // Default PROFILE has no missing values anywhere.
+  it("locks the per-type selector when the selected columns of a type have no gaps", () => {
+    // Default PROFILE has no missing values anywhere; `age` (numeric) is selected.
     renderConfigure()
     expect(
-      screen.getByText(/No missing values in the 1 selected numeric column\./),
+      screen.getByText(/No missing values in the 1 selected numeric column — nothing to impute for this category\./),
     ).toBeInTheDocument()
+    // The numeric selector is disabled (nothing to impute) but its options are still listed.
+    const sel = screen.getByRole("combobox", { name: "Missing values · numeric" })
+    expect(sel).toBeDisabled()
+    expect(within(sel).getByRole("option", { name: "knn" })).toBeInTheDocument()
   })
 })
 

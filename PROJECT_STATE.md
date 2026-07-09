@@ -5,7 +5,37 @@
 > planning/overseer chat stays in sync with the local repo.
 
 **Last updated:** 2026-07-09
-**Updated by:** Claude Code (**NEW — "Import from database" dashboard UI over the Interim-2b Postgres
+**Updated by:** Claude Code (**NEW — Imputation controls hidden where there's nothing to impute
+(FRONTEND-ONLY; NO engine/API/contract change, NO `schema_version` bump — stays 1.10).** User feedback:
+the Configuration imputation UI offered a fill method even where none was needed. Two fixes, both pure
+display logic over data the `/upload` profile already returns (`ColumnProfile.n_missing`/`.missing_pct`).
+**(1) Per-column card lists ONLY columns with gaps.** `components/config/MissingByColumnPanel.tsx` now
+filters listed feature columns to those with `n_missing > 0` — a complete column has nothing to impute, so
+it no longer gets an unused dropdown. Empty state is now two-way: "None of the selected feature columns have
+missing values — there is nothing to impute per column." when profiled features exist but all are complete,
+vs the pre-existing "Select feature columns above…" when there's no profile / nothing picked. The per-column
+badge simplifies to the amber "N missing (X%)" count (the "no gaps" branch is dead now that complete columns
+are filtered out). **(2) Per-type selector LOCKED when its category is clean.** `pages/Configure.tsx` — the
+old `missingSummary` helper became `missingState(...)` returning `{ summary, disableSelector }`.
+`disableSelector` is true **only** when there ARE profiled selected columns of that kind and NONE have gaps;
+in that case the *Missing values · numeric* / *· categorical* `<Select>` is `disabled` (can't pick a strategy
+that would never fire) and its summary reads emerald "No missing values in the N selected {kind} column —
+nothing to impute for this category." (the per-strategy hint is suppressed in that state). The dropdown's
+`<option>`s stay in the DOM (options still listed, per the request "show the available options"), and both
+per-type selects gained an `aria-label` (accessibility + testability). When missingness is unknown (older
+upload without a profile, or no column of that kind selected) `summary` is null and the selector stays
+enabled — behaviour unchanged. **Scope guard:** no leakage surface, no new data/endpoint, no `/run` change —
+the engine still applies per-type/per-column strategies exactly as before; this only hides controls that
+would have no effect. **Tests:** `configure.test.tsx` — the two per-column tests now use a gaps profile
+(a complete column no longer renders a selector); +2 new (per-column card lists only gap columns / omits a
+complete one; "nothing to impute per column" message when all clean); the reassure test became "locks the
+per-type selector" (asserts `disabled` + options still present); the numeric-summary test also asserts the
+selector stays editable when there are gaps. **153 frontend vitest green (+2 net, was 151) · `tsc -b` +
+`vite build` clean** (backend untouched). **Hallucination check ✅ N/A** — no new library calls (existing
+`@/api/types` fields + `fmtInt`/`fmtPct`; native `<select disabled>`). Generation prompt archived at
+`prompts/frontend_phases/imputation_controls_only_where_needed.md`. **No plan_tweak entry** — additive UI
+refinement over data the profile already returns, realizing user feedback; not a plan deviation.)
+**Prior update (same day):** Claude Code (**NEW — "Import from database" dashboard UI over the Interim-2b Postgres
 input source (API + frontend; ADDITIVE, upload/profile-side ONLY — NO `/run` schema change, `schema_version`
 stays 1.10).** The Postgres input source has existed at the engine + API layer since Interim 2b
 (`input_source.type="postgres"` → `materialize_source` in `classifyos/io/sql_source.py`), but the only way
