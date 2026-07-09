@@ -216,6 +216,30 @@ additively (`schema_version` now reports `"1.1"`).
   Driver: `SQLAlchemy` + `psycopg2` (pinned). `docs/api_contract.md` updated (request example +
   a dedicated request-side note). Dashboard UI to pick a table/query is a follow-up.
 
+## Input-source read-path — list & select DB tables for the picker (additive; no version bump) — 2026-07-09
+- **What it adds.** Two small endpoints that let the dashboard offer an **"Import from database"**
+  picker over the existing Interim-2b Postgres input source — so a user runs on a DB table by
+  clicking, not by hand-crafting a request. They ride the **upload/profile side** (like `/upload`),
+  NOT the locked `/run` envelope, so they carry **no `schema_version`** and are purely additive.
+  - **`GET /input-sources/tables`** — lists the tables in the input DB (via the `CLASSIFYOS_PG_DSN`
+    DSN) as `{connection_env, tables[]}`. An unreachable/unconfigured DB is a clean **503** (the
+    same "store unavailable" discipline the MLflow read-path uses), never a 500.
+  - **`POST /input-sources/select`** — picks a table (or raw query): runs it through the **exact 2b
+    engine path** (`materialize_source` writes a `.parquet` snapshot under DATA_DIR via the
+    StorageAdapter), then profiles that snapshot with the **same `inspect_file` the `/upload` flow
+    uses** — so the response is the **same `InspectProfile` shape** an upload returns, and the
+    frontend treats a DB table exactly like an uploaded file. It additionally returns an
+    `input_source` block; the frontend sets it on the run so the actual `/run` reads from Postgres
+    (the 2b path), not merely the profiling snapshot. Bad request (both/neither table+query, unsafe
+    identifier, bad target) → **422**; DB unavailable → **503**.
+- **Reuse, no re-implementation.** No new ML and no new DB reading: the endpoints reuse the engine's
+  `list_tables` / `materialize_source` and its authoritative `_validate_input_source`. [RISK]
+  leakage — materialize runs strictly before any pipeline and only writes a snapshot; the run then
+  loads → splits → fits-on-train as always. Verified live end-to-end against the local Postgres
+  (list → select iris/arizona → a full `/run` on the DB `input_source`). Endpoint tests use a
+  sqlite DSN so CI needs no live Postgres. `docs/api_contract.md` updated (endpoint table + a
+  dedicated section).
+
 ---
 
 ## How to read this project

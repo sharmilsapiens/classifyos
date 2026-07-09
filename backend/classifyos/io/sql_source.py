@@ -109,6 +109,53 @@ def _write_snapshot(df: Any, key: str, storage: StorageAdapter) -> None:
     storage.save_input(key, buffer)
 
 
+def list_tables(connection_env: str, schema: str | None = None) -> list[str]:
+    """Return the table names in the database named by ``connection_env``'s DSN (sorted).
+
+    A small read-only introspection helper for the dashboard's "Import from database" picker,
+    so the UI can offer the available tables without the operator hand-crafting a request. It
+    reuses the same discipline as :func:`materialize_source`: the DSN is read from the env var
+    named by ``connection_env`` (never a credential in the request), and ``sqlalchemy`` is
+    imported lazily inside the function so importing this module never requires a live DB.
+
+    Args:
+        connection_env: NAME of the environment variable holding the SQLAlchemy DSN.
+        schema: Optional database schema to list (default: the connection's default schema —
+            ``public`` for Postgres, where :func:`pandas.DataFrame.to_sql` writes by default).
+
+    Returns:
+        The table names in that database/schema, sorted.
+
+    Raises:
+        InputSourceError: If the connection env var is unset/empty, or the database cannot be
+            reached/introspected. (The API route maps this to a clean 503 — the same "store
+            unavailable" discipline the MLflow read-path uses — never an opaque 500.)
+    """
+    url = _resolve_connection_url(connection_env)
+
+    # Lazy, opt-in dependency import (mirrors materialize_source).
+    from sqlalchemy import create_engine, inspect as sa_inspect  # noqa: PLC0415
+
+    logger.info(
+        "input_source: listing tables (connection env %s, schema %s)", connection_env, schema
+    )
+    try:
+        engine = create_engine(url)
+        try:
+            inspector = sa_inspect(engine)
+            names = inspector.get_table_names(schema=schema)
+        finally:
+            engine.dispose()  # do not leak a connection pool
+    except InputSourceError:
+        raise
+    except Exception as exc:  # noqa: BLE001 — any driver/DB/introspection failure is a clean error
+        raise InputSourceError(
+            f"failed to list tables from the input database (env {connection_env!r}): "
+            f"{type(exc).__name__}: {exc}"
+        ) from exc
+    return sorted(names)
+
+
 def materialize_source(config: dict[str, Any], storage: StorageAdapter) -> str:
     """Materialize the run's input source to a file, returning the key the pipeline will read.
 

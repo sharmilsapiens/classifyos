@@ -16,6 +16,7 @@ import type {
   ExplainRequest,
   ExplainResponse,
   HealthResponse,
+  InputTablesResponse,
   InspectProfile,
   RunConfig,
   RunResponse,
@@ -125,6 +126,35 @@ export async function upload(file: File, target?: string): Promise<InspectProfil
   if (target) form.append("target", target)
   // NOTE: do NOT set Content-Type; the browser adds the multipart boundary itself.
   const res = await request(`${API_BASE}/upload`, { method: "POST", body: form })
+  return handleJson<InspectProfile>(res)
+}
+
+/**
+ * GET /input-sources/tables — list the tables in the input DB so the "Import from database"
+ * picker can offer them. A 503 (DB unreachable/unconfigured) surfaces as an ApiError. Consumed
+ * by: Upload (DatabaseSourcePanel).
+ */
+export async function listInputTables(): Promise<InputTablesResponse> {
+  const res = await request(`${API_BASE}/input-sources/tables`)
+  return handleJson<InputTablesResponse>(res)
+}
+
+/**
+ * POST /input-sources/select — pick a DB table (or query): the server materializes + profiles it
+ * and returns the SAME InspectProfile shape as /upload, plus an `input_source` block for the run.
+ * The frontend feeds it through the same applyUpload plumbing as an uploaded file. Consumed by:
+ * Upload.
+ */
+export async function selectInputTable(args: {
+  table?: string
+  query?: string
+  target?: string
+}): Promise<InspectProfile> {
+  const res = await request(`${API_BASE}/input-sources/select`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(args),
+  })
   return handleJson<InspectProfile>(res)
 }
 

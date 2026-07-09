@@ -77,6 +77,26 @@ input file : policy_lapse.csv
 target     : will_lapse
 ```
 
+### Seeding the input database (optional — for the "Import from database" source)
+
+The dashboard can draw a run's data from a SQL database instead of an uploaded file (Interim 2b).
+To give that picker something to show locally, a tiny **dev-convenience** script loads two example
+datasets into the input DB (the one whose SQLAlchemy DSN is in `CLASSIFYOS_PG_DSN`) as separate
+tables — `iris` (multiclass) and `arizona` (from the `arizona_buyingpropensity` sample; binary
+`converted` target). It is **not** pipeline code — just a one-off setup helper, the DB twin of the
+committed sample CSVs.
+
+```powershell
+# from backend/, venv active — reads CLASSIFYOS_PG_DSN from backend/.env
+python scripts/seed_input_db.py
+```
+
+Re-running is safe (each table is dropped + recreated). Flags: `--connection-env` (default
+`CLASSIFYOS_PG_DSN`), `--dsn` (an explicit one-off DSN), `--arizona-key` (the arizona CSV's key
+under `DATA_DIR`, default `real/arizona_buyingpropensity.csv`). Requires the input DB reachable and
+`psycopg2` installed (both already true for the local MLflow-on-Postgres setup). Once seeded, the
+dashboard's **Upload → Import from database** tab lists `iris` and `arizona`.
+
 ---
 
 ## 2. Inspect a file first (`--inspect`)

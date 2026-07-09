@@ -698,3 +698,51 @@ class RunsListResponse(BaseModel):
     schema_version: str = SCHEMA_VERSION
     tracking_uri: str
     runs: list[RunSummary] = Field(default_factory=list)
+
+
+# --------------------------------------------------------------------------- #
+# Input-source read-path models (Interim 2b UI — list + select a DB table)    #
+# --------------------------------------------------------------------------- #
+#
+# These ride the upload/profile side of the API (NOT the locked ``/run`` envelope) so the
+# dashboard can offer a "Import from database" picker without a hand-crafted request. They are
+# purely additive: no ``/run`` field changes, so ``schema_version`` is unaffected.
+
+
+class InputTablesResponse(BaseModel):
+    """``GET /api/v1/input-sources/tables`` — the tables available in the input DB.
+
+    A lightweight list the dashboard's "Import from database" picker renders. ``connection_env``
+    echoes the env var whose DSN was read (never the credential itself). An unreachable /
+    unconfigured DB is a clean 503 at the route (mirroring the MLflow read-path discipline), so a
+    200 here always carries a real (possibly empty) table list.
+    """
+
+    connection_env: str
+    tables: list[str] = Field(default_factory=list)
+
+
+class InputSourceSelectRequest(BaseModel):
+    """Body for ``POST /api/v1/input-sources/select`` — pick a DB table/query to run on.
+
+    Materializes the chosen table (or query) to a snapshot file under DATA_DIR via the **exact
+    Interim-2b engine path** (:func:`classifyos.io.sql_source.materialize_source`), profiles that
+    snapshot with the same ``inspect_file`` the ``/upload`` flow uses, and returns the same
+    ``InspectProfile`` shape — so the frontend treats a DB table exactly like an uploaded file.
+    The response also carries the ``input_source`` block the frontend sets on the run config, so
+    the actual ``/run`` reads from Postgres (the 2b path), not merely the profiling snapshot.
+
+    Provide EXACTLY ONE of ``table`` (→ ``SELECT * FROM <table>``, validated to a safe SQL
+    identifier) or ``query`` (a raw SQL SELECT). ``connection_env`` names the server-side env var
+    holding the DSN (never a credential here); ``target`` is optional (its class distribution is
+    profiled when given, mirroring ``/upload?target=``). The engine's ``build_config`` validator
+    (``_validate_input_source``) is the authoritative check — a bad shape is a clean 422.
+    """
+
+    # Reject unknown keys so a typo'd field is a clear 422, not a silent no-op.
+    model_config = ConfigDict(extra="forbid")
+
+    connection_env: str = "CLASSIFYOS_PG_DSN"
+    table: str | None = None
+    query: str | None = None
+    target: str | None = None

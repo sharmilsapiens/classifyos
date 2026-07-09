@@ -107,6 +107,8 @@
 |---|---|---|
 | `GET`  | `/api/v1/health` | Liveness check → `{status, service, version}`. |
 | `POST` | `/api/v1/upload` | Multipart upload of a CSV/Excel/Parquet dataset → stores it under `DATA_DIR/uploads/` via the StorageAdapter and returns the `inspect_file` profile + `server_path` + the additive Data-Profile blocks (`column_profiles`, `correlation`) — see below. |
+| `GET`  | `/api/v1/input-sources/tables` | **(Interim 2b UI)** List the tables in the input DB (via the `CLASSIFYOS_PG_DSN` DSN) → `{connection_env, tables[]}`, for the "Import from database" picker. `503` if the DB is unreachable/unconfigured. See below. |
+| `POST` | `/api/v1/input-sources/select` | **(Interim 2b UI)** Materialize + profile a chosen DB table/query → the **same `InspectProfile` shape as `/upload`** plus an `input_source` block for the run. `422` bad request, `503` DB unavailable. See below. |
 | `POST` | `/api/v1/run` | Execute the full pipeline (`ModelRunner`) → the locked envelope below. |
 | `GET`  | `/api/v1/runs` | **(1.10)** List past MLflow-logged runs (most-recent first) → `{schema_version, tracking_uri, runs[]}`. See below. |
 | `GET`  | `/api/v1/runs/{run_id}` | **(1.10)** Reload ONE past run → the same locked `/run` envelope it was rendered with (byte-identical). `404` if the run is unknown or has no persisted snapshot; `503` if the tracking store is unreachable. |
@@ -165,6 +167,68 @@ advisories for the Data Profile screen, empty for ordinary columns. Values:
 * `"identifier"` — nearly every row is distinct (`n_unique / n_rows >= 0.99`). Looks like an
   ID or free-text key: high cardinality that won't generalise and is leakage-bait. Uses the
   same threshold as `feature_impact`'s `id_like`, so the two screens agree.
+
+## `GET /api/v1/input-sources/tables` · `POST /api/v1/input-sources/select` (Interim 2b UI)
+
+These ride the **upload/profile side** of the API (like `/upload`), NOT the locked `/run`
+envelope, so they carry **no `schema_version`** and are purely additive. They give the dashboard a
+**"Import from database"** picker over the existing Interim-2b Postgres input source — no
+hand-crafted request. The DSN is a **server-side** concern: `connection_env` (default
+`CLASSIFYOS_PG_DSN`) names an env var in `backend/.env` holding the SQLAlchemy DSN; a credential
+never travels in a request.
+
+### `GET /api/v1/input-sources/tables`
+
+Lists the tables in the input database so the picker can offer them.
+
+```jsonc
+{ "connection_env": "CLASSIFYOS_PG_DSN", "tables": ["arizona", "iris", "policy_lapse"] }
+```
+
+`503` (with a `{detail}` message) when the DB is unreachable **or** unconfigured (env var unset) —
+mirroring the MLflow read-path's "store unavailable" discipline, never a 500. A 200 always carries
+a real (possibly empty `[]`) table list.
+
+### `POST /api/v1/input-sources/select`
+
+Picks a DB table (or raw query) to run on. Body:
+
+```jsonc
+{
+  "table": "iris",              // provide EXACTLY ONE of table / query
+  "query": null,                // a raw SQL SELECT (secondary path)
+  "connection_env": "CLASSIFYOS_PG_DSN",  // OPTIONAL; env var naming the DSN
+  "target": "species"           // OPTIONAL; profiles the class distribution when given
+}
+```
+
+The server runs the chosen table/query through the **exact Interim-2b engine path**
+(`classifyos.io.sql_source.materialize_source`), writing a `.parquet` snapshot under `DATA_DIR`
+(`db_snapshots/<name>.parquet`) via the StorageAdapter, then profiles that snapshot with the same
+`inspect_file` the `/upload` flow uses. The response is therefore the **same `InspectProfile` shape
+`/upload` returns** (`columns`, `dtypes`, the column groups, `n_missing`, `sample`, the Data-Profile
+blocks, `server_path`, and — when `target` is given — `class_distribution` +
+`suggested_problem_type`), plus one additional block:
+
+```jsonc
+{
+  // ...the full /upload InspectProfile (incl. server_path: "db_snapshots/iris.parquet")...
+  "input_source": {             // set this on the run so /run reads Postgres (the 2b path)
+    "type": "postgres",
+    "connection_env": "CLASSIFYOS_PG_DSN",
+    "table": "iris",
+    "query": null
+  }
+}
+```
+
+The frontend echoes `server_path` back as `input_file` **and** sets `input_source` on the `/run`
+request, so the run re-materializes from Postgres (the 2b path) rather than reusing the profiling
+snapshot blindly. Errors: a bad request shape (both/neither of `table`/`query`, an unsafe table
+identifier, an empty `connection_env`, or a `target` absent from the materialized table) → **422**
+(the engine's `_validate_input_source` / `inspect_file` are the authoritative checks); a DB that
+cannot be read (unset env var, unreachable, failed query, empty result) → **503**. This adds no ML
+and re-implements no DB reading — it reuses the 2b `materialize_source` / `list_tables` helpers.
 
 ## `POST /api/v1/run`
 

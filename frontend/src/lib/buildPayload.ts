@@ -7,7 +7,13 @@
    (no React, no fetch) is what lets us unit-test it directly.
    ════════════════════════════════════════════════════════════════════════ */
 
-import type { ClassBalance, ProblemType, RunConfig, UserFeatureSpec } from "@/api/types"
+import type {
+  ClassBalance,
+  InputSourceConfig,
+  ProblemType,
+  RunConfig,
+  UserFeatureSpec,
+} from "@/api/types"
 import type { SearchSpaceOverrides } from "@/lib/searchSpaces"
 
 /** Flat, form-friendly mirror of RunConfig (nested groups flattened with fe_ / ix_ / tune_ prefixes). */
@@ -15,6 +21,12 @@ export interface ConfigFormState {
   input_file: string
   target: string
   feature_cols: string[]
+  /**
+   * Where the run's data comes from (Interim 2b). `null` (the default) → a normal file run: the
+   * request omits `input_source` entirely, byte-identical to before. Set to a postgres block by
+   * the "Import from database" picker so the run reads from the DB (materialize-to-file, 2b).
+   */
+  input_source: InputSourceConfig | null
   problem_type: ProblemType
   test_size: number
   stratify: boolean
@@ -86,6 +98,7 @@ export const DEFAULT_FORM_STATE: ConfigFormState = {
   input_file: "",
   target: "",
   feature_cols: [],
+  input_source: null, // file source by default (request omits input_source; unchanged behaviour)
   problem_type: "binary",
   test_size: 0.2,
   stratify: true,
@@ -161,6 +174,8 @@ export function buildPayload(form: ConfigFormState): RunConfig {
     input_file: form.input_file.trim(),
     target: form.target.trim(),
     feature_cols: form.feature_cols,
+    // Only sent when a DB source was chosen; a file run omits it so the request is unchanged.
+    ...(form.input_source ? { input_source: form.input_source } : {}),
     problem_type: form.problem_type,
     test_size: form.test_size,
     stratify: form.stratify,

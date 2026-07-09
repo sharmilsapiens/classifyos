@@ -139,6 +139,32 @@ describe("buildPayload", () => {
     expect(buildPayload({ ...form, mlflow_enabled: false }).mlflow).toEqual({ enabled: false })
   })
 
+  it("omits input_source for a file run (byte-identical to before)", () => {
+    // Default form has input_source: null → the request must not carry an input_source key at all.
+    const payload = buildPayload(form)
+    expect("input_source" in payload).toBe(false)
+  })
+
+  it("sends input_source when a database table was selected (Interim 2b)", () => {
+    const payload = buildPayload({
+      ...form,
+      input_file: "db_snapshots/iris.parquet",
+      input_source: {
+        type: "postgres",
+        connection_env: "CLASSIFYOS_PG_DSN",
+        table: "iris",
+        query: null,
+      },
+    })
+    expect(payload.input_source).toEqual({
+      type: "postgres",
+      connection_env: "CLASSIFYOS_PG_DSN",
+      table: "iris",
+      query: null,
+    })
+    expect(payload.input_file).toBe("db_snapshots/iris.parquet")
+  })
+
   it("carries user-defined feature specs through to the payload verbatim", () => {
     const specs = [
       { name: "premium_per_sum", type: "numeric" as const, op: "divide", col_a: "premium", col_b: "sum_assured" },

@@ -27,7 +27,7 @@ import pytest
 
 from classifyos.config import build_config
 from classifyos.io.loader import data_loader
-from classifyos.io.sql_source import InputSourceError, materialize_source
+from classifyos.io.sql_source import InputSourceError, list_tables, materialize_source
 from classifyos.io.storage import LocalFolderStorage
 from classifyos.runner import ModelRunner
 
@@ -231,6 +231,36 @@ def test_materialize_bad_dsn_raises(
     )
     with pytest.raises(InputSourceError):
         materialize_source(cfg, temp_storage)
+
+
+# --------------------------------------------------------------------------- #
+# list_tables — read-only introspection for the "Import from database" picker  #
+# --------------------------------------------------------------------------- #
+
+
+def test_list_tables_returns_seeded_tables(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """list_tables returns the table names in the DB named by the connection env var (sorted)."""
+    url = _sqlite_url(tmp_path)
+    _seed_sqlite(url, pd.DataFrame({"a": [1]}), "beta")
+    _seed_sqlite(url, pd.DataFrame({"a": [1]}), "alpha")
+    monkeypatch.setenv("TEST_DSN", url)
+    assert list_tables("TEST_DSN") == ["alpha", "beta"]
+
+
+def test_list_tables_unset_env_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An unset connection env var raises InputSourceError (the route maps it to a 503)."""
+    monkeypatch.delenv("MISSING_DSN", raising=False)
+    with pytest.raises(InputSourceError, match="MISSING_DSN"):
+        list_tables("MISSING_DSN")
+
+
+def test_list_tables_bad_dsn_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An unreachable/bad DSN raises InputSourceError rather than an opaque driver error."""
+    monkeypatch.setenv("TEST_DSN", "not-a-valid-url")
+    with pytest.raises(InputSourceError):
+        list_tables("TEST_DSN")
 
 
 # --------------------------------------------------------------------------- #

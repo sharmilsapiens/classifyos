@@ -84,6 +84,21 @@ export interface MlflowConfig {
   run_name?: string | null
 }
 
+/**
+ * Where a run's data comes from (Interim 2b). Mirrors backend/api/models.py `InputSourceConfig`.
+ * The default `{ type: "file" }` reads `input_file` from storage exactly as before; a
+ * `{ type: "postgres", connection_env, table }` (or `query`) materializes the table/query to
+ * `input_file` before the run and the pipeline reads that snapshot. `connection_env` is the NAME
+ * of a server-side env var holding the DSN — never a credential. Set by the DB-source picker on
+ * Upload; carried on the run request ONLY when a DB source was chosen (a file run omits it).
+ */
+export interface InputSourceConfig {
+  type: "file" | "postgres"
+  connection_env: string
+  table?: string | null
+  query?: string | null
+}
+
 export type ProblemType = "binary" | "multiclass" | "multilabel"
 export type ClassBalance = "smote" | "undersample" | "class_weight" | "none"
 
@@ -118,6 +133,12 @@ export interface RunConfig {
   input_file: string // storage key — usually an /upload server_path
   target: string
   feature_cols: string[] // at least one
+  /**
+   * OPTIONAL (Interim 2b). Present ONLY when the run should draw its data from a database
+   * (the "Import from database" picker); omitted for a normal file upload, so a file run's
+   * request is byte-identical to before (the server defaults input_source to `{ type: "file" }`).
+   */
+  input_source?: InputSourceConfig
   // problem framing
   problem_type: ProblemType
   test_size: number
@@ -577,6 +598,19 @@ export interface InspectProfile {
   correlation?: CorrelationMatrix | null
   profile_sampled?: boolean
   n_rows_profiled?: number
+  /**
+   * present ONLY when this profile came from the DB picker (POST /input-sources/select): the
+   * `input_source` block the run should use so the actual /run reads from Postgres (Interim 2b).
+   * Absent for a normal file upload. The store copies it onto the run form.
+   */
+  input_source?: InputSourceConfig
+}
+
+/** GET /api/v1/input-sources/tables → the tables available in the input DB. Consumed by: Upload. */
+export interface InputTablesResponse {
+  /** the env var whose DSN was read (never the credential itself). */
+  connection_env: string
+  tables: string[]
 }
 
 /** POST /api/v1/explain → v1.0 structured stub. Consumed by: Explainability. */

@@ -105,6 +105,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
       form: {
         ...s.form,
         input_file: profile.server_path,
+        // A DB selection (POST /input-sources/select) carries an `input_source` block so the run
+        // reads from Postgres (Interim 2b); a plain file upload has none → null (file source). The
+        // same plumbing serves both, so the file-upload path is unchanged.
+        input_source: profile.input_source ?? null,
         // Seed problem type from the inspection if it offered one.
         problem_type: profile.suggested_problem_type ?? s.form.problem_type,
         // Reset target/features — the user picks these on Upload/Configure.

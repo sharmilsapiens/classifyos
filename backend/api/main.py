@@ -43,7 +43,7 @@ from fastapi import FastAPI  # noqa: E402
 from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
 
 from .deps import get_storage  # noqa: E402
-from .routes import explain, health, outputs, run, runs, upload  # noqa: E402
+from .routes import explain, health, input_sources, outputs, run, runs, upload  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -102,5 +102,13 @@ app.add_middleware(
 
 # Mount each router under /api/v1 (CLAUDE.md mandates the /api/v1/ prefix; the scope doc's
 # bare /api/... table is superseded — recorded as a plan_tweak deviation).
-for router in (health.router, upload.router, run.router, runs.router, explain.router, outputs.router):
+for router in (
+    health.router,
+    upload.router,
+    input_sources.router,
+    run.router,
+    runs.router,
+    explain.router,
+    outputs.router,
+):
     app.include_router(router, prefix=API_PREFIX)

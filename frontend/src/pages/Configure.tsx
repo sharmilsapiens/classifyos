@@ -373,20 +373,10 @@ export default function Configure() {
           </CardContent>
         </Card>
 
-        {/* Run tracking — opt-in MLflow logging. UI default is ON (see DEFAULT_FORM_STATE),
-            deliberately differing from the engine/API default of OFF. */}
-        <Card>
-          <CardHeader><CardTitle>Run tracking</CardTitle></CardHeader>
-          <CardContent>
-            <Field label="Log this run to MLflow (run history + saved models)"
-              hint="Records this run to the server's MLflow store so it appears in Runs and its models are saved for reload. Silently skipped if the store isn't configured or reachable — no error, the run still completes.">
-              <Switch id="mlflow_enabled" label="Log run to MLflow" checked={form.mlflow_enabled}
-                onChange={(e) => updateForm({ mlflow_enabled: e.target.checked })} />
-            </Field>
-          </CardContent>
-        </Card>
-
-        {/* LLM narrative context — only when the narrative toggle is on. Shapes the prompt, not the ML. */}
+        {/* LLM narrative context — only when the narrative toggle is on. Placed right after
+            Post-training analysis (the card whose "Narrate predictions with an LLM" toggle reveals
+            it) so it reads as that toggle's settings, not detached below Run tracking. Shapes the
+            prompt, not the ML. */}
         {form.explain_enabled && form.explain_llm && (
           <Card>
             <CardHeader>
@@ -441,6 +431,19 @@ export default function Configure() {
             </CardContent>
           </Card>
         )}
+
+        {/* Run tracking — opt-in MLflow logging. UI default is ON (see DEFAULT_FORM_STATE),
+            deliberately differing from the engine/API default of OFF. */}
+        <Card>
+          <CardHeader><CardTitle>Run tracking</CardTitle></CardHeader>
+          <CardContent>
+            <Field label="Log this run to MLflow (run history + saved models)"
+              hint="Records this run to the server's MLflow store so it appears in Runs and its models are saved for reload. Silently skipped if the store isn't configured or reachable — no error, the run still completes.">
+              <Switch id="mlflow_enabled" label="Log run to MLflow" checked={form.mlflow_enabled}
+                onChange={(e) => updateForm({ mlflow_enabled: e.target.checked })} />
+            </Field>
+          </CardContent>
+        </Card>
 
         {/* Feature engineering — TEMPORARILY HIDDEN (Section 7 derived features unwired
             from the backend). Restore this card to re-expose the controls. The engine

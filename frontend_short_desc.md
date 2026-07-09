@@ -475,6 +475,34 @@ defaults **ON** so runs land in the Runs page by default.
   this just surfaces it. New build-payload + Configure render tests cover the default-ON payload and
   the toggle flip. **142 vitest green (+3) · tsc + build clean.**
 
+## Import from database — pick a table instead of uploading (✅ Done, 2026-07-09)
+**In one line:** The Upload page gained a source switch — **"Upload a file"** (today's flow) vs
+**"Import from database"** — so you can run on a table drawn from the input database by picking it
+from a list, no hand-crafted request.
+- **Why it exists.** The Postgres input source has worked at the engine + API layer since Interim
+  2b, but the only way to use it was to hand-build a `/run` request with an `input_source` block.
+  This adds the missing UI (plus the two small read endpoints it needs).
+- **The switch.** A two-tab control at the top of Upload. **File** mode is the unchanged drag-drop
+  drop zone. **Database** mode shows a `DatabaseSourcePanel` that fetches `GET /input-sources/tables`
+  and lists the tables as a **selectable list** (the primary control); a small **SQL query box** is
+  offered as a secondary/advanced path.
+- **Selecting behaves exactly like an upload.** Picking a table (or running a query) calls
+  `POST /input-sources/select`, which materializes + profiles it and returns the **same
+  `InspectProfile` shape** as `/upload` — so it flows through the **same `applyUpload` store
+  plumbing** and drops the user into the unchanged Configure flow (same target + feature pickers,
+  Data Profile, everything). The one addition: the profile carries an `input_source` block, which
+  `applyUpload` copies onto the run form so the actual run reads from Postgres (Interim 2b). A small
+  "database" badge on the Upload profile card shows when the active source is a DB table.
+- **Additive + honest states.** The file-upload path is untouched (the run request omits
+  `input_source` unless a DB source was chosen — `buildPayload` only emits it when set). The DB
+  panel handles **loading**, **database unreachable** (503 → a readable error with retry), and an
+  **empty table list** — never a blank screen. New types (`InputSourceConfig` / `InputTablesResponse`,
+  `RunConfig.input_source?`, `InspectProfile.input_source?`) + client calls (`listInputTables` /
+  `selectInputTable`) mirror the contract exactly. New tests: buildPayload (DB selection sets
+  `input_source`; a file run omits it), the store (`applyUpload` carries the block), and Upload page
+  render (source switch + DB list + empty/unreachable states). **151 vitest green (+9) · tsc + build
+  clean.**
+
 ---
 
 ## How to read this project
