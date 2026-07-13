@@ -142,6 +142,87 @@ Press **Ctrl+C** in each terminal.
 
 ---
 
+## Optional — Run history & saved models (MLflow)
+
+Everything above works **without** MLflow. This section is only needed if you want past runs to
+persist (survive a browser refresh / server restart) and models to be saved for reload — the
+**Runs** page in the app is backed by an MLflow store.
+
+The Configuration page has a **"Log this run to MLflow"** toggle (on by default). If no store is
+configured or reachable it is **silently skipped** — the run still completes normally, it just
+isn't recorded. So there are three levels:
+
+### Level 0 — do nothing
+Leave it as-is. Runs are not recorded; the Runs page stays empty. The app is fully functional.
+
+### Level 1 — local store, zero setup
+Leave the MLflow env vars **unset** (they are commented out in `.env.example`). The first time a
+run is logged, MLflow creates a local **sqlite `mlflow.db`** (run history) plus an **`./mlruns`**
+folder (artifacts) **next to wherever you launched the backend** — normally `backend/`. Both are
+gitignored. Runs now appear on the Runs page and survive a refresh and a restart. No Postgres, no
+extra install (`mlflow` is already installed by Step 4).
+
+### Level 2 — Postgres backend + local artifact folder (Interim 2a)
+Run history/params/metrics live in a **local PostgreSQL** (SQL-queryable); the PNGs, CSVs and saved
+models stay a local **folder**. This is the full "Interim 2a" stack. It is **configuration only** —
+no code changes.
+
+The Python drivers (`mlflow`, `SQLAlchemy`, `psycopg2-binary`) are already installed by Step 4.
+The extra setup is Postgres + two env vars:
+
+**1. Install PostgreSQL 17** (once). Easiest via winget:
+
+```powershell
+winget install PostgreSQL.PostgreSQL.17
+```
+
+This installs the `postgresql-x64-17` Windows service (auto-starts on boot, port 5432) with a
+`postgres` superuser. The CLI (`psql`) lands in `C:\Program Files\PostgreSQL\17\bin`.
+
+**2. Create the app database and role** (run as the `postgres` superuser — it will prompt for the
+password you set during install). These are **dev-only** credentials:
+
+```powershell
+& "C:\Program Files\PostgreSQL\17\bin\psql.exe" -U postgres -c "CREATE ROLE classifyos WITH LOGIN PASSWORD 'classifyos';"
+& "C:\Program Files\PostgreSQL\17\bin\psql.exe" -U postgres -c "CREATE DATABASE mlflow OWNER classifyos;"
+```
+
+MLflow auto-creates its tables inside the empty `mlflow` database on first use — no migration step.
+
+**3. Create the artifact folder** (kept outside the repo, same as the data folders):
+
+```powershell
+New-Item -ItemType Directory -Force C:\Projects\classifyos_data\mlflow-artifacts
+```
+
+**4. Point `.env` at both stores.** Open `backend\.env` and uncomment/set these two lines:
+
+```ini
+MLFLOW_TRACKING_URI=postgresql://classifyos:classifyos@localhost:5432/mlflow
+_MLFLOW_SERVER_ARTIFACT_ROOT=file:///C:/Projects/classifyos_data/mlflow-artifacts
+```
+
+> On Windows the artifact root **must** be a `file://` URI — a bare `C:/...` path is misparsed (the
+> drive letter looks like a URI scheme). Keep the leading underscore on `_MLFLOW_SERVER_ARTIFACT_ROOT`;
+> it is MLflow's own env var for the default artifact root when the backend store is a database.
+
+**5. Restart the backend.** The API reads `.env` **once at startup**, so a backend that was already
+running will not see the new vars until you stop it (Ctrl+C) and re-run the `uvicorn` command from
+Step 6.
+
+**6. Run and check.** Enable *"Log this run to MLflow"* on the Configuration page (it is on by
+default), run a pipeline, then open the **Runs** page — the run should be listed and reload into the
+result pages, and its params/metrics now live in Postgres while its files land under
+`C:\Projects\classifyos_data\mlflow-artifacts`.
+
+To wipe the run history and start clean:
+
+```powershell
+& "C:\Program Files\PostgreSQL\17\bin\psql.exe" -U postgres -c "DROP DATABASE mlflow WITH (FORCE); CREATE DATABASE mlflow OWNER classifyos;"
+```
+
+---
+
 ## Troubleshooting
 
 | Symptom | Fix |
@@ -152,6 +233,9 @@ Press **Ctrl+C** in each terminal.
 | `npm run dev` fails | Run `npm install` in `frontend/` first; check Node.js is installed. |
 | Backend prints "DATA_DIR not found" | Check the path in `backend\.env` matches the folder you created. |
 | Page loads but Run produces no results | Make sure the CSV is in the `DATA_DIR` folder, not in the project folder. |
+| Runs page stays empty after a logged run | The MLflow store isn't reachable so logging was silently skipped — check `MLFLOW_TRACKING_URI` in `.env` and that you **restarted** the backend after editing it. |
+| MLflow logs go to sqlite/`./mlruns`, not Postgres | The backend was started before the Postgres env vars were set — `.env` is read once at startup, so restart the `uvicorn` process. |
+| MLflow error about the artifact root | On Windows `_MLFLOW_SERVER_ARTIFACT_ROOT` must be a `file:///C:/...` URI, not a bare path. |
 
 ---
 
