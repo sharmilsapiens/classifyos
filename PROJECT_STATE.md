@@ -4,8 +4,59 @@
 > A copy is uploaded to the ClassifyOS Claude Project knowledge after each update so the
 > planning/overseer chat stays in sync with the local repo.
 
-**Last updated:** 2026-07-09
-**Updated by:** Claude Code (**NEW — Imputation controls hidden where there's nothing to impute
+**Last updated:** 2026-07-14
+**Updated by:** Claude Code (**NEW — Databricks I/O Phase B, Steps 1 & 2: `DatabricksVolumeStorage`
++ wheel packaging (ENGINE build-tooling only; ADDITIVE/opt-in; NO engine-section change, NO API/
+contract change, `schema_version` stays 1.10).** Implements `docs/databricks_integration.md` §6.6
+**Steps 1 & 2** (Enhancement Guide 1 + 4a) — both locally testable, no cluster. Off by default: a
+local run with no new env vars set is byte-for-byte identical to before. **(1) Step 1 —
+`DatabricksVolumeStorage` (`classifyos/io/storage.py`).** A thin subclass of `LocalFolderStorage`:
+Unity Catalog volumes expose POSIX `/Volumes/<catalog>/<schema>/<vol>/...` paths usable with plain
+`open()`/pandas, so the adapter is just `LocalFolderStorage` with its two roots pointed at volume
+paths — **no pipeline code changes** (every read/write already goes through the StorageAdapter).
+Per-root constructor resolution, first-set-wins: (a) `data_dir`/`output_dir` passed to `__init__`
+(notebook use) → (b) `DBRICKS_INPUT_VOLUME`/`DBRICKS_OUTPUT_VOLUME` env vars → (c) the existing
+`DATA_DIR`/`OUTPUT_DIR` defaults. `get_default_storage()` now selects it when
+`CLASSIFYOS_STORAGE_BACKEND=databricks`, **or** `DBRICKS_INPUT_VOLUME` is present and the backend
+flag isn't explicitly set to something else; otherwise (the default) it returns `LocalFolderStorage`
+exactly as before. Module docstring updated (Databricks adapter no longer "future"); the three new
+env vars documented (commented) in `.env.example`. **(2) Step 2 — wheel packaging
+(`backend/pyproject.toml`, NEW).** Build metadata so the pure-Python engine can be packaged as a
+`.whl` and `%pip install`ed on a cluster (the notebook plays `cli.py`'s role). Purely build tooling
+— **no engine code changed**. `[tool.setuptools.packages.find]` includes **only `classifyos*`** —
+the FastAPI `api` layer is deliberately NOT packaged, so the engine stays web-free (fastapi/uvicorn/
+pydantic are not wheel deps). `dist/`+`build/` added to `.gitignore` (wheel not committed).
+**Hallucination check ✅ FIRST** against the installed toolchain (Python 3.11.0, setuptools 65.5.0,
+build 1.5.1) — caught **two errors in the reference guide** and corrected them: **(i)** the guide's
+`build-backend = "setuptools.backends.legacy:build"` does **not exist** (import fails); corrected to
+the real `setuptools.build_meta` (verified it exposes `build_wheel`). **(ii)** the guide's
+`dependencies` list omitted `openai` and `psycopg2-binary`, which ARE engine (`classifyos`) runtime
+deps in `requirements.txt` (lazy-imported by `analysis/llm_explain.py` and the Postgres path of
+`io/sql_source.py`) — added so the wheel's 16 deps match the "ML engine" section of
+`requirements.txt` **name-for-name and range-for-range**. `python -m build --wheel` built cleanly →
+`backend/dist/classifyos-1.0.0-py3-none-any.whl` (147 KB; wheel `top_level.txt` = `classifyos` only;
+confirmed **no `api/` or `tests/` files leaked** into it). **Tests:** new `tests/test_storage.py`
+(+7 — no-env → `LocalFolderStorage`; `CLASSIFYOS_STORAGE_BACKEND=databricks` → `DatabricksVolumeStorage`;
+`DBRICKS_INPUT_VOLUME`-only → `DatabricksVolumeStorage`; explicit non-databricks backend keeps Local
+even with a volume set; databricks-backend-but-no-volume falls back to `DATA_DIR`/`OUTPUT_DIR`;
+constructor args beat env vars; a save→read→write round-trip inherits `LocalFolderStorage` I/O
+unchanged), each asserting the resolved roots; all via `monkeypatch` on env vars with roots pointed
+at `tmp_path` — **no real filesystem, no cluster**. **Full backend 424 pytest green (+7 net; was 417),
+exit 0.** **Verified LIVE end-to-end** driving the engine the notebook way: with
+`CLASSIFYOS_STORAGE_BACKEND=databricks` and the two volume roots pointed at LOCAL folders
+(`DBRICKS_INPUT_VOLUME` = the real `DATA_DIR`, `DBRICKS_OUTPUT_VOLUME` = a fresh temp dir),
+`get_default_storage()` returned a `DatabricksVolumeStorage`, roots resolved to the volume paths, and
+a real `ModelRunner` run on `policy_lapse.csv` (LR+RF, binary) trained both models
+(f1_weighted≈0.64/0.58) and wrote **all 12 artifacts** (5 CSVs, 5 PNGs, `run_profile.json`) into the
+output volume — identical to `LocalFolderStorage`. Generation prompt archived at
+`prompts/backend_phases/phase_B_databricks_storage_and_wheel.md`. **No plan_tweak entry** — this
+executes `docs/databricks_integration.md` §6.6 Steps 1–2 as planned; the two guide corrections are
+reference-doc fixes (governance hallucination-check), not plan deviations. **Out of scope (untouched,
+still deferred — need cluster access):** Step 3 (MLflow `MLFLOW_TRACKING_URI=databricks` env wiring,
+zero code), Step 4 (`materialize_delta_source` Delta input), Step 5 (cluster smoke-test notebook),
+Step 6 (FastAPI→Databricks Jobs orchestration); the FastAPI layer and every engine section are
+untouched.)
+**Prior update (2026-07-09):** Claude Code (**NEW — Imputation controls hidden where there's nothing to impute
 (FRONTEND-ONLY; NO engine/API/contract change, NO `schema_version` bump — stays 1.10).** User feedback:
 the Configuration imputation UI offered a fill method even where none was needed. Two fixes, both pure
 display logic over data the `/upload` profile already returns (`ColumnProfile.n_missing`/`.missing_pct`).

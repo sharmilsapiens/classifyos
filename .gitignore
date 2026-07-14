@@ -6,6 +6,13 @@ __pycache__/
 .mypy_cache/
 .ruff_cache/
 
+# --- Wheel build artifacts (backend/pyproject.toml; Databricks Phase B, §6.6 Step 2) ---
+# `python -m build --wheel` output + setuptools' intermediate build tree. Not committed.
+dist/
+build/
+backend/dist/
+backend/build/
+
 # Virtual environments
 .venv/
 backend/.venv/

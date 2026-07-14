@@ -1,17 +1,34 @@
 # ClassifyOS — Databricks Integration: Design & Phased Roadmap
 
-> **Status:** design note (no code changed yet). Written 2026-07-08.
+> **Status:** active — Phase B in progress. §6.6 Steps 1 (`DatabricksVolumeStorage`) and 2
+> (wheel packaging) are DONE and verified locally (2026-07-14); Steps 3–6 pending cluster
+> access. Updated 2026-07-14.
 > **Purpose:** answer, in one place, *how the project would run on Databricks*, *what
 > "deploy as a library" means*, *how input/output and model weights should be handled*,
 > and *where the current React dashboard fits*. Databricks/MLflow specifics below were
 > verified against Microsoft Learn (Azure Databricks docs), not written from memory.
 >
-> **⚠ Reprioritization (2026-07-08):** Databricks integration is **temporarily deferred**.
-> After Phase A (MLflow logging), the near-term work is an **interim local phase** that stands
-> up a **local Postgres** as (2a) MLflow's backend store and (2b) an optional input source —
-> "everything we can do on this machine before Databricks." Phases B/C (volume adapter, Model
-> Serving) are parked until Databricks is back on the table. See §6.5. This is a genuine,
-> reversible deviation from the roadmap below → log a `plan_tweak.md` entry when built.
+> **Deployment target (2026-07-14):** Azure-hosted FastAPI as orchestration layer →
+> Databricks Jobs for compute. Phase B (I/O adapter + wheel) is the prerequisite for that
+> orchestration — FastAPI cannot submit a meaningful Databricks Job until the engine runs
+> cleanly on the cluster with Unity Catalog I/O. See §6.6 for the active execution plan.
+
+---
+
+## Current status — what is done
+
+| Phase | Item | Status |
+|---|---|---|
+| Phase A | MLflow logging in `ModelRunner` (opt-in, lazy, report-only) | ✅ Done |
+| Interim 2a | MLflow backend store = Postgres (run history, persistent) | ✅ Done |
+| Interim 2b | Postgres as input source (materialize-to-file) | ✅ Done |
+| Phase B | `DatabricksVolumeStorage` + `get_default_storage()` update | ✅ Done (§6.6 Step 1, 2026-07-14) |
+| Phase B | Delta table input source (`materialize_delta_source`) | 🔲 Next (needs cluster to test) |
+| Phase B | MLflow env-var wiring for managed tracking server | 🔲 Next (zero code) |
+| Phase B | Wheel packaging (`pyproject.toml`) | ✅ Done (§6.6 Step 2, 2026-07-14) |
+| Orchestration | Async API + Databricks Jobs REST integration (FastAPI layer) | 🔲 After Phase B |
+| Phase C | Unity Catalog Model Registry + Model Serving endpoint | 🔲 Deferred |
+| Phase D | Persistent dashboard / run history UI | 🔲 Deferred |
 
 ---
 
@@ -259,12 +276,163 @@ Cap the interim work at Phase A + 2a + 2b. Do **not** build the deferred Databri
 
 ---
 
-## 8. Open questions (to confirm before Phase A code)
+## 8. Open questions (resolved 2026-07-14)
 
-1. **Environment:** Azure Databricks with **Unity Catalog volumes** (assumed) vs. legacy DBFS?
-   Managed MLflow assumed.
-2. **Weight sharing:** MLflow Registry as primary (recommended). Also build the portable joblib
-   bundle as an offline fallback — yes/no?
-3. **Model scope for serving:** serve only the best model per run, or every model?
-4. **Dashboard target:** re-home the existing FastAPI backend (Option A) as the near-term step,
-   with serving (B) / history (C) later — confirm this ordering.
+1. **Environment:** Azure Databricks, Unity Catalog volumes confirmed. Managed MLflow confirmed.
+   Cluster: Standard_E8ds_v5 (64 GB, 8 cores), Databricks Runtime 18.2 / Spark 4.1.0.
+2. **Weight sharing:** MLflow Registry as primary. Portable joblib bundle deferred (Phase C).
+3. **Model scope for serving:** best model per run only (Phase C, deferred).
+4. **Dashboard target:** FastAPI re-homed to Azure (Option A) as orchestration layer.
+   Databricks Apps not used — FastAPI submits Jobs, it does not run inside Databricks.
+
+---
+
+## 6.6 Active execution plan — Phase B (I/O + wheel) → Orchestration
+
+This is the current work order. Each step is independently testable before the next.
+
+### Step 1 — `DatabricksVolumeStorage` (testable locally today) — ✅ DONE (2026-07-14)
+
+File: `backend/classifyos/io/storage.py`
+
+Add `DatabricksVolumeStorage` as a thin subclass of `LocalFolderStorage` — roots pointed
+at Unity Catalog volume paths from env vars. Update `get_default_storage()` to select it
+when `CLASSIFYOS_STORAGE_BACKEND=databricks` or `DBRICKS_INPUT_VOLUME` is set.
+
+**Local test:** set `DBRICKS_INPUT_VOLUME` to a local folder → engine must behave
+identically to `LocalFolderStorage`. No cluster needed.
+
+New env vars:
+```
+CLASSIFYOS_STORAGE_BACKEND=databricks
+DBRICKS_INPUT_VOLUME=/Volumes/main/classifyos/data/input
+DBRICKS_OUTPUT_VOLUME=/Volumes/main/classifyos/data/output
+```
+
+Detail: `ClassifyOS_Databricks_Enhancement_Guide.md` Enhancement 1 (~60 lines).
+Implemented + unit-tested + verified end-to-end (local folders as volume roots) 2026-07-14.
+
+---
+
+### Step 2 — Wheel packaging (`pyproject.toml`) — ✅ DONE (2026-07-14)
+
+File: `backend/pyproject.toml` (new)
+
+Add build metadata so the engine can be packaged as a `.whl` and installed on the cluster.
+No engine code changes — purely build tooling. Packages ONLY the `classifyos` engine (not the
+web-free-breaking `api` layer). **Guide corrections applied + hallucination-checked:** the
+build backend is `setuptools.build_meta` (the guide's `setuptools.backends.legacy:build` does
+not exist), and the dependency list adds `openai` + `psycopg2-binary` so it matches the "ML
+engine" section of `requirements.txt` exactly. Built cleanly →
+`backend/dist/classifyos-1.0.0-py3-none-any.whl` (`dist/` gitignored).
+
+```bash
+cd backend/
+pip install build
+python -m build --wheel
+# produces: dist/classifyos-1.0.0-py3-none-any.whl
+```
+
+Upload the wheel to a Unity Catalog volume so the cluster can install it:
+```bash
+databricks fs cp dist/classifyos-1.0.0-py3-none-any.whl \
+    dbfs:/Volumes/main/classifyos/libs/classifyos-1.0.0-py3-none-any.whl
+```
+
+Detail: `ClassifyOS_Databricks_Enhancement_Guide.md` Enhancement 4.
+
+---
+
+### Step 3 — MLflow env-var wiring (zero code)
+
+Set on the cluster (Compute → Edit → Advanced → Environment Variables):
+```
+MLFLOW_TRACKING_URI=databricks
+MLFLOW_REGISTRY_URI=databricks-uc
+```
+
+The existing `mlflow_logging.py` reads `MLFLOW_TRACKING_URI` and never sets it — it
+automatically routes to the managed tracking server with no code change.
+
+---
+
+### Step 4 — Delta table input source (needs cluster for end-to-end test)
+
+Files: `backend/classifyos/io/sql_source.py`, `config.py`, `runner.py`
+
+Add `materialize_delta_source()` — identical discipline to the existing Postgres
+materialize-to-file pattern. Reads a Unity Catalog Delta table via `spark.table()`,
+converts to pandas, writes a Parquet snapshot to the volume input root, then the normal
+pipeline runs unchanged on that file.
+
+Config:
+```python
+"input_source": {
+    "type":    "delta",
+    "catalog": "main",
+    "schema":  "insurance",
+    "table":   "policy_lapse",
+}
+```
+
+Lazy PySpark import — outside a cluster this raises a clear `InputSourceError`, never
+crashes a local file run.
+
+Detail: `ClassifyOS_Databricks_Enhancement_Guide.md` Enhancement 2 (~80 lines).
+
+---
+
+### Step 5 — Smoke test on cluster (notebook)
+
+Install the wheel on the cluster, run a small Delta table end-to-end, verify:
+- `DatabricksVolumeStorage` reads/writes to the correct UC volume paths
+- MLflow experiment appears in the Databricks Experiments UI
+- Artifacts (PNGs, CSVs, `run_profile.json`) land in the output volume
+- No engine code changes were needed
+
+A notebook template for this smoke test is in `ClassifyOS_Databricks_Enhancement_Guide.md`
+Enhancement 4b.
+
+---
+
+### Step 6 — Orchestration layer (FastAPI on Azure → Databricks Jobs)
+
+**After Steps 1–5 are verified on the cluster**, the engine runs cleanly as a Databricks
+Job. The orchestration layer is then built in the FastAPI layer (`backend/api/`):
+
+- `POST /api/v1/run` → submits a Databricks Job via `POST /api/2.1/jobs/runs/submit`,
+  returns `{ job_id }` immediately (async — no blocking)
+- `GET /api/v1/run/{job_id}/status` → polls `GET /api/2.1/jobs/runs/get`
+- `GET /api/v1/run/{job_id}/results` → fetches artifacts from UC volume once complete
+- Persistent job state in Postgres (reuse existing MLflow Postgres) so FastAPI restarts
+  don't lose in-flight job_ids
+- User's Databricks PAT passed in request, used for UC data access, never persisted
+
+Full detail: `docs/enabling_parallelization.md` items 1–4.
+
+---
+
+### How Steps 1–6 connect end-to-end
+
+```
+Browser (React UI)
+  │  run config + UC data path + PAT
+  ▼
+FastAPI (Azure — Step 6)
+  │  POST /api/2.1/jobs/runs/submit  (user PAT for data auth)
+  ▼
+Databricks Job
+  │  %pip install classifyos wheel  (Step 2)
+  │  CLASSIFYOS_STORAGE_BACKEND=databricks  (Step 1)
+  │  MLFLOW_TRACKING_URI=databricks  (Step 3)
+  ├─ reads Delta table → materialize_delta_source → Parquet snapshot  (Step 4)
+  ├─ runs ModelRunner on 8 cores (n_jobs=-1)
+  └─ writes artifacts to UC volume + logs to MLflow
+  ▼
+FastAPI polls job status → fetches results from UC volume
+  ▼
+Browser dashboard populated
+```
+
+Steps 1–5 are the engine side — testable now, no orchestration needed.
+Step 6 is the API/orchestration layer — built after Steps 1–5 are verified.

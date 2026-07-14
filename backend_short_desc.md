@@ -622,6 +622,43 @@ whimsical name ("capable-fox-123"), so the dashboard's Runs list reads meaningfu
   mapping. Pure standard-library date formatting — no new dependency, no schema/version change.
   +4 engine tests (**406 backend pytest green**).
 
+## Databricks I/O — volume storage adapter + wheel packaging (Phase B, Steps 1 & 2) (✅ Done, 2026-07-14)
+**In one line:** Added a storage adapter that points the engine at Databricks Unity Catalog
+"volumes" (cloud folders) instead of local disk, and the build recipe to package the engine as an
+installable `.whl` — the two groundwork pieces for running ClassifyOS on a Databricks cluster, both
+built and tested entirely locally with no cluster needed.
+- **Why:** the next step of the Databricks plan (`docs/databricks_integration.md` §6.6, Steps 1 & 2).
+  To run the engine on a cluster you need (a) it to read/write the cluster's storage, and (b) it
+  wrapped as a library the cluster can install. Both were designed to be verifiable on this machine
+  first, so nothing here is speculative.
+- **The storage adapter (`DatabricksVolumeStorage`).** A Unity Catalog volume is just a cloud folder
+  exposed at an ordinary-looking path (`/Volumes/main/classifyos/data/input`) that plain Python can
+  read and write like any local folder. So the new adapter is a **thin wrapper** over the existing
+  local-folder one, with its input/output roots pointed at those volume paths (taken from env vars).
+  Crucially, **no engine code changed** — every part of the pipeline already reads and writes through
+  the one "file gateway" (the StorageAdapter rule), so it neither knows nor cares whether a path is
+  `C:/Projects/...` or `/Volumes/main/...`.
+- **Opt-in, zero change for local runs.** The engine picks the Databricks adapter only when you set
+  `CLASSIFYOS_STORAGE_BACKEND=databricks` (or just point `DBRICKS_INPUT_VOLUME` at a volume);
+  otherwise it uses the local-folder adapter exactly as before. A local run with none of these set is
+  **byte-for-byte identical** to today. The three new env vars are documented in `.env.example`.
+- **The wheel recipe (`pyproject.toml`).** A new build-metadata file so the engine can be packaged as
+  a standard installable wheel (`classifyos-1.0.0-py3-none-any.whl`) and `pip install`ed on a cluster.
+  It packages **only the ML engine**, deliberately leaving out the web/API layer so the engine stays
+  web-free, and its dependency list is kept **identical** to the engine section of the requirements
+  file. Build outputs are git-ignored (not committed).
+- **Caught two mistakes in the reference guide.** The project's hallucination-check rule paid off:
+  the guide named a build backend that doesn't actually exist (fixed to the real one), and its
+  dependency list was missing two libraries the engine genuinely uses (added back) — both verified
+  against the installed tools before finalising.
+- **Verified.** +7 new tests for the adapter-selection logic (which adapter you get for each
+  combination of env vars, and that the resolved folders are correct) — **424 backend pytest green**;
+  the wheel builds cleanly; and a real end-to-end run (with the "volumes" pointed at local folders)
+  trained two models and wrote all 12 output files to the output volume, identical to a normal local
+  run. **Still deferred (need a real cluster):** the Delta-table input source, the MLflow
+  managed-server wiring, the cluster smoke-test notebook, and the FastAPI→Databricks-Jobs
+  orchestration. The API layer and every engine stage are untouched.
+
 ---
 
 ## How to read this project

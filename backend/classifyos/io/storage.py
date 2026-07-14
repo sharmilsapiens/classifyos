@@ -3,10 +3,12 @@
 ALL file I/O in the ML engine and API MUST go through a ``StorageAdapter``.
 Pipeline code must never call :func:`open` directly or hardcode filesystem paths.
 
-Today the only concrete adapter is :class:`LocalFolderStorage`, which reads/writes
-under the ``DATA_DIR`` (inputs) and ``OUTPUT_DIR`` (artifacts) folders configured via
-environment variables. A future ``DatabricksVolumeStorage`` (Unity Catalog volumes) can
-be dropped in behind the same interface without touching pipeline code.
+:class:`LocalFolderStorage` reads/writes under the ``DATA_DIR`` (inputs) and
+``OUTPUT_DIR`` (artifacts) folders configured via environment variables.
+:class:`DatabricksVolumeStorage` is a thin subclass of it whose roots point at Unity
+Catalog volume paths (Databricks Runtime 13.3 LTS+, POSIX-style ``/Volumes/...``) — a
+drop-in behind the same interface, selected at startup by :func:`get_default_storage`
+without touching any pipeline code.
 
 Resolution rules (LocalFolderStorage):
     * A logical key is interpreted relative to a *root* — ``DATA_DIR`` for reads of
@@ -166,6 +168,56 @@ class LocalFolderStorage(StorageAdapter):
         return str(path)
 
 
+class DatabricksVolumeStorage(LocalFolderStorage):
+    """Unity Catalog volume adapter (Databricks Runtime 13.3 LTS+).
+
+    Unity Catalog volumes expose POSIX paths (``/Volumes/<catalog>/<schema>/<vol>/...``)
+    that are directly usable with Python :func:`open`, ``pathlib``, pandas, and
+    matplotlib — from the engine's perspective a volume path is indistinguishable from a
+    local folder. This adapter is therefore a *thin* subclass of
+    :class:`LocalFolderStorage` whose two roots default to volume paths taken from the
+    environment. No pipeline code changes: every ``open_read``/``open_write``/``path_for``
+    call resolves through the inherited local-folder logic.
+
+    Root resolution (first that is set wins), per root:
+        1. ``data_dir`` / ``output_dir`` passed directly to ``__init__`` (useful in a
+           notebook where the catalog/schema/volume are known at runtime).
+        2. ``DBRICKS_INPUT_VOLUME`` / ``DBRICKS_OUTPUT_VOLUME`` env vars — the volume
+           paths, e.g. ``/Volumes/main/classifyos/data/input``.
+        3. ``DATA_DIR`` / ``OUTPUT_DIR`` (the existing local defaults), then the same
+           ultimate ``data`` / ``classification_output`` relative fallbacks.
+
+    All ``StorageAdapter`` guarantees (path-traversal protection, parent-directory
+    creation, the input-vs-output root split) are inherited unchanged.
+    """
+
+    def __init__(self, data_dir: str | None = None, output_dir: str | None = None) -> None:
+        resolved_data = (
+            data_dir
+            or os.environ.get("DBRICKS_INPUT_VOLUME")
+            or os.environ.get("DATA_DIR", "data")
+        )
+        resolved_output = (
+            output_dir
+            or os.environ.get("DBRICKS_OUTPUT_VOLUME")
+            or os.environ.get("OUTPUT_DIR", "classification_output")
+        )
+        super().__init__(data_dir=resolved_data, output_dir=resolved_output)
+
+
 def get_default_storage() -> StorageAdapter:
-    """Return the configured storage adapter (currently always local folders)."""
+    """Return the configured storage adapter.
+
+    Selection order:
+        1. ``CLASSIFYOS_STORAGE_BACKEND=databricks``  → :class:`DatabricksVolumeStorage`
+        2. ``DBRICKS_INPUT_VOLUME`` present (and the backend not set to something else)
+           → :class:`DatabricksVolumeStorage`
+        3. default                                    → :class:`LocalFolderStorage`
+
+    Local runs with neither env var set continue to get :class:`LocalFolderStorage` —
+    no behaviour change whatsoever.
+    """
+    backend = os.environ.get("CLASSIFYOS_STORAGE_BACKEND", "").lower()
+    if backend == "databricks" or (not backend and os.environ.get("DBRICKS_INPUT_VOLUME")):
+        return DatabricksVolumeStorage()
     return LocalFolderStorage()
