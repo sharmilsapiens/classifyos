@@ -295,6 +295,28 @@ working exactly as before, because the whole thing is switched on by one setting
   Databricks SDK `ColumnTypeName` enum. Every Databricks call is mocked in the tests. `docs/api_contract.md`
   updated (endpoint table + a dedicated section + footer note).
 
+## Databricks execution-path fixes — results actually display + per-run isolation + MLflow/registry (2026-07-14)
+**In one line:** Made the Databricks Job path actually usable end-to-end — the dashboard now shows the
+full results, runs no longer clobber each other, and trained models are saved to MLflow and registered
+in the model registry. No API-contract change and no engine change (still `1.11`).
+- **Results now render (was "Could not fetch the run results").** The job used to write a *cut-down*
+  results file the dashboard couldn't read; it now writes the **full, standard result envelope** (the
+  same one a local run returns), so every result page — scoreboard, curves, confusion matrix, feature
+  impact — populates exactly as it does locally.
+- **Runs don't overwrite each other.** Each run's output is filed under its own `job_id`
+  (`api/{job_id}/…` for the results file, `artifacts/{job_id}/…` for the plots/CSVs), so a second run
+  never wipes the first. The API mints that `job_id` before submitting and fetches results from the
+  matching per-job path; the exact path is logged for easy diagnosis.
+- **Models are saved + registered.** The job turns on the engine's built-in MLflow logging, so the run's
+  metrics, settings, output files, and **one saved model per algorithm** land in the managed MLflow. The
+  best model (by F1-weighted) is then registered in the Unity Catalog **Model Registry** and given a
+  `champion` alias, so it can be loaded/served by alias. All of this is best-effort: if the user's
+  workspace permissions aren't granted yet, the run still completes and the model is still logged — it
+  just skips the registry step with a warning.
+- **Where it lives.** All fixes are in the API layer + the job's notebook (`notebooks/classifyos_job_runner.py`);
+  the ML engine and the locked `/run` contract are untouched. `test_api_jobs.py` green (including a
+  previously-broken results test, now fixed to mock the file-fetch). Still pending a real-cluster run.
+
 ---
 
 ## How to read this project

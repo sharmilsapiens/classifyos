@@ -51,11 +51,16 @@ All set in `backend/.env` (gitignored). Template in `backend/.env.example`.
 | `DBRICKS_OUTPUT_VOLUME` | UC volume path for run artifacts and result envelope | `/Volumes/aiml_rd/classifyos/output` |
 | `MLFLOW_TRACKING_URI` | Set to `databricks` on cluster to use managed MLflow | `databricks` |
 | `MLFLOW_REGISTRY_URI` | Set to `databricks-uc` on cluster for UC model registry | `databricks-uc` |
+| `CLASSIFYOS_UC_MODEL` | UC model name the best model registers under (notebook; optional) | `aiml_rd.classifyos.classifyos_model` |
 | `CLASSIFYOS_JOBS_DSN` | Postgres DSN for persistent job state (defaults to MLflow Postgres) | `postgresql://...` |
 
 ---
 
 ## 3. Unity Catalog layout
+
+Output is **namespaced per `job_id`** (the FastAPI job handle) so concurrent / successive runs
+never overwrite each other. The result envelope lives under `api/{job_id}/` and every training
+artifact under `artifacts/{job_id}/`.
 
 ```
 aiml_rd  (catalog)
@@ -66,11 +71,19 @@ aiml_rd  (catalog)
     ├── input/    (volume) — Delta table snapshots written here before training
     └── output/   (volume) — artifacts written here after training
         ├── api/
-        │   └── run_response.json  ← result envelope FastAPI fetches
-        ├── plot1.png ... plot6.png
-        ├── classification_results.csv
-        └── run_profile.json
+        │   └── {job_id}/
+        │       └── run_response.json  ← locked /run envelope FastAPI fetches
+        └── artifacts/
+            └── {job_id}/
+                ├── plot1.png ... plot6.png
+                ├── classification_results.csv
+                ├── metrics_comparison.csv (+ the other CSVs)
+                └── run_profile.json
 ```
+
+Trained models are **not** written to the volume as files — they are persisted to the managed
+**MLflow** tracking server (per-model, flavor-native) and the best model is registered in the
+Unity Catalog **Model Registry** as `aiml_rd.classifyos.classifyos_model` (see §7, §13).
 
 ---
 
@@ -111,10 +124,11 @@ aiml_rd  (catalog)
 | Cell | What it does |
 |---|---|
 | 1 | Checks if `classifyos` is importable (wheel installed via task library). Only runs `pip install` if not importable — reads path from `wheel_path` widget, never hardcoded. |
-| 2 | Reads `run_config` (JSON) and `user_token` from Databricks widgets (passed as `base_parameters`) |
+| 2 | Reads `run_config` (JSON), `user_token`, and `job_id` from Databricks widgets (passed as `base_parameters`). `job_id` namespaces all output. |
 | 3 | Sets env vars: `CLASSIFYOS_STORAGE_BACKEND=databricks`, UC volume paths, MLflow URIs. Sets `DATABRICKS_TOKEN` to user's PAT so UC reads run as the user. Adds `backend/` to `sys.path` if running from a Databricks Repo. |
-| 4 | `build_config(input_file, target, feature_cols, **rest)` → `ModelRunner.run()` |
-| 5 | Writes simplified result envelope to `api/run_response.json` on output volume |
+| 4 | Builds per-job `DatabricksVolumeStorage` (`artifacts/{job_id}/`), resolves the MLflow experiment (permission fallback), enables the engine's MLflow logging, `build_config(...)` → `ModelRunner.run()`. |
+| 4b | Registers the best model (`f1_weighted`) as a version of `aiml_rd.classifyos.classifyos_model` + sets the `champion` alias (report-only, permission fallbacks). |
+| 5 | Writes the **full locked** `/run` envelope (`build_run_result` + `RunResponse`) to `api/{job_id}/run_response.json` on the output volume. |
 
 **Important:** The wheel is installed as a **task library** by FastAPI before the notebook runs. The notebook does NOT need a `%pip install` magic command. Cell 1 only falls back to pip if the wheel wasn't installed (standalone run).
 
@@ -125,18 +139,29 @@ aiml_rd  (catalog)
 `GET /api/v1/run/{job_id}/results`:
 
 1. Polls Databricks for current job state
-2. If `COMPLETED`: calls `fetch_uc_file(DBRICKS_OUTPUT_VOLUME + "/api/run_response.json")`
-3. `fetch_uc_file` hits `GET {DATABRICKS_HOST}/api/2.0/fs/files{volume_path}` with service token
+2. If `COMPLETED`: calls `fetch_uc_file(DBRICKS_OUTPUT_VOLUME + "/api/{job_id}/run_response.json")`
+   — the **per-job** key built by `routes/jobs.py::result_envelope_key(job_id)`, the single source
+   of that path shape (the notebook builds the identical path from the same `job_id`, so the write
+   and the fetch can never drift). The exact path fetched is logged (`logging.INFO`) and echoed in
+   the 404 detail, so a mismatch is diagnosable.
+3. `fetch_uc_file` hits `GET {DATABRICKS_HOST}/api/2.0/fs/files{volume_path}` with the service token,
+   through the shared `_build_client` seam (so CI can mock it with `httpx.MockTransport`).
 4. Returns the JSON envelope to the frontend
 
-**Known issue (in progress):** The notebook currently writes a simplified envelope
-`{ status, mlflow_run, metrics, best_model, artifacts_written }` — not the full locked
-`/run` envelope the frontend expects. This means the dashboard shows limited results
-(metrics table only, no charts). Fix options:
-- Option A (correct): Set up Databricks Repos so `backend/` is on `sys.path` in the
-  notebook, then use `api.result_builder.build_run_result` to write the full envelope.
-- Option B (quick): Have `GET /run/{job_id}/results` in FastAPI reshape the simplified
-  envelope by reading the artifacts from the UC volume directly.
+**Resolved (2026-07-14):** the notebook now writes the **full locked `/run` envelope**
+(`{status, schema_version, result, error}`) via the canonical `api.result_builder.build_run_result`
++ `RunResponse` (Option A — Cell 5), so the dashboard renders it byte-identical to a local run.
+Previously Cell 5 wrote a simplified envelope (`{status, mlflow_run, metrics, best_model,
+artifacts_written}`) that the frontend's `parseRunResponse` rejected → "Could not fetch the run
+results." (This is why Option A needs the `api` package on `sys.path` — run the notebook from a
+Databricks Repo checkout, per §11; Cell 3 adds `backend/` to `sys.path`.)
+
+> **Interactive charts vs PNGs.** The dashboard's charts (ROC/PR curves, confusion matrix, feature
+> impact, …) are drawn from the JSON envelope's `result.*` blocks and render fully. The *downloadable
+> PNG* artifacts are still fetched by name via `GET /outputs/{name}`, which reads the local
+> `OUTPUT_DIR` — in Databricks mode the PNGs live on the UC volume under `artifacts/{job_id}/`, so
+> the PNG thumbnails do not load yet. Streaming `/outputs` from the UC volume in Databricks mode is a
+> documented follow-up (§12).
 
 ---
 
@@ -178,7 +203,8 @@ No cluster restart needed — wheel installs fresh per job.
 | `No module named 'api'` | Notebook not running from Databricks Repo | Set up Repos OR use self-contained notebook (Option B) |
 | `build_config() missing 2 required positional arguments` | Passing dict directly | Unpack: `build_config(input_file=..., target=..., feature_cols=..., **rest)` |
 | `'input_source.type' must be one of ['file', 'postgres']` | Old wheel without delta support | Rebuild wheel and re-upload |
-| `results envelope is not available yet` | FastAPI reading local storage instead of UC volume | `fetch_uc_file` in `jobs.py` must use Databricks Files API |
+| `results envelope is not available yet (looked in …)` | Job did not write `api/{job_id}/run_response.json`, or a path mismatch | The 404 detail + the INFO log show the exact UC path fetched; confirm the notebook wrote the same `job_id`-namespaced path (Cell 5) |
+| `Could not fetch the run results` (dashboard) | Notebook wrote a non-locked envelope | Fixed: Cell 5 writes the full `RunResponse` envelope via `build_run_result` (needs the `api` pkg on `sys.path` → run from a Databricks Repo) |
 | `Databricks unreachable` | `DATABRICKS_HOST` missing `https://` or empty | Fix URL format in `.env` |
 | `Permission denied` on volume | Cluster lacks READ on that volume | Grant `READ VOLUME` in Unity Catalog permissions |
 
@@ -200,8 +226,48 @@ Allows the notebook to import `api.*` from `backend/`, giving the full result en
 
 ## 12. What is NOT done yet
 
-- Full result envelope from Databricks path (charts don't render — see §7 known issue)
-- MLflow run history visible in UI (Phase D — deferred)
-- Model registry / serving (Phase C — deferred)
-- Concurrent user job isolation (enabling_parallelization.md item 11)
-- PAT secret-scope handoff (PAT currently visible in Databricks run parameters)
+Resolved in the 2026-07-14 orchestration fix pass (Problems 1–5):
+- ✅ **Full result envelope from the Databricks path** — the notebook writes the locked `/run`
+  envelope; interactive charts render (see §7).
+- ✅ **Per-run output isolation** — output is namespaced per `job_id`, so runs no longer overwrite
+  each other (§3, §7).
+- ✅ **Models persisted on Databricks** — the engine's MLflow layer logs one saved model per
+  algorithm to the managed tracking server (§13).
+- ✅ **Model registry** — the best model is registered as a version of
+  `aiml_rd.classifyos.classifyos_model` and given the `champion` alias, so it is loadable/servable by
+  alias (§13). Registration + alias are report-only with permission fallbacks.
+
+Still open:
+- **PNG artifacts in Databricks mode** — `/outputs/{name}` reads local `OUTPUT_DIR`; the PNGs live on
+  the UC volume under `artifacts/{job_id}/`, so PNG thumbnails don't load yet (interactive charts do
+  — see the note in §7). Follow-up: stream `/outputs` from the UC volume when in the databricks backend.
+- **Model *serving* endpoint** — the model is registered + aliased; standing up a Databricks Model
+  Serving endpoint from the `champion` alias is the remaining Phase C step.
+- **MLflow run history in the UI** — runs are logged to managed MLflow, but the dashboard's Runs
+  view still reads the local/Postgres MLflow store, not the Databricks one (Phase D — deferred).
+- **PAT secret-scope handoff** — the user PAT is still passed in the Databricks run parameters
+  (visible in the run UI). Hardening to a secret scope is the follow-up (`api/databricks.py` [RISK]).
+
+## 13. MLflow logging + Unity Catalog Model Registry (2026-07-14)
+
+The Job entrypoint (`notebooks/classifyos_job_runner.py`) drives MLflow by **reusing the engine's
+built-in logger** (`classifyos.mlflow_logging.log_run`, opt-in via `cfg["mlflow"]`) rather than
+re-implementing MLflow calls in the notebook — the "API/orchestration wraps the engine, never
+re-implements ML logic" rule. Cell 4:
+
+1. Resolves the experiment path with a permission fallback (`/classifyos/runs` →
+   `/classifyos-fallback` → disable logging) so an MLflow permission failure never aborts the run.
+2. Sets `cfg["mlflow"] = {enabled, experiment, run_name: "classifyos-{job_id}"}` and runs the engine.
+   The engine then logs the config (params), each model's held-out TEST metrics, the artifact files,
+   and **one saved model per fitted algorithm** (flavor-native `mlflow.xgboost`/`lightgbm`/`sklearn`)
+   to the managed tracking server (`MLFLOW_TRACKING_URI=databricks`, set in Cell 3).
+
+Cell 4b then registers the **best** model (highest `f1_weighted`) as a new version of the three-part
+UC name `aiml_rd.classifyos.classifyos_model` (override via `CLASSIFYOS_UC_MODEL`) and moves the
+`champion` alias to it — Unity Catalog uses **aliases, not stages**. Registration and aliasing are
+each wrapped report-only: without `CREATE MODEL` / registry permission the model stays logged as an
+MLflow artifact and the run is unaffected. The MLflow `run_id` flows into the result envelope via
+`result.mlflow`, so the dashboard can link to the MLflow UI.
+
+Load the champion model anywhere with:
+`mlflow.pyfunc.load_model("models:/aiml_rd.classifyos.classifyos_model@champion")`.

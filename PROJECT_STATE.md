@@ -5,7 +5,48 @@
 > planning/overseer chat stays in sync with the local repo.
 
 **Last updated:** 2026-07-14
-**Updated by:** Claude Code (**NEW — Databricks UC table-profile: populate the column picker from a
+**Updated by:** Claude Code (**NEW — Databricks execution-path fix pass (Problems 1–5): full result
+envelope, per-job output isolation, MLflow model persistence + UC Model Registry (ORCHESTRATION /
+TOOLING ONLY; engine + locked `/run` envelope UNTOUCHED; API contract unchanged at `1.11`).** Fixes
+five interconnected defects in the Databricks Job path — all changes in `backend/api/` + the Job
+entrypoint notebook, nothing in the ML pipeline.
+**(1) Dashboard showed "Could not fetch the run results".** Root cause: the notebook's Cell 5 wrote a
+*simplified* envelope (`{status, mlflow_run, metrics, best_model, artifacts_written}`) that the
+frontend's `parseRunResponse` rejects (it expects the locked `{status, schema_version, result,
+error}`). Fixed with **Option A** — Cell 5 reshapes via the canonical
+`api.result_builder.build_run_result` + `RunResponse` + `safe_jsonify`, byte-identical to a local
+`/run` (needs the `api` pkg on `sys.path` → run from a Databricks Repo; Cell 3 bootstrap already does
+this).
+**(2) Each run overwrote the previous.** Output is now namespaced per `job_id`: FastAPI mints the
+`job_id` BEFORE submit (`jobs_store.new_job_id`) and forwards it as a notebook `base_parameter`; the
+notebook writes `api/{job_id}/run_response.json` + all artifacts under `artifacts/{job_id}/` (per-job
+`DatabricksVolumeStorage(output_dir=…/artifacts/{job_id})`); `GET /run/{job_id}/results` fetches the
+SAME per-job key (`routes/jobs.py::result_envelope_key`, the single source of the path shape). Local
+backend keeps the fixed key (single-tenant).
+**(3) Models weren't saved on Databricks.** Finding: `ModelRunner` never pickled models to `OUTPUT_DIR`
+in EITHER mode (only CSVs/plots) — models persist via MLflow, which the notebook wasn't enabling.
+Resolved by (4).
+**(4) MLflow logging.** The notebook enables the engine's built-in, report-only MLflow layer
+(`cfg["mlflow"]`), REUSING the tested `classifyos.mlflow_logging.log_run` (config as params +
+per-model held-out TEST metrics + the artifact files + one flavor-native saved model per algorithm)
+rather than re-implementing MLflow calls in the notebook (wrap-don't-reimplement). Experiment resolved
+with a permission fallback (`/classifyos/runs` → `/classifyos-fallback` → disable, never abort). The
+MLflow `run_id` already flows into `result.mlflow`, so the dashboard's MLflow link is automatic (4d).
+**(5) Model Registry.** Cell 4b registers the best (`f1_weighted`) model as a version of the three-part
+UC name `aiml_rd.classifyos.classifyos_model` (env-overridable `CLASSIFYOS_UC_MODEL`) and sets the
+`champion` alias (UC uses **aliases, not stages**). Registration + alias are report-only with
+permission fallbacks — a missing `CREATE MODEL` perm leaves the model logged as an MLflow artifact and
+never aborts the run. Loadable by alias: `models:/aiml_rd.classifyos.classifyos_model@champion`.
+**Testability fix:** `fetch_uc_file` now goes through the shared `_build_client` seam so CI can mock the
+Files API (`httpx.MockTransport`); this un-broke `test_api_jobs.py::test_results_completed_returns_envelope`
+(a PRE-EXISTING failure after the earlier Files-API commit) — the test now asserts the per-job fetch
+path, and `DBRICKS_OUTPUT_VOLUME` is pinned in the fixture (was machine-dependent). **`test_api_jobs.py`
+11/11 green.** **No API-contract change (still `1.11`); no engine change.** Docs updated:
+`docs/databricks_how_it_works.md` (§2 env var, §3 layout, §6 cell table, §7 fetch flow, §10 errors, §12
+status, new §13 MLflow + registry). **plan_tweak:** added #49 (Databricks MLflow = engine-driven, not
+notebook-driven as the prompt sketched — with rationale). **NOT run on a real cluster yet** (all
+Databricks REST mocked in tests; a live run is exercised once cluster access is available).)
+**Prior update (2026-07-14 — Databricks UC table-profile):** Claude Code (**NEW — Databricks UC table-profile: populate the column picker from a
 table's schema (ADDITIVE; upload/profile-side, NO `schema_version` bump; engine UNTOUCHED).** Closes
 the plan_tweak #48 follow-up (the UC browser proxies return table names only, so the Databricks picker
 made users type the target + feature columns by hand). **(A) Backend.** New client fn

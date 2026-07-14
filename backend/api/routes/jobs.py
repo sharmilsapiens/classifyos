@@ -17,6 +17,7 @@ no user PAT is needed here. No ML — pure orchestration plumbing.
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -32,11 +33,24 @@ from ..deps import get_storage
 from ..jobs_store import get_job, update_status
 from ..models import JobStatusResponse
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter(tags=["jobs"])
 
-#: Where the Databricks Job writes the rendered ``/run`` envelope on the UC output volume — the
-#: same relative key the MLflow snapshot uses (``api/run_response.json``), fetched by ``/results``.
+#: Where a LOCAL run's rendered ``/run`` envelope lives under OUTPUT_DIR. Local runs are
+#: single-tenant, so no per-job namespacing is needed there (kept fixed — §Problem 2).
 RESULT_ENVELOPE_KEY = "api/run_response.json"
+
+
+def result_envelope_key(job_id: str) -> str:
+    """Per-job relative key for the rendered ``/run`` envelope on the UC output volume.
+
+    The Databricks Job writes ``api/{job_id}/run_response.json`` (and its artifacts under
+    ``artifacts/{job_id}/``) so concurrent runs never overwrite each other (§Problem 2). This is
+    the SINGLE source of that path shape — the notebook builds the identical path from the same
+    ``job_id`` base parameter, so the write and the fetch can never drift.
+    """
+    return f"api/{job_id}/run_response.json"
 
 
 def _refresh_status(job_id: str, databricks_run_id: str | None) -> tuple[str, str | None]:
@@ -122,18 +136,23 @@ def get_results_endpoint(
 
     # Fetch the envelope the Job wrote to the OUTPUT volume.
     # Databricks mode: fetch from UC volume via Files API (the result is on the cluster, not local).
-    # Local mode: read from the local OUTPUT_DIR via the storage adapter.
+    #   The Job namespaced it per job_id, so we read api/{job_id}/run_response.json (§Problem 2).
+    # Local mode: read from the local OUTPUT_DIR via the storage adapter (single-tenant, fixed key).
     if execution_backend() == "databricks":
         output_volume = os.environ.get("DBRICKS_OUTPUT_VOLUME", "").rstrip("/")
         if not output_volume:
             raise HTTPException(status_code=500, detail="DBRICKS_OUTPUT_VOLUME is not set")
-        uc_path = f"{output_volume}/{RESULT_ENVELOPE_KEY}"
+        uc_path = f"{output_volume}/{result_envelope_key(job_id)}"
+        logger.info("fetching Databricks results envelope for job %s from %s", job_id, uc_path)
         try:
             raw = fetch_uc_file(uc_path)
         except DatabricksUnavailable:
             raise HTTPException(
                 status_code=404,
-                detail=f"run {job_id!r} completed but its results envelope is not available yet",
+                detail=(
+                    f"run {job_id!r} completed but its results envelope is not available yet "
+                    f"(looked in {uc_path})"
+                ),
             )
         except DatabricksAuthError as exc:
             return JSONResponse(status_code=401, content={"detail": str(exc)})

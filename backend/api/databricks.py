@@ -158,11 +158,13 @@ def _request(client: httpx.Client, method: str, path: str, **kwargs: Any) -> Any
 # --------------------------------------------------------------------------- #
 
 
-def _submit_payload(run_config: dict[str, Any], user_pat: str) -> dict[str, Any]:
+def _submit_payload(run_config: dict[str, Any], user_pat: str, job_id: str) -> dict[str, Any]:
     """Build the ``jobs/runs/submit`` body: install the wheel, run the entrypoint notebook.
 
-    The task carries the RunConfig JSON and the user's PAT as ``base_parameters`` so the cluster
-    job builds the engine config and reads Unity Catalog data as the requesting user. Requires
+    The task carries the RunConfig JSON, the user's PAT, and our own ``job_id`` as
+    ``base_parameters`` so the cluster job builds the engine config, reads Unity Catalog data as
+    the requesting user, and namespaces its output under ``api/{job_id}/`` +
+    ``artifacts/{job_id}/`` (so concurrent runs never overwrite each other — §Problem 2). Requires
     ``DATABRICKS_JOB_NOTEBOOK_PATH`` (the entrypoint) and ``DATABRICKS_JOB_CLUSTER_ID`` (an existing
     cluster); the wheel path (``DATABRICKS_JOB_WHEEL_PATH``) is attached as a library when set.
     """
@@ -185,6 +187,9 @@ def _submit_payload(run_config: dict[str, Any], user_pat: str) -> dict[str, Any]
                 "run_config": json.dumps(run_config),
                 "user_token": user_pat,
                 "wheel_path": wheel_path,
+                # Our persistent handle — the notebook writes api/{job_id}/run_response.json and
+                # artifacts/{job_id}/… so each run is isolated and GET /results reads the same key.
+                "job_id": job_id,
             },
         },
     }
@@ -199,14 +204,15 @@ def _submit_payload(run_config: dict[str, Any], user_pat: str) -> dict[str, Any]
     }
 
 
-def submit_run(run_config: dict[str, Any], user_pat: str) -> dict[str, Any]:
+def submit_run(run_config: dict[str, Any], user_pat: str, job_id: str) -> dict[str, Any]:
     """Submit a one-off Databricks Job for ``run_config``; return ``{"run_id": "<id>"}``.
 
-    Authenticated with the service token; the user's PAT rides along as a task parameter. Raises
+    Authenticated with the service token; the user's PAT and our ``job_id`` ride along as task
+    parameters (``job_id`` namespaces the run's output — §Problem 2). Raises
     :class:`DatabricksUnavailable` if the workspace can't be reached, :class:`DatabricksAuthError`
     on a rejected service token, or :class:`DatabricksConfigError` on missing config.
     """
-    payload = _submit_payload(run_config, user_pat)
+    payload = _submit_payload(run_config, user_pat, job_id)
     with _build_client(_service_token()) as client:
         body = _request(client, "POST", _SUBMIT_PATH, json=payload)
     run_id = body.get("run_id")
@@ -317,24 +323,24 @@ def fetch_uc_file(volume_path: str) -> bytes:
     """Download a file from a Unity Catalog volume path using the Databricks Files API.
 
     ``volume_path`` must be an absolute UC volume path, e.g.
-    ``/Volumes/aiml_rd/classifyos/output/api/run_response.json``.
+    ``/Volumes/aiml_rd/classifyos/output/api/<job_id>/run_response.json``.
     Authenticated with the service token. Raises :class:`DatabricksUnavailable` if the
     file does not exist or cannot be fetched.
+
+    Goes through the shared :func:`_build_client` seam (like the Jobs/UC calls) so the request is
+    interceptable by the test suite's ``httpx.MockTransport`` — no real workspace is contacted in
+    CI. The Files API returns the file's raw bytes, so we read ``resp.content`` directly rather
+    than parsing JSON.
     """
-    host = _host()
-    token = _service_token()
-    url = f"{host}/api/2.0/fs/files{volume_path}"
-    try:
-        resp = httpx.get(
-            url,
-            headers={"Authorization": f"Bearer {token}"},
-            timeout=_HTTP_TIMEOUT,
-        )
-    except httpx.TransportError as exc:
-        raise DatabricksUnavailable(f"could not fetch UC file: {exc}") from exc
+    url = f"/api/2.0/fs/files{volume_path}"
+    with _build_client(_service_token()) as client:
+        try:
+            resp = client.get(url)
+        except httpx.HTTPError as exc:  # transport-level: DNS, connect, timeout, TLS, …
+            raise DatabricksUnavailable(f"could not fetch UC file: {exc}") from exc
     if resp.status_code == 404:
         raise DatabricksUnavailable(f"UC file not found: {volume_path!r}")
-    if resp.status_code == 401:
+    if resp.status_code in (401, 403):
         raise DatabricksAuthError("service token rejected when fetching UC file")
     if not resp.is_success:
         raise DatabricksUnavailable(f"UC file fetch failed ({resp.status_code}): {volume_path!r}")

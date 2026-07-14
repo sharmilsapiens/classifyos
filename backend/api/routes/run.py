@@ -49,7 +49,7 @@ from ..databricks import (
     submit_run,
 )
 from ..deps import get_storage, get_user_pat
-from ..jobs_store import create_job
+from ..jobs_store import create_job, new_job_id
 from ..models import RunConfig, RunResponse, RunSubmission
 from ..result_builder import build_run_result
 from ..serialize import safe_jsonify
@@ -104,8 +104,14 @@ async def _submit_to_databricks(cfg: RunConfig, user_pat: str | None) -> Any:
     # ``db_schema`` field name — the notebook's RunConfig(**run_config) round-trips it either way,
     # but this keeps the submitted params byte-identical to the original request.
     run_config = cfg.model_dump(by_alias=True)
+
+    # Mint the job handle BEFORE submitting: it is forwarded to the notebook (as a base parameter)
+    # so the Job namespaces its output under api/{job_id}/ + artifacts/{job_id}/ — each run is
+    # isolated and never overwrites a previous one (§Problem 2). Persisted only after a successful
+    # submit, so a failed submit leaves no orphan row.
+    job_id = new_job_id()
     try:
-        submitted = await run_in_threadpool(submit_run, run_config, user_pat.strip())
+        submitted = await run_in_threadpool(submit_run, run_config, user_pat.strip(), job_id)
     except DatabricksAuthError as exc:
         return JSONResponse(status_code=401, content={"detail": str(exc)})
     except DatabricksConfigError as exc:
@@ -115,8 +121,11 @@ async def _submit_to_databricks(cfg: RunConfig, user_pat: str | None) -> Any:
         return JSONResponse(status_code=503, content={"detail": f"Databricks unavailable: {exc}"})
 
     run_id = submitted["run_id"]
-    job_id = create_job(
-        databricks_run_id=run_id, status="PENDING", config_json=json.dumps(run_config)
+    create_job(
+        databricks_run_id=run_id,
+        status="PENDING",
+        config_json=json.dumps(run_config),
+        job_id=job_id,
     )
     return RunSubmission(job_id=job_id, run_id=run_id, status="PENDING")
 
