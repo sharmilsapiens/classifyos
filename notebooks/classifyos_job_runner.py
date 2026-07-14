@@ -20,10 +20,11 @@
 # MAGIC
 # MAGIC **Why it can reshape the envelope.** The single canonical reshaper is
 # MAGIC `api.result_builder.build_run_result` (the same one the synchronous `/run` route uses). The
-# MAGIC engine wheel does not include the `api` package, so this notebook is expected to run from a
-# MAGIC **Databricks Repo** (Git-backed) checkout of this repository — the bootstrap in Cell 3 adds
-# MAGIC the repo's `backend/` to `sys.path` so `api.*` is importable. (`DATABRICKS_JOB_NOTEBOOK_PATH`
-# MAGIC in `backend/.env.example` points at `/Repos/classifyos/notebooks/classifyos_job_runner`.)
+# MAGIC engine wheel does not include the `api` package, so this notebook must run from a **Git folder**
+# MAGIC (a repo-backed checkout of this repository — via Workspace → Create → Git folder / Repos), NOT a
+# MAGIC plain imported Workspace notebook. The Git folder may live under `/Workspace/Users/<user>/` or
+# MAGIC `/Repos/<user>/`; the bootstrap in Cell 3 adds the repo's `backend/` to `sys.path` so `api.*` is
+# MAGIC importable. Point `DATABRICKS_JOB_NOTEBOOK_PATH` at the notebook INSIDE that Git folder.
 
 # COMMAND ----------
 
@@ -136,10 +137,12 @@ def _add_backend_to_path() -> None:
 
     raise RuntimeError(
         "The `api` package (needed to build the full /run result envelope in Cell 5) is not "
-        "importable. Run this notebook from a Databricks Repo / Git folder so the repo's backend/ "
-        "dir is on sys.path — set DATABRICKS_JOB_NOTEBOOK_PATH to the /Repos path (NOT a /Workspace/"
-        "Users copy) and Pull after each push. See docs/databricks_how_it_works.md §11. (The "
-        "classifyos wheel ships the engine only; the api reshaper lives in the repo source.)"
+        "importable. Run this notebook from a **Git folder** (repo-backed) so the repo's backend/ dir "
+        "is on the cluster filesystem — a plain imported Workspace notebook has no backend/ next to it. "
+        "Point DATABRICKS_JOB_NOTEBOOK_PATH at the notebook INSIDE your Git folder (it may live under "
+        "/Workspace/Users/<user>/ or /Repos/<user>/) and Pull after each push. See "
+        "docs/databricks_how_it_works.md §11. (The classifyos wheel ships the engine only; the api "
+        "reshaper lives in the repo source.)"
     )
 
 
