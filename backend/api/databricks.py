@@ -313,6 +313,34 @@ def get_table_columns(catalog: str, schema: str, table: str, user_pat: str) -> l
     return [c for c in columns if isinstance(c, dict)]
 
 
+def fetch_uc_file(volume_path: str) -> bytes:
+    """Download a file from a Unity Catalog volume path using the Databricks Files API.
+
+    ``volume_path`` must be an absolute UC volume path, e.g.
+    ``/Volumes/aiml_rd/classifyos/output/api/run_response.json``.
+    Authenticated with the service token. Raises :class:`DatabricksUnavailable` if the
+    file does not exist or cannot be fetched.
+    """
+    host = _host()
+    token = _service_token()
+    url = f"{host}/api/2.0/fs/files{volume_path}"
+    try:
+        resp = httpx.get(
+            url,
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=_HTTP_TIMEOUT,
+        )
+    except httpx.TransportError as exc:
+        raise DatabricksUnavailable(f"could not fetch UC file: {exc}") from exc
+    if resp.status_code == 404:
+        raise DatabricksUnavailable(f"UC file not found: {volume_path!r}")
+    if resp.status_code == 401:
+        raise DatabricksAuthError("service token rejected when fetching UC file")
+    if not resp.is_success:
+        raise DatabricksUnavailable(f"UC file fetch failed ({resp.status_code}): {volume_path!r}")
+    return resp.content
+
+
 def _require_pat(user_pat: str | None) -> str:
     """Return a non-empty PAT or raise :class:`DatabricksAuthError` (→ 401)."""
     if not user_pat or not user_pat.strip():

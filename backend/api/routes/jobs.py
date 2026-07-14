@@ -25,7 +25,9 @@ from fastapi.responses import JSONResponse
 
 from classifyos.io.storage import StorageAdapter
 
-from ..databricks import DatabricksAuthError, DatabricksError, get_run_status
+import os
+
+from ..databricks import DatabricksAuthError, DatabricksError, DatabricksUnavailable, execution_backend, fetch_uc_file, get_run_status
 from ..deps import get_storage
 from ..jobs_store import get_job, update_status
 from ..models import JobStatusResponse
@@ -118,17 +120,34 @@ def get_results_endpoint(
             },
         )
 
-    # Fetch the envelope the Job wrote to the OUTPUT volume, through the storage adapter (whose
-    # path_for guards against traversal). A completed run with no envelope yet is a 404.
-    try:
-        resolved = Path(storage.path_for(RESULT_ENVELOPE_KEY, output=True))
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=f"invalid results key: {exc}") from exc
-    if not resolved.is_file():
-        raise HTTPException(
-            status_code=404,
-            detail=f"run {job_id!r} completed but its results envelope is not available yet",
-        )
-    with open(resolved, encoding="utf-8") as fh:
-        envelope = json.load(fh)
+    # Fetch the envelope the Job wrote to the OUTPUT volume.
+    # Databricks mode: fetch from UC volume via Files API (the result is on the cluster, not local).
+    # Local mode: read from the local OUTPUT_DIR via the storage adapter.
+    if execution_backend() == "databricks":
+        output_volume = os.environ.get("DBRICKS_OUTPUT_VOLUME", "").rstrip("/")
+        if not output_volume:
+            raise HTTPException(status_code=500, detail="DBRICKS_OUTPUT_VOLUME is not set")
+        uc_path = f"{output_volume}/{RESULT_ENVELOPE_KEY}"
+        try:
+            raw = fetch_uc_file(uc_path)
+        except DatabricksUnavailable:
+            raise HTTPException(
+                status_code=404,
+                detail=f"run {job_id!r} completed but its results envelope is not available yet",
+            )
+        except DatabricksAuthError as exc:
+            return JSONResponse(status_code=401, content={"detail": str(exc)})
+        envelope = json.loads(raw)
+    else:
+        try:
+            resolved = Path(storage.path_for(RESULT_ENVELOPE_KEY, output=True))
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=f"invalid results key: {exc}") from exc
+        if not resolved.is_file():
+            raise HTTPException(
+                status_code=404,
+                detail=f"run {job_id!r} completed but its results envelope is not available yet",
+            )
+        with open(resolved, encoding="utf-8") as fh:
+            envelope = json.load(fh)
     return JSONResponse(content=envelope)
