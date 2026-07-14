@@ -114,7 +114,13 @@ from classifyos.config import build_config  # noqa: E402
 from classifyos.io.storage import get_default_storage  # noqa: E402
 from classifyos.runner import ModelRunner  # noqa: E402
 
-engine_config = build_config(run_config)
+_cfg = dict(run_config)
+engine_config = build_config(
+    input_file=_cfg.pop("input_file"),
+    target=_cfg.pop("target"),
+    feature_cols=_cfg.pop("feature_cols"),
+    **_cfg,
+)
 storage = get_default_storage()  # → DatabricksVolumeStorage (CLASSIFYOS_STORAGE_BACKEND=databricks)
 runner = ModelRunner(config=engine_config, storage=storage)
 runner.run()
