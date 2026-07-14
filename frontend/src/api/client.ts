@@ -235,6 +235,29 @@ export async function listTables(
   return handleJson<TablesResponse>(res)
 }
 
+/**
+ * GET /databricks/table-profile?catalog=&schema=&table= — fetch a Unity Catalog table's schema and
+ * return it in the SAME InspectProfile shape as /upload (columns, dtypes, column groups, plus a
+ * `delta` input_source + snapshot server_path). The frontend feeds it through the same applyUpload
+ * plumbing as an uploaded file, so the column picker (target dropdown + feature selector) is
+ * populated without any manual column entry. A 503 (not the databricks backend / unreachable
+ * workspace / columnless table) or 401 (no PAT) surfaces as an ApiError. Consumed by: Upload.
+ */
+export async function getTableProfile(
+  args: { catalog: string; schema: string; table: string },
+  pat: string,
+): Promise<InspectProfile> {
+  const q = new URLSearchParams({
+    catalog: args.catalog,
+    schema: args.schema,
+    table: args.table,
+  })
+  const res = await request(`${API_BASE}/databricks/table-profile?${q.toString()}`, {
+    headers: { "X-Databricks-Token": pat },
+  })
+  return handleJson<InspectProfile>(res)
+}
+
 /** GET /runs — list past MLflow-logged runs (most-recent first). Consumed by: Runs. */
 export async function listRuns(): Promise<RunsListResponse> {
   const res = await request(`${API_BASE}/runs`)

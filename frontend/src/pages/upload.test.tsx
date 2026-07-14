@@ -41,6 +41,7 @@ const uploadFile = vi.fn()
 const listCatalogs = vi.fn()
 const listSchemas = vi.fn()
 const listTables = vi.fn()
+const getTableProfile = vi.fn()
 vi.mock("@/api/client", () => ({
   listInputTables: () => listInputTables(),
   selectInputTable: (args: unknown) => selectInputTable(args),
@@ -48,6 +49,7 @@ vi.mock("@/api/client", () => ({
   listCatalogs: (pat: string) => listCatalogs(pat),
   listSchemas: (catalog: string, pat: string) => listSchemas(catalog, pat),
   listTables: (catalog: string, schema: string, pat: string) => listTables(catalog, schema, pat),
+  getTableProfile: (args: unknown, pat: string) => getTableProfile(args, pat),
   ApiError: class ApiError extends Error {},
 }))
 
@@ -68,10 +70,52 @@ const DB_PROFILE: InspectProfile = {
   input_source: { type: "postgres", connection_env: "CLASSIFYOS_PG_DSN", table: "iris", query: null },
 }
 
+// Schema-only profile a UC table-profile fetch returns: the InspectProfile shape (columns, dtypes,
+// column groups) + a `delta` input_source + a snapshot server_path. Row-level stats are zeroed
+// (unavailable from schema-only metadata).
+const UC_PROFILE: InspectProfile = {
+  columns: ["age", "region", "has_agent"],
+  dtypes: { age: "int", region: "string", has_agent: "boolean" },
+  numeric_cols: ["age"],
+  categorical_cols: ["region", "has_agent"],
+  binary_cols: ["has_agent"],
+  datetime_cols: [],
+  n_rows: 0,
+  n_missing: { age: 0, region: 0, has_agent: 0 },
+  sample: [],
+  server_path: "db_snapshots/main_insurance_policy_lapse.parquet",
+  input_source: {
+    type: "delta",
+    connection_env: "CLASSIFYOS_PG_DSN",
+    catalog: "main",
+    schema: "insurance",
+    table: "policy_lapse",
+    query: null,
+  },
+}
+
+/** Drive the UC cascade to a ready table list: connect → pick catalog → pick schema. */
+async function browseToTables() {
+  listCatalogs.mockResolvedValue({ catalogs: ["main"] })
+  listSchemas.mockResolvedValue({ schemas: ["insurance"] })
+  listTables.mockResolvedValue({ tables: ["policy_lapse"] })
+  fireEvent.click(screen.getByRole("tab", { name: /Databricks/i }))
+  fireEvent.click(screen.getByRole("button", { name: /Connect/i }))
+  await screen.findByRole("option", { name: "main" })
+  fireEvent.change(screen.getByLabelText(/^Catalog$/i), { target: { value: "main" } })
+  await waitFor(() => expect(listSchemas).toHaveBeenCalledWith("main", "dapi-xyz"))
+  fireEvent.change(await screen.findByLabelText(/^Schema$/i), { target: { value: "insurance" } })
+  await waitFor(() => expect(listTables).toHaveBeenCalledWith("main", "insurance", "dapi-xyz"))
+}
+
 beforeEach(() => {
   listInputTables.mockReset()
   selectInputTable.mockReset()
   uploadFile.mockReset()
+  listCatalogs.mockReset()
+  listSchemas.mockReset()
+  listTables.mockReset()
+  getTableProfile.mockReset()
   applyUpload.mockReset()
   updateForm.mockReset()
   setDatabricksPat.mockReset()
@@ -177,5 +221,70 @@ describe("Upload — Databricks data source (§6.6 Step 6, toggle show/hide)", (
     await waitFor(() => expect(listCatalogs).toHaveBeenCalledWith("dapi-xyz"))
     // The catalog dropdown is populated.
     expect(await screen.findByRole("option", { name: "main" })).toBeInTheDocument()
+  })
+})
+
+describe("Upload — Databricks table profiling (schema fetch → shared column picker)", () => {
+  it("shows a loading state then profiles a UC table (getTableProfile → applyUpload)", async () => {
+    mockApp.executionBackend = "databricks"
+    mockApp.databricksPat = "dapi-xyz"
+    // A deferred promise so the "Loading table schema…" state is observable before it resolves.
+    let resolveProfile: (p: InspectProfile) => void = () => {}
+    getTableProfile.mockReturnValue(
+      new Promise<InspectProfile>((res) => {
+        resolveProfile = res
+      }),
+    )
+    renderPage(<UploadPage />)
+    await browseToTables()
+
+    fireEvent.click(await screen.findByText(/main\.insurance\.policy_lapse/i))
+
+    // The PAT + the exact selection are forwarded to the profile endpoint.
+    await waitFor(() =>
+      expect(getTableProfile).toHaveBeenCalledWith(
+        { catalog: "main", schema: "insurance", table: "policy_lapse" },
+        "dapi-xyz",
+      ),
+    )
+    // Loading state appears while the schema is fetched.
+    expect(await screen.findByText(/Loading table schema/i)).toBeInTheDocument()
+
+    // On success the profile flows through the SAME applyUpload plumbing as an uploaded file.
+    resolveProfile(UC_PROFILE)
+    await waitFor(() => expect(applyUpload).toHaveBeenCalledWith(UC_PROFILE))
+  })
+
+  it("shows an error when the table schema can't be fetched", async () => {
+    mockApp.executionBackend = "databricks"
+    mockApp.databricksPat = "dapi-xyz"
+    getTableProfile.mockRejectedValue(new ApiError("Databricks unavailable: workspace down"))
+    renderPage(<UploadPage />)
+    await browseToTables()
+
+    fireEvent.click(await screen.findByText(/main\.insurance\.policy_lapse/i))
+    expect(await screen.findByText(/workspace down/i)).toBeInTheDocument()
+    expect(applyUpload).not.toHaveBeenCalled()
+  })
+
+  it("populates the shared column picker (columns, types, target dropdown) from the UC profile", () => {
+    // When a UC profile is in the store, the same inspection UI a CSV upload shows renders — the
+    // column table (with types + a binary badge) and the target dropdown, no manual entry.
+    mockApp.executionBackend = "databricks"
+    mockApp.databricksPat = "dapi-xyz"
+    mockApp.inspect = UC_PROFILE
+    mockApp.serverPath = UC_PROFILE.server_path
+    renderPage(<UploadPage />)
+
+    // The UC data types are shown in the columns table (unique to the dtype cells).
+    expect(screen.getByText("int")).toBeInTheDocument()
+    expect(screen.getByText("string")).toBeInTheDocument()
+    expect(screen.getByText("boolean")).toBeInTheDocument()
+    // The boolean column carries the "binary" badge (schema-derived).
+    expect(screen.getByText("binary")).toBeInTheDocument()
+    // The target dropdown offers every column — the user picks, never types.
+    expect(screen.getByRole("option", { name: "age" })).toBeInTheDocument()
+    expect(screen.getByRole("option", { name: "region" })).toBeInTheDocument()
+    expect(screen.getByRole("option", { name: "has_agent" })).toBeInTheDocument()
   })
 })

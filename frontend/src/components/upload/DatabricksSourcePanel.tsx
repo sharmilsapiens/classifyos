@@ -3,11 +3,12 @@
    Shown only when the server runs the DATABRICKS execution backend. The user enters their PAT
    (kept in memory only, sent per-request as X-Databricks-Token — never stored) and "Connect" to
    browse catalogs; picking a catalog lists its schemas, picking a schema lists its tables. Picking
-   a table calls back to the parent, which sets the run's `delta` input_source.
+   a table calls back to the parent, which fetches that table's Unity Catalog schema
+   (GET /databricks/table-profile) and drives the shared column picker from it.
 
-   Note: the Unity Catalog list APIs return NAMES only (no columns), so a UC table can't be
-   profiled here — the parent collects the target + feature columns manually. Column profiling for
-   UC tables is a documented follow-up (see plan_tweak). */
+   Note: the Unity Catalog LIST APIs return names only (no columns); the separate table-profile
+   endpoint supplies the columns + types, so the target + feature pickers are populated from the
+   schema and the user never types a column name by hand. */
 
 import { useCallback, useEffect, useState } from "react"
 import { Database, Plug, RefreshCw, Table2 } from "lucide-react"

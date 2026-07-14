@@ -273,6 +273,28 @@ working exactly as before, because the whole thing is switched on by one setting
   table. Hallucination-checked against the Azure Databricks REST docs. Running it on a real cluster is
   pending cluster access (the job's notebook is written and ready).
 
+## Databricks table-profile — populate the column picker from a UC table's schema (additive; no version bump) — 2026-07-14
+- **The gap it closes.** The Unity Catalog picker's list endpoints return table **names only** (no
+  columns), so after selecting a table a user had to type the target and feature column names by hand.
+- **What it adds.** One endpoint, **`GET /databricks/table-profile?catalog=&schema=&table=`**, fetches
+  the chosen table's schema from Unity Catalog (the *get-a-table* REST call, authenticated with the
+  user's PAT) and returns it in the **same `InspectProfile` shape a CSV `/upload` returns** — columns,
+  types, and the numeric/categorical/binary/datetime groups — so the dashboard reuses its existing
+  column picker (target dropdown + feature selector) with **no manual entry and no branching**. It also
+  returns a `delta` `input_source` + a snapshot `server_path`, exactly like `/input-sources/select`
+  does for Postgres, so the frontend's existing `applyUpload` plumbing sets the run up to read the Delta
+  table. It rides the **upload/profile side** (not the locked `/run` envelope), so **no `schema_version`
+  bump**.
+- **Honest about what a schema can't tell you.** Row-level stats (`n_rows`, `n_missing`, `sample`, the
+  class distribution) aren't available from schema-only metadata, so they come back zeroed/empty rather
+  than fabricated; the real per-column stats are computed on the cluster when the run reads the table.
+- **Gated + safe.** Only available in the `databricks` execution backend (else **503** — never a silent
+  fall-through to manual entry); a `catalog`/`schema`/`table` that isn't a simple SQL identifier → **422**
+  (they're interpolated into the UC REST path); missing PAT → **401**; unreachable workspace or a
+  columnless table → **503**. Column-type → group mapping is **hallucination-checked** against the
+  Databricks SDK `ColumnTypeName` enum. Every Databricks call is mocked in the tests. `docs/api_contract.md`
+  updated (endpoint table + a dedicated section + footer note).
+
 ---
 
 ## How to read this project

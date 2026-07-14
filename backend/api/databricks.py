@@ -289,6 +289,29 @@ def list_tables(catalog: str, schema: str, user_pat: str) -> list[str]:
     return sorted(_names(body.get("tables")))
 
 
+def get_table_columns(catalog: str, schema: str, table: str, user_pat: str) -> list[dict[str, Any]]:
+    """Return the column metadata for ``catalog.schema.table`` (authenticated with ``user_pat``).
+
+    Calls Unity Catalog's *get-a-table* endpoint —
+    ``GET /api/2.1/unity-catalog/tables/{full_name}`` where ``full_name`` is the dotted
+    ``catalog.schema.table`` — and returns the table's ``columns`` array. Each entry is a
+    ``ColumnInfo`` dict (verified against the Databricks SDK ``ColumnInfo`` / ``ColumnTypeName``:
+    ``name``, ``type_name``, ``type_text``, ``nullable``, ``comment``, ``position``, …).
+
+    Raises :class:`DatabricksAuthError` on a missing/rejected PAT (→ 401),
+    :class:`DatabricksUnavailable` on an unreachable/erroring workspace **or** a response that
+    carries no columns (→ 503) — so an empty/columnless table is a clear error, never a silent
+    fall-through to manual column entry.
+    """
+    full_name = f"{catalog}.{schema}.{table}"
+    with _build_client(_require_pat(user_pat)) as client:
+        body = _request(client, "GET", f"{_TABLES_PATH}/{full_name}")
+    columns = body.get("columns")
+    if not isinstance(columns, list) or not columns:
+        raise DatabricksUnavailable(f"Unity Catalog returned no columns for {full_name!r}")
+    return [c for c in columns if isinstance(c, dict)]
+
+
 def _require_pat(user_pat: str | None) -> str:
     """Return a non-empty PAT or raise :class:`DatabricksAuthError` (→ 401)."""
     if not user_pat or not user_pat.strip():

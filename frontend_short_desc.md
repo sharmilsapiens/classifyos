@@ -543,14 +543,38 @@ picking a Unity Catalog table. A normal local install is completely unchanged.
 - **A Databricks data source.** The Upload page grows a third tab, "Databricks (Unity Catalog)",
   shown only in Databricks mode. You paste your access token (kept in memory only, never saved),
   then browse catalog → schema → table using the new proxy endpoints, and pick a table to run on.
-  Because Unity Catalog listing returns table names only (no columns), you type the target and
-  feature columns, and the run uses engine defaults — a documented limitation (profiling a Databricks
-  table in the UI is a follow-up).
+  Picking a table now fetches its schema and populates the same column picker a CSV upload shows
+  (see the follow-up below) — no hand-typed column names.
 - **Safe + additive.** New types/client calls (`submitRun`, `getRunStatus`, `getRunResults`,
   `listCatalogs`/`listSchemas`/`listTables`) mirror the contract exactly; the token travels in a
   per-request header and is never persisted. New tests cover the **polling state machine**
   (pending → running → completed, plus the failed path) and the **data-source toggle** showing/hiding
   the Databricks tab. **159 vitest green · tsc + build clean.**
+
+## Databricks table picker — populate the column picker from the table's schema (✅ Done, 2026-07-14)
+**In one line:** After you pick a Unity Catalog table, the dashboard now **fetches that table's
+schema and shows the same column picker a CSV upload does** — target dropdown, feature selector, and
+data types — so you never type a column name by hand.
+- **The gap it closes.** Unity Catalog's list endpoints return table **names only**, so the first cut
+  of the Databricks tab made you type the target and feature columns manually. This wires the picker
+  up to the table's real schema instead.
+- **How it works — one shared flow.** Selecting a table calls the new
+  `GET /databricks/table-profile` with your token; while it loads, a **"Loading table schema…"**
+  spinner shows. On success the response (the **same `InspectProfile` shape a CSV upload returns**,
+  plus a `delta` `input_source` + snapshot `server_path`) flows through the **exact same `applyUpload`
+  plumbing** as a file upload — so the shared column table, the target dropdown, and the Configuration
+  page's feature selector all populate identically, with no parallel UI and no branching. The manual
+  target/feature text boxes are gone; you go Upload → Configure → Run just like a file.
+- **Honest states.** If the schema can't be fetched (not the Databricks backend, an unreachable
+  workspace, a bad table, or a missing token), the error is shown clearly and you can re-select the
+  table or switch to file/database upload — never a silent fall-through to manual entry. (Row counts
+  and class distribution aren't available from schema-only metadata, so those read as 0/empty until
+  the run reads the real table on the cluster.)
+- **Safe + additive.** One new typed client call (`getTableProfile`) mirroring the contract; the token
+  travels in a per-request header, never persisted. New Upload tests cover the loading state, the
+  schema fetch → `applyUpload`, the error path, and that the shared column picker (columns, types,
+  target dropdown, binary badge) populates from a UC profile. Existing file/database upload flows are
+  untouched. **162 vitest green · tsc clean.**
 
 ---
 
