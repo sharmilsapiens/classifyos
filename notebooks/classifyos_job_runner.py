@@ -98,51 +98,93 @@ if user_token:
 
 # Make the `api` package importable — it holds the `/run` reshaper (`result_builder`/`models`/
 # `serialize`) that Cell 5 needs, and it is NOT in the classifyos WHEEL (the wheel ships the engine
-# only). So this notebook must run from a **Databricks Repo / Git folder** where the repo's
-# `backend/` dir is present; we add that dir to sys.path here. See docs/databricks_how_it_works.md §11.
+# only). So this notebook must run from a **Git folder** (repo-backed) where the repo's `backend/`
+# dir is on the driver filesystem; we add that dir to sys.path here. See docs §11. If it can't be
+# found, we raise WITH DIAGNOSTICS (cwd, notebook path, dir listings) so the cause is unambiguous —
+# no more guessing at paths.
 def _add_backend_to_path() -> None:
-    """Put the repo's `backend/` (the one containing `api/result_builder.py`) on sys.path.
+    """Put the repo's `backend/` (containing `api/result_builder.py`) on sys.path, or raise+diagnose."""
+    import glob
+    import importlib.util
 
-    Searches, in order: (a) sys.path already resolves `api` → nothing to do; (b) walking up from the
-    current working directory; (c) walking up from THIS notebook's own Git-folder path (reliable even
-    when the job's cwd is not the notebook's directory). Raises a clear, actionable error if none hit,
-    instead of a cryptic `ModuleNotFoundError: No module named 'api'` later in Cell 5.
-    """
-    def _has_api(d: Path) -> bool:
-        return (d / "api" / "result_builder.py").exists()
+    def _has_api(d) -> bool:
+        try:
+            return (Path(d) / "api" / "result_builder.py").exists()
+        except Exception:  # noqa: BLE001
+            return False
 
-    # (a) already importable via an existing sys.path entry
-    if any(_has_api(Path(p)) for p in sys.path):
+    # Already importable (bundled in the wheel, or already on sys.path)? Nothing to do.
+    if importlib.util.find_spec("api") is not None:
         return
+
+    diag: list[str] = []
+    cwd = Path.cwd()
+    diag.append(f"cwd={cwd}")
+
+    nb_path = None
+    try:
+        nb_path = dbutils.notebook.entry_point.getDbutils().notebook().getContext().notebookPath().get()
+    except Exception as e:  # noqa: BLE001
+        diag.append(f"notebookPath_err={e!r}")
+    diag.append(f"notebookPath={nb_path!r}")
 
     candidates: list[Path] = []
     # (b) walk up from the working directory
-    here = Path.cwd()
-    candidates += [c / "backend" for c in [here, *here.parents]]
-    # (c) derive from the notebook's own workspace path, e.g.
-    #     /Repos/<user>/<repo>/notebooks/classifyos_job_runner → /Workspace/Repos/<user>/<repo>/backend
-    try:
-        nb_path = (
-            dbutils.notebook.entry_point.getDbutils().notebook().getContext().notebookPath().get()
-        )
-        ws_root = Path("/Workspace" + nb_path) if not nb_path.startswith("/Workspace") else Path(nb_path)
-        candidates += [c / "backend" for c in ws_root.parents]
-    except Exception:  # noqa: BLE001 — best-effort; the cwd walk above may already have found it
-        pass
+    candidates += [c / "backend" for c in [cwd, *cwd.parents]]
+    # (c) derive from the notebook's own workspace path (try with and without the /Workspace prefix)
+    if nb_path:
+        roots = [Path(nb_path)]
+        if not nb_path.startswith("/Workspace"):
+            roots.append(Path("/Workspace" + nb_path))
+        for r in roots:
+            candidates += [c / "backend" for c in r.parents]
+    # (d) targeted globs across the common Git-folder locations on the workspace-files FS
+    glob_hits: list[str] = []
+    for pat in (
+        "/Workspace/Users/*/*/backend/api/result_builder.py",
+        "/Workspace/Users/*/*/*/backend/api/result_builder.py",
+        "/Workspace/Repos/*/*/backend/api/result_builder.py",
+        "/Repos/*/*/backend/api/result_builder.py",
+    ):
+        try:
+            hits = glob.glob(pat)
+        except Exception:  # noqa: BLE001
+            hits = []
+        glob_hits += hits
+        candidates += [Path(h).parent.parent for h in hits]  # result_builder.py → api/ → backend/
+    diag.append(f"glob_hits={glob_hits[:5]}")
 
     for backend_dir in candidates:
         if _has_api(backend_dir):
             sys.path.insert(0, str(backend_dir))
-            return
+            importlib.invalidate_caches()
+            if importlib.util.find_spec("api") is not None:
+                print(f"[classifyos] api import enabled via {backend_dir}")
+                return
+
+    # Failure — surface exactly what the cluster can see, so we stop guessing.
+    for probe in ("/Workspace", "/Workspace/Users", "/Workspace/Repos", "/Repos"):
+        try:
+            diag.append(f"{probe}: isdir={os.path.isdir(probe)}")
+        except Exception as e:  # noqa: BLE001
+            diag.append(f"{probe}: err={e!r}")
+    # The decisive fact: does the Git-folder root actually contain backend/ on disk? List it.
+    if nb_path:
+        gf = Path("/Workspace" + nb_path) if not nb_path.startswith("/Workspace") else Path(nb_path)
+        for up in (gf.parent, gf.parent.parent, gf.parent.parent.parent):
+            try:
+                listing = os.listdir(up)[:25] if os.path.isdir(up) else "NOT_A_DIR"
+            except Exception as e:  # noqa: BLE001
+                listing = f"err={e!r}"
+            diag.append(f"listdir({up})={listing}")
 
     raise RuntimeError(
         "The `api` package (needed to build the full /run result envelope in Cell 5) is not "
-        "importable. Run this notebook from a **Git folder** (repo-backed) so the repo's backend/ dir "
-        "is on the cluster filesystem — a plain imported Workspace notebook has no backend/ next to it. "
-        "Point DATABRICKS_JOB_NOTEBOOK_PATH at the notebook INSIDE your Git folder (it may live under "
-        "/Workspace/Users/<user>/ or /Repos/<user>/) and Pull after each push. See "
-        "docs/databricks_how_it_works.md §11. (The classifyos wheel ships the engine only; the api "
-        "reshaper lives in the repo source.)"
+        "importable, and backend/api/result_builder.py was not found on the cluster filesystem. "
+        "Most likely 'Files in Git folders' (repo files on the driver) is disabled for this "
+        "workspace, so the repo's non-notebook files aren't on disk — in that case ship `api` in the "
+        "wheel instead (see docs/databricks_how_it_works.md §11). "
+        "DIAGNOSTICS >>> " + " | ".join(diag) + " <<<"
     )
 
 
