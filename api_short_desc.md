@@ -240,6 +240,39 @@ additively (`schema_version` now reports `"1.1"`).
   sqlite DSN so CI needs no live Postgres. `docs/api_contract.md` updated (endpoint table + a
   dedicated section).
 
+## Databricks orchestration — run training as a Databricks Job (✅ Done, 2026-07-14)
+**In one line:** The API can now hand a training run off to a **Databricks Job** instead of running
+it inside the web server — you submit, poll, and fetch results — while a normal local install keeps
+working exactly as before, because the whole thing is switched on by one setting.
+- **Why:** on the real deployment (Azure-hosted API + Databricks compute), a big training run can
+  take minutes and would time out a normal web request. The fix is the classic "submit a job, then
+  poll for it" pattern. This is the last piece of the Databricks plan (`docs/databricks_integration.md`
+  §6.6 Step 6), after the engine was made cluster-ready in Steps 1–5.
+- **One switch, two behaviours.** A server setting (`CLASSIFYOS_EXECUTION_BACKEND`) chooses the mode.
+  Left at its default (`local`), `POST /run` runs the pipeline in-process and returns the full result
+  in one response — **byte-for-byte the same as before**, so local dev and the test suite are
+  unaffected. Set to `databricks`, the *same* `POST /run` instead submits a Databricks Job and returns
+  a small `{job_id, run_id}` straight away.
+- **Submit → poll → fetch (the new endpoints).** `GET /run/{job_id}/status` reports the job as
+  *pending / running / completed / failed* (translated from Databricks' own run state); once it's
+  completed, `GET /run/{job_id}/results` returns the **exact same result envelope** the dashboard
+  already knows — read back from the file the job wrote to the cluster's storage. So a Databricks run
+  and a local run look identical to every result page.
+- **Never loses your job.** The web server is stateless, so it records each submitted job in a small
+  database table (`classifyos_jobs`, reusing the MLflow Postgres). If the server restarts mid-run, it
+  can still find and poll the job — verified by rebuilding the connection and re-reading a running job.
+- **Your token, used carefully.** The user's Databricks personal access token is sent per-request in a
+  header, forwarded to the job so it reads Unity Catalog data **as that user**, and is **never stored**.
+  A separate service token is used only for the job-management calls.
+- **Browse the data too.** Three read-only endpoints (`/databricks/catalogs`, `/schemas`, `/tables`)
+  proxy Unity Catalog so the UI can offer a catalog → schema → table picker.
+- **Additive + safe.** The API contract bumped `1.10 → 1.11` (additive only); the `/health` check now
+  also reports which mode the server is in so the frontend knows what to expect. Every Databricks call
+  is **mocked in the tests** — CI never touches a real cluster. Backend 461 tests green; the API's
+  request model gained optional `catalog`/`schema`/`limit` so a run can read a Databricks **Delta**
+  table. Hallucination-checked against the Azure Databricks REST docs. Running it on a real cluster is
+  pending cluster access (the job's notebook is written and ready).
+
 ---
 
 ## How to read this project

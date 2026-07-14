@@ -13,6 +13,10 @@ capture the real output folder instead.
 
 from __future__ import annotations
 
+from typing import Annotated
+
+from fastapi import Header
+
 from classifyos.io.storage import LocalFolderStorage, StorageAdapter
 
 _storage: StorageAdapter | None = None
@@ -29,3 +33,17 @@ def get_storage() -> StorageAdapter:
     if _storage is None:
         _storage = LocalFolderStorage()
     return _storage
+
+
+def get_user_pat(
+    x_databricks_token: Annotated[str | None, Header(alias="X-Databricks-Token")] = None,
+) -> str | None:
+    """Return the caller's Databricks PAT from the ``X-Databricks-Token`` header, or ``None``.
+
+    Used by the Databricks orchestration routes (§6.6 Step 6) so the Job reads Unity Catalog data
+    as the requesting user and the UC-browser proxies query as that user. The PAT is **never
+    persisted** — it lives only for the duration of the request. Routes that require it raise a
+    clean 401 when it is absent (a ``None`` here), rather than FastAPI's generic 422 for a missing
+    header, so the UI can prompt for the token.
+    """
+    return x_databricks_token

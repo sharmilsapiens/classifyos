@@ -5,7 +5,58 @@
 > planning/overseer chat stays in sync with the local repo.
 
 **Last updated:** 2026-07-14
-**Updated by:** Claude Code (**NEW — Databricks I/O Phase B, Steps 3, 4 & 5: MLflow managed-server
+**Updated by:** Claude Code (**NEW — Databricks orchestration, §6.6 Step 6: FastAPI → Databricks Jobs
+(ADDITIVE + env-gated; API contract bumped `1.10 → 1.11`; engine sections UNTOUCHED).** Implements
+`docs/databricks_integration.md` §6.6 **Step 6** (`docs/enabling_parallelization.md` items 1–4). The
+whole feature is gated by `CLASSIFYOS_EXECUTION_BACKEND` (default `local`): with `local`, `POST /run`
+runs synchronously and the app is **byte-identical** to before (all ~461 backend + 159 frontend tests
+green); with `databricks`, the same endpoints switch to the async Databricks-Jobs flow. **(A) Async
+API.** `POST /api/v1/run` (databricks) submits a Job via `POST /api/2.1/jobs/runs/submit` (service
+token) and returns `{job_id, run_id, status}` immediately; `GET /api/v1/run/{job_id}/status` polls
+`GET /api/2.1/jobs/runs/get` and maps the Databricks `RunState` → `PENDING|RUNNING|COMPLETED|FAILED`;
+`GET /api/v1/run/{job_id}/results` fetches the locked `/run` envelope the Job wrote to
+`api/run_response.json` on the UC output volume (via `StorageAdapter`) — byte-identical to a local run.
+The `/run` reshaper was extracted verbatim from `routes/run.py` into `api/result_builder.py`
+(`build_run_result`) so the route AND the Job entrypoint share ONE reshaper (behavior-preserving
+refactor). **(B) Persistent job state.** `api/jobs_store.py` — a `classifyos_jobs` table via SQLAlchemy
+**Core**, created at startup (gated on the databricks backend); DSN precedence `CLASSIFYOS_JOBS_DSN` →
+the MLflow Postgres (`MLFLOW_TRACKING_URI` when `postgresql://`) → local sqlite. Survives a FastAPI
+restart (verified: a new engine over the same DSN still returns a RUNNING job). **(C) UC browser
+proxies.** `GET /api/v1/databricks/{catalogs,schemas,tables}` proxy Unity Catalog (user PAT via
+`X-Databricks-Token`) for the UI data-source picker. **PAT handling:** the user's PAT is passed
+per-request in `X-Databricks-Token`, forwarded to the Job for UC data access, and **NEVER persisted**;
+the service `DATABRICKS_TOKEN` is used only for the Jobs API. **(D) Frontend.** `AppStore` learns the
+backend from `/health.execution_backend`; `runPipeline` branches (local sync unchanged; databricks
+submit → poll every 5s → fetch results on COMPLETED / surface message on FAILED); Overview shows a
+"Training in progress…" spinner reflecting the polled status; Upload gains a Databricks (Unity Catalog)
+data-source tab (`components/upload/DatabricksSourcePanel.tsx`) with a PAT input + catalog→schema→table
+browser that sets a `delta` `input_source`. The request-side `InputSourceConfig` (both Pydantic +
+TS) gained optional `catalog`/`schema`/`limit` so a `delta` run now reaches `build_config` via the API
+(previously notebook-only). **Job entrypoint:** `notebooks/classifyos_job_runner.py` (tooling — runs
+the engine on the cluster and writes the envelope; written, cluster run pending, like the smoke test).
+**Dependency:** `httpx>=0.27,<1` promoted to a runtime API dep (installed 0.28.1). **Tests:**
+`tests/test_api_jobs.py` (submit + persist, missing-PAT 401, bad-config 422, unavailable 503, status
+PENDING→RUNNING→COMPLETED + FAILED, results 200/409/404, restart-persistence) and
+`tests/test_api_databricks.py` (catalogs/schemas/tables, missing-PAT 401, unreachable 503, rejected-creds
+401) — **all Databricks REST calls mocked via `httpx.MockTransport`; no test contacts a live workspace;
+jobs store = temp sqlite.** Frontend: `AppStore.test.tsx` (polling state machine + FAILED + PAT guard)
+and `upload.test.tsx` (data-source toggle show/hide, catalog browse). Version-marker bump `1.10 → 1.11`
+required updating the `schema_version` assertions in `test_api_run.py` / `test_api_runs.py` /
+`test_use_case_sweep.py` and the additive `execution_backend` field in `test_api_health.py`. **Full
+backend 461 pytest green; frontend 159 vitest green; `tsc -b` + `vite build` clean.** **Hallucination
+check ✅** (Microsoft Learn / Azure Databricks): `jobs/runs/submit` (→`run_id`), `jobs/runs/get`
+(`state.life_cycle_state`/`result_state`/`state_message`), the `tasks[].{task_key, existing_cluster_id,
+notebook_task, libraries[{whl}]}` shape, and `unity-catalog/{catalogs, schemas?catalog_name=,
+tables?catalog_name=&schema_name=}`; the API reference is a JS SPA so the client is written defensively
+(tolerates `SUCCESS`/`SUCCEEDED`, missing fields). **plan_tweak:** added #44 (env-gated dual-mode `/run`
+vs the contract's "background path deferred to v1.5" note + the literal "replace") and #45 (UC-table
+profiling follow-up — the browser proxies return names only). `docs/api_contract.md` (schema 1.11 +
+endpoints), `docs/databricks_integration.md` §6.6 Step 6 + status table + header, `.env.example`,
+`backend`? (engine untouched → `api_short_desc.md` + `frontend_short_desc.md`, NOT `backend_short_desc.md`)
+updated; generation prompt archived at `prompts/api_phases/phase_step6_databricks_orchestration.md`.
+**NOT run on a real cluster yet** (the Job entrypoint + a real submit are exercised once cluster access
+is available). **Out of scope (untouched):** Phase C (Model Serving), Phase D (persistent dashboard).)
+**Prior update (same day — Steps 3–5):** Claude Code (**Databricks I/O Phase B, Steps 3, 4 & 5: MLflow managed-server
 env wiring (zero code) + Delta table input source (`materialize_delta_source`) + cluster
 smoke-test notebook (ADDITIVE/opt-in; NO engine-section change, NO API/contract change,
 `schema_version` stays 1.10).** Implements `docs/databricks_integration.md` §6.6 **Steps 3–5**

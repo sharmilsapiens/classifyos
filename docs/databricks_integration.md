@@ -1,8 +1,9 @@
 # ClassifyOS — Databricks Integration: Design & Phased Roadmap
 
-> **Status:** active — Phase B in progress. §6.6 Steps 1 (`DatabricksVolumeStorage`) and 2
-> (wheel packaging) are DONE and verified locally (2026-07-14); Steps 3–6 pending cluster
-> access. Updated 2026-07-14.
+> **Status:** active — Phase B + orchestration built. §6.6 Steps 1–5 (volume storage, wheel, MLflow
+> env wiring, Delta input, smoke-test notebook) and **Step 6 (FastAPI → Databricks Jobs
+> orchestration)** are implemented and verified locally / mock-tested (2026-07-14); the cluster
+> end-to-end run (smoke test + a real Job) is pending cluster access. Updated 2026-07-14.
 > **Purpose:** answer, in one place, *how the project would run on Databricks*, *what
 > "deploy as a library" means*, *how input/output and model weights should be handled*,
 > and *where the current React dashboard fits*. Databricks/MLflow specifics below were
@@ -27,7 +28,7 @@
 | Phase B | MLflow env-var wiring for managed tracking server | ✅ Done — zero code, verified (§6.6 Step 3, 2026-07-14) |
 | Phase B | Wheel packaging (`pyproject.toml`) | ✅ Done (§6.6 Step 2, 2026-07-14) |
 | Phase B | Cluster smoke-test notebook (`notebooks/classifyos_smoke_test.py`) | ✅ Written (§6.6 Step 5, 2026-07-14); run pending cluster access |
-| Orchestration | Async API + Databricks Jobs REST integration (FastAPI layer) | 🔲 After Phase B |
+| Orchestration | Async API + Databricks Jobs REST integration (FastAPI layer) | ✅ Built + mock-tested (§6.6 Step 6, 2026-07-14); cluster end-to-end pending cluster access |
 | Phase C | Unity Catalog Model Registry + Model Serving endpoint | 🔲 Deferred |
 | Phase D | Persistent dashboard / run history UI | 🔲 Deferred |
 
@@ -427,18 +428,45 @@ workspace before running.
 
 ---
 
-### Step 6 — Orchestration layer (FastAPI on Azure → Databricks Jobs)
+### Step 6 — Orchestration layer (FastAPI on Azure → Databricks Jobs) — ✅ BUILT + mock-tested (2026-07-14); cluster run pending
 
-**After Steps 1–5 are verified on the cluster**, the engine runs cleanly as a Databricks
-Job. The orchestration layer is then built in the FastAPI layer (`backend/api/`):
+The orchestration layer is built in the FastAPI layer (`backend/api/`), **env-gated and additive**
+(`CLASSIFYOS_EXECUTION_BACKEND`, default `local`): with `local` the whole app is byte-identical to
+before (all ~461 backend + 159 frontend tests green); with `databricks` the same endpoints switch to
+the async Databricks-Jobs flow. The API contract bumped `1.10 → 1.11` (additive; `docs/api_contract.md`).
 
-- `POST /api/v1/run` → submits a Databricks Job via `POST /api/2.1/jobs/runs/submit`,
-  returns `{ job_id }` immediately (async — no blocking)
-- `GET /api/v1/run/{job_id}/status` → polls `GET /api/2.1/jobs/runs/get`
-- `GET /api/v1/run/{job_id}/results` → fetches artifacts from UC volume once complete
-- Persistent job state in Postgres (reuse existing MLflow Postgres) so FastAPI restarts
-  don't lose in-flight job_ids
-- User's Databricks PAT passed in request, used for UC data access, never persisted
+- `POST /api/v1/run` → (databricks) submits a Job via `POST /api/2.1/jobs/runs/submit` and returns
+  `{ job_id, run_id, status }` immediately (async — no blocking); (local) unchanged synchronous run.
+- `GET /api/v1/run/{job_id}/status` → polls `GET /api/2.1/jobs/runs/get`, maps the Databricks
+  `RunState` → `PENDING | RUNNING | COMPLETED | FAILED`.
+- `GET /api/v1/run/{job_id}/results` → once `COMPLETED`, fetches the locked `/run` envelope the Job
+  wrote to `api/run_response.json` on the UC output volume (via `StorageAdapter`) and returns it.
+- `GET /api/v1/databricks/{catalogs,schemas,tables}` → read-only Unity Catalog browser proxies for
+  the UI data-source picker (user PAT via `X-Databricks-Token`).
+- **Persistent job state** in a `classifyos_jobs` table (SQLAlchemy Core), created at startup — the
+  existing MLflow Postgres by default (`MLFLOW_TRACKING_URI` when `postgresql://`) or
+  `CLASSIFYOS_JOBS_DSN` — so a FastAPI restart doesn't lose an in-flight run.
+- **User's Databricks PAT** passed per-request in `X-Databricks-Token`, forwarded to the Job for UC
+  data access, **never persisted**; the service token (`DATABRICKS_TOKEN`) is used only for the Jobs
+  API calls.
+
+New backend files: `api/databricks.py` (REST client + status mapping + UC proxies), `api/jobs_store.py`
+(the job-state table + CRUD), `api/result_builder.py` (the canonical `/run` reshaper, extracted from
+`routes/run.py`), `api/routes/jobs.py`, `api/routes/databricks.py`. Frontend: the store polls the Job
+(`AppStore.tsx`), Overview shows the "Training in progress…" spinner, and a Databricks (Unity Catalog)
+data-source tab (`components/upload/DatabricksSourcePanel.tsx`) browses catalogs/schemas/tables. The
+Job entrypoint is `notebooks/classifyos_job_runner.py` (tooling — runs the engine on the cluster and
+writes the envelope; written, cluster run pending).
+
+**Hallucination check ✅** (Microsoft Learn / Azure Databricks): `POST /api/2.1/jobs/runs/submit`
+(→ `run_id`), `GET /api/2.1/jobs/runs/get` (`state.life_cycle_state` / `result_state` /
+`state_message`), the `tasks[].{task_key, existing_cluster_id, notebook_task, libraries[{whl}]}`
+shape, and `GET /api/2.1/unity-catalog/{catalogs, schemas?catalog_name=, tables?catalog_name=&schema_name=}`.
+All Databricks REST calls are mocked in CI (`httpx.MockTransport`) — no test contacts a live workspace.
+
+**Known limitation (→ plan_tweak):** the UC browser proxies return names only (no columns), so a UC
+table can't be column-profiled in the UI yet; the Databricks data-source tab collects target + feature
+columns manually and runs with engine defaults. A UC-table profiling endpoint is a follow-up.
 
 Full detail: `docs/enabling_parallelization.md` items 1–4.
 

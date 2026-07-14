@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
-import { fireEvent, render, screen, waitFor } from "@testing-library/react"
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 
 import type { InspectProfile } from "@/api/types"
-import { AppProvider, useApp } from "./AppStore"
+import { AppProvider, POLL_INTERVAL_MS, useApp } from "./AppStore"
 
 // A tiny consumer that surfaces the health-banner state for assertions.
 function HealthProbe() {
@@ -120,5 +120,169 @@ describe("applyUpload (source plumbing)", () => {
       table: "iris",
       query: null,
     })
+  })
+})
+
+// ── Databricks polling state machine (§6.6 Step 6) ─────────────────────────────
+// The store, in the databricks backend, submits a Job and polls its status every POLL_INTERVAL_MS,
+// switching to the results (COMPLETED) or an error (FAILED). We drive it with a URL-routing fetch
+// stub + fake timers and assert the exposed running/jobStatus/result/runError transitions.
+
+/** A minimal contract-valid /run result envelope (enough for parseRunResponse). */
+const OK_ENVELOPE = {
+  status: "ok",
+  schema_version: "1.11",
+  result: {
+    run: { target: "t" },
+    models: [],
+    predictions: {},
+    confusion_matrix: {},
+    class_report: {},
+    feature_impact: [],
+    curves: {},
+    artifacts: [],
+  },
+  error: null,
+}
+
+function jsonOk(body: unknown): Response {
+  return { ok: true, status: 200, json: async () => body } as Response
+}
+
+/** Build a fetch stub that routes by URL + method for the databricks submit/poll/results flow. */
+function databricksFetch(statuses: string[], opts: { message?: string | null } = {}) {
+  let i = 0
+  return vi.fn(async (url: string, init?: RequestInit) => {
+    const u = String(url)
+    const method = init?.method ?? "GET"
+    if (u.endsWith("/health"))
+      return jsonOk({ status: "ok", service: "ClassifyOS API", version: "1.0", execution_backend: "databricks" })
+    if (u.endsWith("/run") && method === "POST")
+      return jsonOk({ job_id: "job1", run_id: "r1", status: "PENDING", schema_version: "1.11" })
+    if (u.includes("/run/job1/status")) {
+      const status = statuses[Math.min(i, statuses.length - 1)]
+      i += 1
+      return jsonOk({ job_id: "job1", run_id: "r1", status, message: opts.message ?? null, schema_version: "1.11" })
+    }
+    if (u.includes("/run/job1/results")) return jsonOk(OK_ENVELOPE)
+    return { ok: false, status: 404, json: async () => ({}) } as Response
+  })
+}
+
+/** A probe that surfaces the run state + buttons to prep the form and trigger a run. */
+function RunProbe() {
+  const { running, jobStatus, result, runError, executionBackend, updateForm, setDatabricksPat, runPipeline } =
+    useApp()
+  return (
+    <div>
+      <span data-testid="backend">{executionBackend}</span>
+      <span data-testid="running">{String(running)}</span>
+      <span data-testid="jobStatus">{jobStatus ?? ""}</span>
+      <span data-testid="result">{result ? result.status : ""}</span>
+      <span data-testid="runError">{runError ?? ""}</span>
+      <button
+        onClick={() => {
+          updateForm({
+            input_file: "db_snapshots/tbl.parquet",
+            target: "t",
+            feature_cols: ["a"],
+            input_source: {
+              type: "delta",
+              connection_env: "e",
+              catalog: "c",
+              schema: "s",
+              table: "tbl",
+              query: null,
+            },
+          })
+          setDatabricksPat("pat")
+        }}
+      >
+        prep
+      </button>
+      <button onClick={() => void runPipeline()}>run</button>
+    </div>
+  )
+}
+
+describe("runPipeline (databricks backend — submit + poll)", () => {
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  async function mountInDatabricksMode(fetchMock: ReturnType<typeof databricksFetch>) {
+    vi.useFakeTimers()
+    vi.stubGlobal("fetch", fetchMock)
+    render(
+      <AppProvider>
+        <RunProbe />
+      </AppProvider>,
+    )
+    // Flush the mount-time /health probe so the store learns it's the databricks backend.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0)
+    })
+    expect(screen.getByTestId("backend").textContent).toBe("databricks")
+    // Prep the form + PAT, then submit (the immediate poll fires the first status).
+    await act(async () => {
+      fireEvent.click(screen.getByText("prep"))
+    })
+    await act(async () => {
+      fireEvent.click(screen.getByText("run"))
+      await vi.advanceTimersByTimeAsync(0)
+    })
+  }
+
+  it("transitions PENDING → RUNNING → COMPLETED and loads the results", async () => {
+    await mountInDatabricksMode(databricksFetch(["PENDING", "RUNNING", "COMPLETED"]))
+
+    // Immediate poll after submit → PENDING, still running.
+    expect(screen.getByTestId("jobStatus").textContent).toBe("PENDING")
+    expect(screen.getByTestId("running").textContent).toBe("true")
+
+    // Next interval → RUNNING.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(POLL_INTERVAL_MS)
+    })
+    expect(screen.getByTestId("jobStatus").textContent).toBe("RUNNING")
+
+    // Next interval → COMPLETED → results fetched, running clears.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(POLL_INTERVAL_MS)
+    })
+    expect(screen.getByTestId("jobStatus").textContent).toBe("COMPLETED")
+    expect(screen.getByTestId("running").textContent).toBe("false")
+    expect(screen.getByTestId("result").textContent).toBe("ok")
+    expect(screen.getByTestId("runError").textContent).toBe("")
+  })
+
+  it("surfaces the FAILED path with the workspace's message", async () => {
+    await mountInDatabricksMode(databricksFetch(["FAILED"], { message: "cluster OOM" }))
+
+    // The immediate poll returns FAILED → run stops with the error, no result.
+    expect(screen.getByTestId("jobStatus").textContent).toBe("FAILED")
+    expect(screen.getByTestId("running").textContent).toBe("false")
+    expect(screen.getByTestId("runError").textContent).toBe("cluster OOM")
+    expect(screen.getByTestId("result").textContent).toBe("")
+  })
+
+  it("requires a PAT before submitting", async () => {
+    vi.useFakeTimers()
+    vi.stubGlobal("fetch", databricksFetch(["PENDING"]))
+    render(
+      <AppProvider>
+        <RunProbe />
+      </AppProvider>,
+    )
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0)
+    })
+    // Prep the form but DO NOT set a PAT (overwrite the probe's prep with a no-PAT path).
+    await act(async () => {
+      fireEvent.click(screen.getByText("run")) // no form / no pat → validateRequired fails first
+      await vi.advanceTimersByTimeAsync(0)
+    })
+    expect(screen.getByTestId("running").textContent).toBe("false")
+    expect(screen.getByTestId("runError").textContent.length).toBeGreaterThan(0)
   })
 })

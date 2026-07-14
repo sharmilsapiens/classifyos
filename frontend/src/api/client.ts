@@ -13,14 +13,19 @@
    ════════════════════════════════════════════════════════════════════════ */
 
 import type {
+  CatalogsResponse,
   ExplainRequest,
   ExplainResponse,
   HealthResponse,
   InputTablesResponse,
   InspectProfile,
+  JobStatusResponse,
   RunConfig,
   RunResponse,
   RunsListResponse,
+  RunSubmission,
+  SchemasResponse,
+  TablesResponse,
 } from "./types"
 import { parseRunResponse } from "./parse"
 
@@ -168,6 +173,66 @@ export async function run(cfg: RunConfig): Promise<RunResponse> {
   const body = await handleJson<unknown>(res)
   // Validate the shape against the contract before handing it to the UI.
   return parseRunResponse(body)
+}
+
+/* ───────────── Databricks orchestration (schema 1.11, §6.6 Step 6) ────────── */
+// Used ONLY when GET /health reports execution_backend === "databricks". In that mode POST /run
+// submits a Databricks Job and returns a {job_id} to poll (submitRun); the local backend keeps
+// using run() above. The user's PAT is passed per-request as the X-Databricks-Token header and is
+// never stored client-side beyond the in-memory store.
+
+/** POST /run (databricks backend) — submit a Job; returns {job_id, run_id, status}. */
+export async function submitRun(cfg: RunConfig, pat: string): Promise<RunSubmission> {
+  const res = await request(`${API_BASE}/run`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-Databricks-Token": pat },
+    body: JSON.stringify(cfg),
+  })
+  return handleJson<RunSubmission>(res)
+}
+
+/** GET /run/{job_id}/status — poll a submitted Job's status. */
+export async function getRunStatus(jobId: string): Promise<JobStatusResponse> {
+  const res = await request(`${API_BASE}/run/${encodeURIComponent(jobId)}/status`)
+  return handleJson<JobStatusResponse>(res)
+}
+
+/**
+ * GET /run/{job_id}/results — fetch a COMPLETED Job's result envelope (validated through the same
+ * parser as a local /run, so it drops straight into the result pages). A 409 (not complete yet)
+ * surfaces as an ApiError — the store only calls this once status is COMPLETED.
+ */
+export async function getRunResults(jobId: string): Promise<RunResponse> {
+  const res = await request(`${API_BASE}/run/${encodeURIComponent(jobId)}/results`)
+  const body = await handleJson<unknown>(res)
+  return parseRunResponse(body)
+}
+
+/** GET /databricks/catalogs — list Unity Catalog catalogs (needs the user's PAT). */
+export async function listCatalogs(pat: string): Promise<CatalogsResponse> {
+  const res = await request(`${API_BASE}/databricks/catalogs`, {
+    headers: { "X-Databricks-Token": pat },
+  })
+  return handleJson<CatalogsResponse>(res)
+}
+
+/** GET /databricks/schemas?catalog= — list schemas in a catalog. */
+export async function listSchemas(catalog: string, pat: string): Promise<SchemasResponse> {
+  const res = await request(`${API_BASE}/databricks/schemas?catalog=${encodeURIComponent(catalog)}`, {
+    headers: { "X-Databricks-Token": pat },
+  })
+  return handleJson<SchemasResponse>(res)
+}
+
+/** GET /databricks/tables?catalog=&schema= — list tables in a schema. */
+export async function listTables(
+  catalog: string,
+  schema: string,
+  pat: string,
+): Promise<TablesResponse> {
+  const url = `${API_BASE}/databricks/tables?catalog=${encodeURIComponent(catalog)}&schema=${encodeURIComponent(schema)}`
+  const res = await request(url, { headers: { "X-Databricks-Token": pat } })
+  return handleJson<TablesResponse>(res)
 }
 
 /** GET /runs — list past MLflow-logged runs (most-recent first). Consumed by: Runs. */

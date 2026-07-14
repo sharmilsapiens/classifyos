@@ -41,7 +41,26 @@
 > field was renamed, retyped, or removed. The response envelope now reports `"schema_version": "1.5"`. Old
 > clients ignore the new fields.
 >
-> **`1.10` (additive, current default).** Adds the **MLflow read-path endpoints** (Interim 2a):
+> **`1.11` (additive, current default).** Adds the **Databricks orchestration layer** (§6.6 Step 6).
+> This is **env-gated and additive**: with the default `local` execution backend the
+> `POST /api/v1/run` request/response envelope is **byte-identical to `1.10`** — every existing field
+> and behaviour is unchanged, so local dev and CI are unaffected. When the server is configured for
+> Databricks (`CLASSIFYOS_EXECUTION_BACKEND=databricks`) the **same** `/run` endpoint instead submits
+> a Databricks Job and returns a small **`RunSubmission`** (`{job_id, run_id, status}`) immediately;
+> the run is then polled via **`GET /api/v1/run/{job_id}/status`** and, once `COMPLETED`, fetched via
+> **`GET /api/v1/run/{job_id}/results`** — which returns THIS SAME locked envelope (read from the
+> Unity Catalog output volume the Job wrote it to). Also adds three read-only **Unity Catalog browser
+> proxies** — `GET /api/v1/databricks/{catalogs,schemas,tables}` — for the UI's data-source picker.
+> The user's Databricks PAT is passed per request in the `X-Databricks-Token` header (for UC data
+> access) and is **never persisted**; job state lives in a `classifyos_jobs` table (the existing
+> MLflow Postgres) so a FastAPI restart does not lose an in-flight run. `GET /api/v1/health` gains an
+> additive `execution_backend` field so the client knows which `/run` behaviour to expect. No
+> `1.0`–`1.10` field was renamed, retyped, or removed. Additionally, the request-side
+> `input_source` object gains optional `catalog`/`schema`/`limit` fields so a run can read a Unity
+> Catalog **Delta** table (engine §6.6 Step 4) — a `file`/`postgres` run is unchanged (they default
+> to `null` and are ignored). The response envelope now reports `"schema_version": "1.11"`.
+>
+> **`1.10` (additive).** Adds the **MLflow read-path endpoints** (Interim 2a):
 > `GET /api/v1/runs` (list past runs) and `GET /api/v1/runs/{run_id}` (reload one). The `POST /api/v1/run`
 > request/response envelope is **byte-identical to `1.9`** — nothing in it changed. This is what finally
 > makes results survive a browser refresh and a server restart: a run logged to MLflow (opt-in
@@ -105,11 +124,16 @@
 
 | Method | Path | Purpose |
 |---|---|---|
-| `GET`  | `/api/v1/health` | Liveness check → `{status, service, version}`. |
+| `GET`  | `/api/v1/health` | Liveness check → `{status, service, version, execution_backend}` (`execution_backend` ∈ `local`\|`databricks`, additive in 1.11 — tells the client which `/run` behaviour to expect). |
 | `POST` | `/api/v1/upload` | Multipart upload of a CSV/Excel/Parquet dataset → stores it under `DATA_DIR/uploads/` via the StorageAdapter and returns the `inspect_file` profile + `server_path` + the additive Data-Profile blocks (`column_profiles`, `correlation`) — see below. |
 | `GET`  | `/api/v1/input-sources/tables` | **(Interim 2b UI)** List the tables in the input DB (via the `CLASSIFYOS_PG_DSN` DSN) → `{connection_env, tables[]}`, for the "Import from database" picker. `503` if the DB is unreachable/unconfigured. See below. |
 | `POST` | `/api/v1/input-sources/select` | **(Interim 2b UI)** Materialize + profile a chosen DB table/query → the **same `InspectProfile` shape as `/upload`** plus an `input_source` block for the run. `422` bad request, `503` DB unavailable. See below. |
-| `POST` | `/api/v1/run` | Execute the full pipeline (`ModelRunner`) → the locked envelope below. |
+| `POST` | `/api/v1/run` | Execute the full pipeline. **local** backend → runs synchronously, returns the locked envelope below. **databricks** backend → submits a Databricks Job, returns `RunSubmission` `{job_id, run_id, status}` (1.11). See below. |
+| `GET`  | `/api/v1/run/{job_id}/status` | **(1.11, databricks)** Poll a submitted Job → `{job_id, run_id, status: PENDING\|RUNNING\|COMPLETED\|FAILED, message}`. `404` unknown job. See below. |
+| `GET`  | `/api/v1/run/{job_id}/results` | **(1.11, databricks)** Once `COMPLETED`, fetch the run's locked `/run` envelope (from the UC output volume). `409` if not complete; `404` unknown job / envelope not written yet. See below. |
+| `GET`  | `/api/v1/databricks/catalogs` | **(1.11)** Proxy Unity Catalog catalogs (user PAT via `X-Databricks-Token`) → `{catalogs[]}`. `401` no PAT, `503` unreachable. |
+| `GET`  | `/api/v1/databricks/schemas` | **(1.11)** `?catalog=` → `{catalog, schemas[]}`. |
+| `GET`  | `/api/v1/databricks/tables` | **(1.11)** `?catalog=&schema=` → `{catalog, schema, tables[]}`. |
 | `GET`  | `/api/v1/runs` | **(1.10)** List past MLflow-logged runs (most-recent first) → `{schema_version, tracking_uri, runs[]}`. See below. |
 | `GET`  | `/api/v1/runs/{run_id}` | **(1.10)** Reload ONE past run → the same locked `/run` envelope it was rendered with (byte-identical). `404` if the run is unknown or has no persisted snapshot; `503` if the tracking store is unreachable. |
 | `POST` | `/api/v1/explain` | On-demand single-row SHAP — **documented stub** (stateless; would need model persistence). Per-row SHAP is instead produced during a run: set `explainability.enabled` on `/run` and read `result.explanations` (schema 1.6). |
@@ -249,11 +273,14 @@ problem there is returned as HTTP 422.
   "test_size": 0.2,
   "stratify": true,
   "time_split_col": null,
-  "input_source": {                     // Interim 2b — OPTIONAL; default reads input_file from storage (unchanged)
-    "type": "file",                     // file | postgres
+  "input_source": {                     // Interim 2b + Databricks Delta — OPTIONAL; default reads input_file from storage (unchanged)
+    "type": "file",                     // file | postgres | delta
     "connection_env": "CLASSIFYOS_PG_DSN", // NAME of a server-side env var holding the SQLAlchemy DSN (never a credential here)
-    "table": null,                      // postgres: SELECT * FROM <table> (safe identifier) — provide table OR query, not both
-    "query": null },                    // postgres: a raw SQL SELECT
+    "table": null,                      // postgres/delta: table name (safe identifier) — provide table OR query, not both
+    "query": null,                      // postgres/delta: a raw SQL SELECT
+    "catalog": null,                    // delta (1.11): Unity Catalog catalog, e.g. "main"
+    "schema": null,                     // delta (1.11): UC schema, e.g. "insurance"
+    "limit": null },                    // delta (1.11): optional positive-int row cap (dev/smoke)
   "algorithms": ["LogisticRegression", "RandomForest", "XGBoost"],
   "class_balance": "smote",           // smote | undersample | class_weight | none
   "missing_strategy": "median",       // LEGACY GLOBAL default (back-compat); per-type keys below override it
@@ -621,12 +648,65 @@ result pages. This works because `/run` persists its rendered envelope as the ru
 
 No leakage surface and no ML: these endpoints only read back what a completed run already logged.
 
-### Execution model (limitation)
+### Execution model (two backends — 1.11)
 
-`POST /api/v1/run` is **synchronous**: it runs the pipeline on a worker thread
-(`run_in_threadpool`, so the event loop stays responsive) and returns the full result in one
-response. A long run can exceed a reverse-proxy/gateway timeout. A background-job path
-(submit → poll → fetch) is deferred to **v1.5** (recorded in plan_tweak).
+`POST /api/v1/run` has two execution backends, selected by the server-side
+`CLASSIFYOS_EXECUTION_BACKEND` env var (never a request field):
+
+* **`local`** (default) — the pipeline runs **synchronously** on a worker thread
+  (`run_in_threadpool`, so the event loop stays responsive) and the full locked envelope is
+  returned in one response. This is byte-identical to `1.10` and is what local dev + CI use. A very
+  long run can still exceed a reverse-proxy/gateway timeout — for that, use the databricks backend.
+* **`databricks`** — `/run` submits a Databricks Job and returns a `RunSubmission` immediately
+  (no blocking); the client polls `/run/{job_id}/status` and fetches `/run/{job_id}/results` on
+  completion. This is the background-job path previously deferred to "v1.5".
+
+## Databricks orchestration — `POST /run` (databricks) · `/run/{job_id}/status` · `/results` · UC proxies (1.11, additive)
+
+Only active in the **databricks** execution backend. All Databricks REST calls are server-side; the
+user's PAT travels per request in the `X-Databricks-Token` header (for Unity Catalog data access)
+and is **never persisted**. Job state is stored in a `classifyos_jobs` table (the existing MLflow
+Postgres by default, or `CLASSIFYOS_JOBS_DSN`) so a FastAPI restart can still poll an in-flight run.
+
+### `POST /api/v1/run` → `RunSubmission`
+
+The request body is the usual `RunConfig` (validated by `build_config` exactly as in local mode →
+422 on a bad config). A missing `X-Databricks-Token` → **401**. On success the Job is submitted
+(`POST /api/2.1/jobs/runs/submit`, authenticated with the **service** token; the RunConfig JSON +
+the user PAT ride along as task parameters) and the response is:
+
+```jsonc
+{ "job_id": "3f9c…", "run_id": "55501", "status": "PENDING", "schema_version": "1.11" }
+```
+
+`job_id` is our persistent handle (used in the paths below); `run_id` is the Databricks run id.
+A workspace that can't be reached → **503**; a server misconfigured for databricks → **500**.
+
+### `GET /api/v1/run/{job_id}/status`
+
+Polls `GET /api/2.1/jobs/runs/get` and maps the Databricks `RunState` to a coarse status:
+
+```jsonc
+{ "job_id": "3f9c…", "run_id": "55501", "status": "RUNNING", "message": "…", "schema_version": "1.11" }
+```
+
+`status` ∈ `PENDING | RUNNING | COMPLETED | FAILED`. Unknown `job_id` → **404**. A transient
+Databricks blip returns the last-known stored status (never a 500) so a polling client survives it.
+
+### `GET /api/v1/run/{job_id}/results`
+
+Once `status == "COMPLETED"`, returns the **exact locked `/run` envelope** (`{status,
+schema_version, result, error}`) the Job wrote to `api/run_response.json` on the Unity Catalog
+output volume — byte-identical to a local run, so the dashboard drops it straight into the result
+pages. `409` if the run is not complete (with the current `status`); `404` unknown job, or completed
+but the envelope is not on the volume yet.
+
+### `GET /api/v1/databricks/{catalogs,schemas,tables}`
+
+Read-only proxies over Unity Catalog for the UI's data-source picker, authenticated with the user's
+PAT (`X-Databricks-Token`): `catalogs` → `{catalogs[]}`; `schemas?catalog=` → `{catalog, schemas[]}`;
+`tables?catalog=&schema=` → `{catalog, schema, tables[]}`. Missing PAT → **401**; unreachable/errored
+workspace → **503**. Pure proxies — no ML, no persistence, PAT never stored.
 
 ---
 
@@ -653,6 +733,13 @@ where the run was logged in MLflow (opt-in `mlflow.enabled`); all `1.0`–`1.8` 
 _`1.10` (additive): added the MLflow read-path endpoints `GET /api/v1/runs` (list past runs) and
 `GET /api/v1/runs/{run_id}` (reload one, byte-identical) — Interim 2a. The `POST /api/v1/run` envelope is
 unchanged from `1.9`; the version marker moves to record the new endpoints (locked-contract rule)._
+_`1.11` (additive): added the env-gated Databricks orchestration layer (§6.6 Step 6) — the `databricks`
+execution backend where `POST /api/v1/run` returns a `RunSubmission` and the run is polled via
+`GET /api/v1/run/{job_id}/status` + fetched via `GET /api/v1/run/{job_id}/results` (the same locked
+envelope); the UC browser proxies `GET /api/v1/databricks/{catalogs,schemas,tables}`; an additive
+`execution_backend` field on `/health`; and optional `input_source.catalog`/`schema`/`limit` (Delta).
+With the default `local` backend the `/run` envelope is byte-identical to `1.10`; all `1.0`–`1.10`
+fields are unchanged._
 _2026-06-26 (default-value change only, **no schema/version change** — field shapes unchanged):
 `tuning.timeout_seconds` now defaults to `null` (no per-model wall-clock cap; `n_trials` bounds
 the study) rather than `600`. `tuning.search_space_overrides` (always present in `1.0`) is now

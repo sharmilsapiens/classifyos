@@ -13,8 +13,8 @@
 
 import { useRef, useState } from "react"
 import type { ReactNode } from "react"
-import { Link } from "react-router-dom"
-import { Database, FileUp, ScanSearch, UploadCloud } from "lucide-react"
+import { Link, useNavigate } from "react-router-dom"
+import { Cloud, Database, FileUp, Play, ScanSearch, UploadCloud } from "lucide-react"
 
 import { ApiError, selectInputTable, upload } from "@/api/client"
 import { useApp } from "@/store/AppStore"
@@ -22,25 +22,43 @@ import { fmtInt } from "@/lib/format"
 import { cn } from "@/lib/utils"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
+import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Select } from "@/components/ui/select"
-import { buttonVariants } from "@/components/ui/button"
+import { Button, buttonVariants } from "@/components/ui/button"
 import { ErrorState, PageHeader, Spinner } from "@/components/common/States"
 import DatabaseSourcePanel from "@/components/upload/DatabaseSourcePanel"
+import DatabricksSourcePanel from "@/components/upload/DatabricksSourcePanel"
 
-type SourceMode = "file" | "database"
+type SourceMode = "file" | "database" | "databricks"
+/** A selected Unity Catalog table (Databricks source). */
+type UcSelection = { catalog: string; schema: string; table: string }
 /** The last DB selection (table OR query) so a target change can re-profile the same source. */
 type DbSelection = { table?: string; query?: string }
 
 export default function UploadPage() {
-  const { inspect, serverPath, form, applyUpload, updateForm } = useApp()
+  const {
+    inspect,
+    serverPath,
+    form,
+    applyUpload,
+    updateForm,
+    executionBackend,
+    databricksPat,
+    setDatabricksPat,
+    running,
+    runPipeline,
+  } = useApp()
+  const navigate = useNavigate()
   const [mode, setMode] = useState<SourceMode>("file")
   const [file, setFile] = useState<File | null>(null)
   const [dbSelection, setDbSelection] = useState<DbSelection | null>(null)
+  const [ucSelection, setUcSelection] = useState<UcSelection | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [dragOver, setDragOver] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
+  const onDatabricks = executionBackend === "databricks"
 
   // Upload a file (and re-inspect when a target is chosen, to fetch its class distribution).
   async function doUpload(f: File, target?: string) {
@@ -96,6 +114,34 @@ export default function UploadPage() {
     setError(null)
   }
 
+  // Databricks (Unity Catalog) source: picking a table sets a `delta` input_source + a snapshot
+  // input_file. The UC list APIs return names only (no columns), so the target + feature columns
+  // are entered manually below; a Databricks run uses engine defaults (there is no profile to tune
+  // from) — column profiling for UC tables is a documented follow-up.
+  function onSelectUcTable(sel: UcSelection) {
+    setUcSelection(sel)
+    updateForm({
+      input_file: `db_snapshots/${sel.table}.parquet`,
+      input_source: {
+        type: "delta",
+        connection_env: "CLASSIFYOS_PG_DSN", // unused for delta; kept for type completeness
+        catalog: sel.catalog,
+        schema: sel.schema,
+        table: sel.table,
+        query: null,
+      },
+    })
+  }
+
+  function onRunDatabricks() {
+    navigate("/") // watch the run + polling on Overview
+    void runPipeline()
+  }
+
+  const ucFeatureText = form.feature_cols.join(", ")
+  const ucReady =
+    !!ucSelection && form.target.trim().length > 0 && form.feature_cols.length > 0
+
   return (
     <div>
       <PageHeader
@@ -121,6 +167,15 @@ export default function UploadPage() {
           icon={<Database className="h-4 w-4" aria-hidden />}
           label="Import from database"
         />
+        {/* Databricks (Unity Catalog) — only offered when the server runs the databricks backend. */}
+        {onDatabricks && (
+          <SourceTab
+            active={mode === "databricks"}
+            onClick={() => switchMode("databricks")}
+            icon={<Cloud className="h-4 w-4" aria-hidden />}
+            label="Databricks (Unity Catalog)"
+          />
+        )}
       </div>
 
       {/* Source input — file drop zone OR the database table picker. */}
@@ -160,13 +215,70 @@ export default function UploadPage() {
             onChange={(e) => onFiles(e.target.files)}
           />
         </div>
-      ) : (
+      ) : mode === "database" ? (
         <DatabaseSourcePanel
           selected={dbSelection?.table ?? null}
           onSelectTable={(t) => void doSelect({ table: t })}
           onRunQuery={(q) => void doSelect({ query: q })}
           busy={busy}
         />
+      ) : (
+        <div className="space-y-5">
+          <DatabricksSourcePanel
+            pat={databricksPat}
+            onPatChange={setDatabricksPat}
+            onSelectTable={onSelectUcTable}
+            selectedTable={ucSelection?.table ?? null}
+            busy={running}
+          />
+          {ucSelection && (
+            <Card>
+              <CardHeader>
+                <CardTitle>Run on {ucSelection.catalog}.{ucSelection.schema}.{ucSelection.table}</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <p className="text-sm text-muted-foreground">
+                  Unity Catalog browsing returns table names only, so enter the target column and
+                  the feature columns to train on. The run is submitted as a Databricks Job (engine
+                  defaults); you can watch its progress on the Overview page.
+                </p>
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                  <div className="space-y-1.5">
+                    <Label htmlFor="dbx-target">Target column</Label>
+                    <Input
+                      id="dbx-target"
+                      value={form.target}
+                      placeholder="e.g. will_lapse"
+                      onChange={(e) => updateForm({ target: e.target.value })}
+                      disabled={running}
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label htmlFor="dbx-features">Feature columns (comma-separated)</Label>
+                    <Input
+                      id="dbx-features"
+                      value={ucFeatureText}
+                      placeholder="age, annual_premium, num_late_payments"
+                      onChange={(e) =>
+                        updateForm({
+                          feature_cols: e.target.value
+                            .split(",")
+                            .map((c) => c.trim())
+                            .filter(Boolean),
+                        })
+                      }
+                      disabled={running}
+                    />
+                  </div>
+                </div>
+                <Button onClick={onRunDatabricks} disabled={!ucReady || running}>
+                  <Play className="h-4 w-4" />
+                  Run on Databricks
+                </Button>
+              </CardContent>
+            </Card>
+          )}
+        </div>
       )}
 
       {mode === "file" && busy && (

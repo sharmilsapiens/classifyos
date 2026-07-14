@@ -526,6 +526,32 @@ from a list, no hand-crafted request.
   render (source switch + DB list + empty/unreachable states). **151 vitest green (+9) · tsc + build
   clean.**
 
+## Databricks runs — submit, watch it train, load results (✅ Done, 2026-07-14)
+**In one line:** When the server is set up to train on Databricks, the dashboard now **submits the
+run as a background job and watches it** — a "Training in progress…" spinner that polls every few
+seconds and loads the results the moment it finishes — and gains a Databricks data-source tab for
+picking a Unity Catalog table. A normal local install is completely unchanged.
+- **Knows which mode it's in.** On load, the app reads the server's `/health`, which now says whether
+  it runs `local` or `databricks`. In `local` mode the run flow is exactly as before (one request,
+  results come straight back). In `databricks` mode the flow switches to submit-and-poll — the same
+  button, different plumbing behind it.
+- **Submit → poll → results.** Starting a run POSTs to `/run`, which returns a `job_id`; the store
+  then polls the job's status every 5 seconds, shows the live status (pending / running) with a
+  spinner on the Overview page, and — when it completes — fetches the finished results and drops them
+  into the existing result pages, exactly like a local run. If the job fails, the failure message is
+  shown instead.
+- **A Databricks data source.** The Upload page grows a third tab, "Databricks (Unity Catalog)",
+  shown only in Databricks mode. You paste your access token (kept in memory only, never saved),
+  then browse catalog → schema → table using the new proxy endpoints, and pick a table to run on.
+  Because Unity Catalog listing returns table names only (no columns), you type the target and
+  feature columns, and the run uses engine defaults — a documented limitation (profiling a Databricks
+  table in the UI is a follow-up).
+- **Safe + additive.** New types/client calls (`submitRun`, `getRunStatus`, `getRunResults`,
+  `listCatalogs`/`listSchemas`/`listTables`) mirror the contract exactly; the token travels in a
+  per-request header and is never persisted. New tests cover the **polling state machine**
+  (pending → running → completed, plus the failed path) and the **data-source toggle** showing/hiding
+  the Databricks tab. **159 vitest green · tsc + build clean.**
+
 ---
 
 ## How to read this project

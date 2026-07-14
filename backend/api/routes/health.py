@@ -10,6 +10,8 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
+from ..databricks import execution_backend
+
 # An APIRouter is a group of related endpoints. main.py mounts it under the /api/v1 prefix,
 # so the path declared here ("/health") becomes "/api/v1/health".
 router = APIRouter(tags=["health"])
@@ -17,5 +19,15 @@ router = APIRouter(tags=["health"])
 
 @router.get("/health")
 def health() -> dict[str, str]:
-    """Return a small fixed payload confirming the API process is alive."""
-    return {"status": "ok", "service": "ClassifyOS API", "version": "1.0"}
+    """Return a small fixed payload confirming the API process is alive.
+
+    ``execution_backend`` (``"local"`` | ``"databricks"``, §6.6 Step 6) lets the frontend decide
+    whether ``POST /run`` returns results synchronously (local) or a ``{job_id}`` to poll
+    (databricks). Additive to the payload; the liveness fields are unchanged.
+    """
+    return {
+        "status": "ok",
+        "service": "ClassifyOS API",
+        "version": "1.0",
+        "execution_backend": execution_backend(),
+    }

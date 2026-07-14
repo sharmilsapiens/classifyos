@@ -39,6 +39,11 @@ if not _data_path.is_absolute():
     _data_path = (BACKEND_DIR / _data_path).resolve()
 os.environ["DATA_DIR"] = str(_data_path)
 
+# Pin the LOCAL execution backend for the base suite regardless of a machine's real .env (a dev
+# may have set CLASSIFYOS_EXECUTION_BACKEND=databricks). The Databricks orchestration tests
+# (§6.6 Step 6) flip this to "databricks" per-test with monkeypatch, which is restored afterwards.
+os.environ["CLASSIFYOS_EXECUTION_BACKEND"] = "local"
+
 
 @pytest.fixture(scope="session")
 def output_dir(tmp_path_factory: pytest.TempPathFactory) -> Path:

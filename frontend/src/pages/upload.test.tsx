@@ -13,26 +13,41 @@ import type { ReactElement } from "react"
 
 import type { InspectProfile } from "@/api/types"
 
-// ── Store mock — the page needs inspect/serverPath/form + applyUpload/updateForm. ──
+// ── Store mock — the page needs inspect/serverPath/form + applyUpload/updateForm, plus the
+//    §6.6 Step 6 Databricks fields (executionBackend/databricksPat/setDatabricksPat/running/
+//    runPipeline) that gate the "Databricks (Unity Catalog)" data-source tab. ──
 const applyUpload = vi.fn()
 const updateForm = vi.fn()
+const setDatabricksPat = vi.fn()
+const runPipeline = vi.fn()
 const mockApp = {
   inspect: null as InspectProfile | null,
   serverPath: null as string | null,
-  form: { target: "", input_source: null },
+  form: { target: "", input_source: null, feature_cols: [] as string[] },
   applyUpload,
   updateForm,
+  executionBackend: "local" as "local" | "databricks",
+  databricksPat: "",
+  setDatabricksPat,
+  running: false,
+  runPipeline,
 }
 vi.mock("@/store/AppStore", () => ({ useApp: () => mockApp }))
 
-// ── API client mock (shared by Upload + DatabaseSourcePanel). ──────────────────
+// ── API client mock (shared by Upload + DatabaseSourcePanel + DatabricksSourcePanel). ──
 const listInputTables = vi.fn()
 const selectInputTable = vi.fn()
 const uploadFile = vi.fn()
+const listCatalogs = vi.fn()
+const listSchemas = vi.fn()
+const listTables = vi.fn()
 vi.mock("@/api/client", () => ({
   listInputTables: () => listInputTables(),
   selectInputTable: (args: unknown) => selectInputTable(args),
   upload: (...args: unknown[]) => uploadFile(...args),
+  listCatalogs: (pat: string) => listCatalogs(pat),
+  listSchemas: (catalog: string, pat: string) => listSchemas(catalog, pat),
+  listTables: (catalog: string, schema: string, pat: string) => listTables(catalog, schema, pat),
   ApiError: class ApiError extends Error {},
 }))
 
@@ -59,8 +74,14 @@ beforeEach(() => {
   uploadFile.mockReset()
   applyUpload.mockReset()
   updateForm.mockReset()
+  setDatabricksPat.mockReset()
+  runPipeline.mockReset()
   mockApp.inspect = null
   mockApp.serverPath = null
+  mockApp.form = { target: "", input_source: null, feature_cols: [] }
+  mockApp.executionBackend = "local"
+  mockApp.databricksPat = ""
+  mockApp.running = false
 })
 
 function renderPage(ui: ReactElement) {
@@ -120,5 +141,41 @@ describe("Upload — database honest states", () => {
     fireEvent.click(screen.getByRole("tab", { name: /Import from database/i }))
     expect(await screen.findByText(/Database unreachable/i)).toBeInTheDocument()
     expect(screen.getByText(/Postgres is down/i)).toBeInTheDocument()
+  })
+})
+
+describe("Upload — Databricks data source (§6.6 Step 6, toggle show/hide)", () => {
+  it("hides the Databricks tab in the LOCAL execution backend", () => {
+    mockApp.executionBackend = "local"
+    renderPage(<UploadPage />)
+    expect(screen.queryByRole("tab", { name: /Databricks/i })).not.toBeInTheDocument()
+  })
+
+  it("shows the Databricks tab (with the PAT input + catalog browser) in the DATABRICKS backend", async () => {
+    mockApp.executionBackend = "databricks"
+    listCatalogs.mockResolvedValue({ catalogs: ["main", "samples"] })
+    renderPage(<UploadPage />)
+
+    const tab = screen.getByRole("tab", { name: /Databricks/i })
+    expect(tab).toBeInTheDocument()
+    fireEvent.click(tab)
+
+    // The PAT input appears; browsing needs it, so Connect drives listCatalogs.
+    const pat = screen.getByLabelText(/personal access token/i)
+    fireEvent.change(pat, { target: { value: "dapi-xyz" } })
+    expect(setDatabricksPat).toHaveBeenCalledWith("dapi-xyz")
+  })
+
+  it("lists catalogs after Connect and passes the PAT through", async () => {
+    mockApp.executionBackend = "databricks"
+    mockApp.databricksPat = "dapi-xyz"
+    listCatalogs.mockResolvedValue({ catalogs: ["main", "samples"] })
+    renderPage(<UploadPage />)
+    fireEvent.click(screen.getByRole("tab", { name: /Databricks/i }))
+    fireEvent.click(screen.getByRole("button", { name: /Connect/i }))
+
+    await waitFor(() => expect(listCatalogs).toHaveBeenCalledWith("dapi-xyz"))
+    // The catalog dropdown is populated.
+    expect(await screen.findByRole("option", { name: "main" })).toBeInTheDocument()
   })
 })

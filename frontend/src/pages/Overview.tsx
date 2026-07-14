@@ -31,7 +31,7 @@ import {
   YAxis,
 } from "recharts"
 
-import { useApp } from "@/store/AppStore"
+import { POLL_INTERVAL_MS, useApp } from "@/store/AppStore"
 import type { MlflowInfo, ModelMetrics } from "@/api/types"
 import { outputUrl } from "@/api/client"
 import { fmtBytes, fmtInt, fmtMetric } from "@/lib/format"
@@ -72,37 +72,64 @@ const PIPELINE_STAGES = [
 ]
 
 export default function Overview() {
-  const { running, result, runError, runFieldErrors, serverPath } = useApp()
+  const { running, result, runError, runFieldErrors, serverPath, executionBackend, jobStatus, jobId } =
+    useApp()
   const run = result?.result
 
-  // 1. RUNNING — synchronous run in flight.
+  // 1. RUNNING — a run in flight. Two shapes:
+  //    • local backend → /run is SYNCHRONOUS (one blocking request); show the stage list.
+  //    • databricks backend → a Databricks Job was submitted and we POLL it every few seconds;
+  //      show a "Training in progress…" spinner reflecting the polled job status.
   if (running) {
+    const isDatabricks = executionBackend === "databricks"
     return (
       <div>
-        <PageHeader title="Overview" subtitle="Running the full pipeline…" />
+        <PageHeader
+          title="Overview"
+          subtitle={isDatabricks ? "Training on Databricks…" : "Running the full pipeline…"}
+        />
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
               <Spinner className="h-4 w-4 text-primary" />
-              Training models on the server
+              {isDatabricks ? "Training in progress on Databricks" : "Training models on the server"}
             </CardTitle>
           </CardHeader>
           <CardContent>
-            <p className="mb-4 text-sm text-muted-foreground">
-              <code className="font-mono">/run</code> is synchronous — the request runs the whole
-              pipeline and returns everything in one response, so this can take a while (more so
-              with many algorithms or tuning on). The stages it works through:
-            </p>
-            <ol className="space-y-1.5 text-sm">
-              {PIPELINE_STAGES.map((stage, i) => (
-                <li key={stage} className="flex items-center gap-2.5 text-muted-foreground">
-                  <span className="grid h-5 w-5 shrink-0 place-items-center rounded-full bg-muted font-mono text-[11px]">
-                    {i + 1}
-                  </span>
-                  {stage}
-                </li>
-              ))}
-            </ol>
+            {isDatabricks ? (
+              <div className="space-y-3 text-sm text-muted-foreground">
+                <p>
+                  The run was submitted as a <strong>Databricks Job</strong> — the dashboard polls
+                  its status every {Math.round(POLL_INTERVAL_MS / 1000)}s and will load the results
+                  automatically when it completes.
+                </p>
+                <div className="flex items-center gap-2">
+                  <span>Job status:</span>
+                  <Badge variant={jobStatus === "FAILED" ? "destructive" : "secondary"}>
+                    {jobStatus ?? "SUBMITTING"}
+                  </Badge>
+                  {jobId && <span className="font-mono text-xs">job {jobId.slice(0, 12)}…</span>}
+                </div>
+              </div>
+            ) : (
+              <>
+                <p className="mb-4 text-sm text-muted-foreground">
+                  <code className="font-mono">/run</code> is synchronous — the request runs the
+                  whole pipeline and returns everything in one response, so this can take a while
+                  (more so with many algorithms or tuning on). The stages it works through:
+                </p>
+                <ol className="space-y-1.5 text-sm">
+                  {PIPELINE_STAGES.map((stage, i) => (
+                    <li key={stage} className="flex items-center gap-2.5 text-muted-foreground">
+                      <span className="grid h-5 w-5 shrink-0 place-items-center rounded-full bg-muted font-mono text-[11px]">
+                        {i + 1}
+                      </span>
+                      {stage}
+                    </li>
+                  ))}
+                </ol>
+              </>
+            )}
           </CardContent>
         </Card>
       </div>

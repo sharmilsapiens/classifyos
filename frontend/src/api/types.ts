@@ -93,10 +93,15 @@ export interface MlflowConfig {
  * Upload; carried on the run request ONLY when a DB source was chosen (a file run omits it).
  */
 export interface InputSourceConfig {
-  type: "file" | "postgres"
+  type: "file" | "postgres" | "delta"
   connection_env: string
   table?: string | null
   query?: string | null
+  /** Databricks Delta (§6.6 Step 4) — the Unity Catalog catalog/schema for a `delta` source. */
+  catalog?: string | null
+  schema?: string | null
+  /** optional positive-int row cap for a `delta` dev/smoke run. */
+  limit?: number | null
 }
 
 export type ProblemType = "binary" | "multiclass" | "multilabel"
@@ -502,11 +507,58 @@ export interface RunsListResponse {
 
 /* ──────────────────────── Other endpoint shapes ─────────────────────────── */
 
-/** GET /api/v1/health → liveness payload. Consumed by: the health banner. */
+/** GET /api/v1/health → liveness payload. Consumed by: the health banner + the store (mode). */
 export interface HealthResponse {
   status: string
   service: string
   version: string
+  /**
+   * schema 1.11 (§6.6 Step 6, additive): which execution backend the server runs. "local" →
+   * POST /run returns the full result envelope synchronously; "databricks" → POST /run returns a
+   * {job_id} to poll. Optional so an older/plain health payload still typechecks (treated as local).
+   */
+  execution_backend?: "local" | "databricks"
+}
+
+/* ───────────────── Databricks orchestration (schema 1.11, §6.6 Step 6) ───── */
+// Emitted only by the DATABRICKS execution backend. Mirrors backend/api/models.py EXACTLY.
+
+/** Coarse Databricks Job status the API maps from the Databricks RunState. */
+export type JobStatus = "PENDING" | "RUNNING" | "COMPLETED" | "FAILED"
+
+/** POST /api/v1/run response in the databricks backend — the submitted Job's handles. */
+export interface RunSubmission {
+  job_id: string
+  run_id: string
+  status: JobStatus
+  schema_version: string
+}
+
+/** GET /api/v1/run/{job_id}/status → the polled Job status + message. */
+export interface JobStatusResponse {
+  job_id: string
+  run_id: string | null
+  status: JobStatus
+  message: string | null
+  schema_version: string
+}
+
+/** GET /api/v1/databricks/catalogs → Unity Catalog catalog names. Consumed by: Upload (UC picker). */
+export interface CatalogsResponse {
+  catalogs: string[]
+}
+
+/** GET /api/v1/databricks/schemas?catalog= → schema names in a catalog. */
+export interface SchemasResponse {
+  catalog: string
+  schemas: string[]
+}
+
+/** GET /api/v1/databricks/tables?catalog=&schema= → table names in a schema. */
+export interface TablesResponse {
+  catalog: string
+  schema: string
+  tables: string[]
 }
 
 /* ─────────────────── Data Profile (additive /upload blocks) ──────────────── */

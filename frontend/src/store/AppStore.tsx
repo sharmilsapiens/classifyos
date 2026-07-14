@@ -9,9 +9,12 @@
    What lives here (the state shape):
    ─────────────────────────────────────────────────────────────────────────
    apiStatus / apiMessage  health-banner state (online | offline | unknown)
+   executionBackend        "local" | "databricks" (from /health) — drives /run flow
    inspect / serverPath    the uploaded file's profile + its /run key (input_file)
    form                    the current RunConfig form state (Configuration page)
    running / result        the in-flight flag + the last /run envelope
+   jobId / jobStatus       (databricks backend) the submitted Job's handle + polled status
+   databricksPat           (databricks backend) the user's PAT — in memory only, never stored
    runError / runFieldErrors  the last run's readable error + any 422 field msgs
    ════════════════════════════════════════════════════════════════════════ */
 
@@ -20,7 +23,7 @@ import type { ReactNode } from "react"
 
 import * as api from "@/api/client"
 import { ApiError } from "@/api/client"
-import type { InspectProfile, RunResponse } from "@/api/types"
+import type { InspectProfile, JobStatus, RunResponse } from "@/api/types"
 import {
   buildPayload,
   DEFAULT_FORM_STATE,
@@ -29,29 +32,39 @@ import {
 } from "@/lib/buildPayload"
 
 type ApiStatus = "unknown" | "online" | "offline"
+type ExecutionBackend = "local" | "databricks"
+
+/** How often the frontend polls a Databricks Job's status (ms). */
+export const POLL_INTERVAL_MS = 5000
 
 interface AppState {
   apiStatus: ApiStatus
   apiMessage: string
+  executionBackend: ExecutionBackend
   inspect: InspectProfile | null
   serverPath: string | null
   form: ConfigFormState
   running: boolean
   result: RunResponse | null
+  jobId: string | null
+  jobStatus: JobStatus | null
+  databricksPat: string
   runError: string | null
   runFieldErrors: string[]
 }
 
 interface AppActions {
-  /** Ping /health and update the banner. Called on load and by a manual retry. */
+  /** Ping /health and update the banner + the execution backend. Called on load and by retry. */
   checkAPI: () => Promise<void>
   /** Apply an /upload result: store the profile and seed the config form sensibly. */
   applyUpload: (profile: InspectProfile) => void
   /** Patch one or more config form fields. */
   updateForm: (patch: Partial<ConfigFormState>) => void
+  /** Set the user's Databricks PAT (in-memory only; used for submit + UC browsing). */
+  setDatabricksPat: (pat: string) => void
   /** Client-side required-field check (mirrors the server's, for a friendlier first pass). */
   formErrors: () => string[]
-  /** Build the payload from the current form and POST /run. Returns the envelope or null. */
+  /** Build the payload from the current form and run it (local: sync; databricks: submit+poll). */
   runPipeline: () => Promise<RunResponse | null>
   /** Drop a reloaded past run (from GET /runs/{id}) into the store so the result pages show it. */
   applyReloadedRun: (envelope: RunResponse) => void
@@ -60,11 +73,15 @@ interface AppActions {
 const INITIAL: AppState = {
   apiStatus: "unknown",
   apiMessage: "Checking API…",
+  executionBackend: "local",
   inspect: null,
   serverPath: null,
   form: DEFAULT_FORM_STATE,
   running: false,
   result: null,
+  jobId: null,
+  jobStatus: null,
+  databricksPat: "",
   runError: null,
   runFieldErrors: [],
 }
@@ -81,10 +98,26 @@ export function AppProvider({ children }: { children: ReactNode }) {
     stateRef.current = state
   }, [state])
 
+  // The Databricks status-polling timer (databricks backend only). Held in a ref so we can
+  // cancel it on a new run / on unmount without re-rendering.
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const stopPolling = useCallback(() => {
+    if (pollRef.current !== null) {
+      clearInterval(pollRef.current)
+      pollRef.current = null
+    }
+  }, [])
+  useEffect(() => stopPolling, [stopPolling]) // clear any timer when the provider unmounts
+
   const checkAPI = useCallback(async () => {
     try {
       const h = await api.health()
-      setState((s) => ({ ...s, apiStatus: "online", apiMessage: `API connected · ${h.service}` }))
+      setState((s) => ({
+        ...s,
+        apiStatus: "online",
+        apiMessage: `API connected · ${h.service}`,
+        executionBackend: h.execution_backend === "databricks" ? "databricks" : "local",
+      }))
     } catch (err) {
       const message =
         err instanceof ApiError ? err.message : "API offline — start uvicorn on :8000."
@@ -122,22 +155,115 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setState((s) => ({ ...s, form: { ...s.form, ...patch } }))
   }, [])
 
+  const setDatabricksPat = useCallback((pat: string) => {
+    setState((s) => ({ ...s, databricksPat: pat }))
+  }, [])
+
   const formErrors = useCallback(() => validateRequired(stateRef.current.form), [])
 
+  // Poll one Databricks status tick; on a terminal state, stop the timer and either fetch the
+  // results (COMPLETED) or surface the failure (FAILED). A transient status error is swallowed so
+  // the polling loop keeps trying (the next tick may succeed) rather than killing the run view.
+  const pollOnce = useCallback(
+    async (jobId: string) => {
+      let status: JobStatus
+      let message: string | null
+      try {
+        const res = await api.getRunStatus(jobId)
+        status = res.status
+        message = res.message
+      } catch {
+        return // transient — keep the timer running for the next tick
+      }
+      setState((s) => (s.jobId === jobId ? { ...s, jobStatus: status } : s))
+      if (status === "COMPLETED") {
+        stopPolling()
+        try {
+          const envelope = await api.getRunResults(jobId)
+          setState((s) => ({
+            ...s,
+            running: false,
+            result: envelope,
+            runError: envelope.status === "error" ? envelope.error : null,
+          }))
+        } catch (err) {
+          setState((s) => ({
+            ...s,
+            running: false,
+            runError:
+              err instanceof ApiError ? err.message : "Could not fetch the run results.",
+          }))
+        }
+      } else if (status === "FAILED") {
+        stopPolling()
+        setState((s) => ({
+          ...s,
+          running: false,
+          runError: message || "The Databricks run failed.",
+        }))
+      }
+    },
+    [stopPolling],
+  )
+
   const runPipeline = useCallback(async (): Promise<RunResponse | null> => {
-    const form = stateRef.current.form
+    const s = stateRef.current
+    const form = s.form
     // Friendly client-side guard first (the server still validates).
     const missing = validateRequired(form)
     if (missing.length) {
-      setState((s) => ({ ...s, runError: missing.join(" "), runFieldErrors: missing }))
+      setState((st) => ({ ...st, runError: missing.join(" "), runFieldErrors: missing }))
       return null
     }
 
-    setState((s) => ({ ...s, running: true, runError: null, runFieldErrors: [], result: null }))
+    stopPolling() // cancel any prior poll before starting a fresh run
+    setState((st) => ({
+      ...st,
+      running: true,
+      runError: null,
+      runFieldErrors: [],
+      result: null,
+      jobId: null,
+      jobStatus: null,
+    }))
+
+    // ── Databricks backend: submit a Job, then poll for completion ──────────────
+    if (s.executionBackend === "databricks") {
+      const pat = s.databricksPat.trim()
+      if (!pat) {
+        setState((st) => ({
+          ...st,
+          running: false,
+          runError: "A Databricks personal access token is required to submit a run.",
+        }))
+        return null
+      }
+      let jobId: string
+      try {
+        const submission = await api.submitRun(buildPayload(form), pat)
+        jobId = submission.job_id
+        setState((st) => ({ ...st, jobId, jobStatus: submission.status }))
+      } catch (err) {
+        setState((st) => ({
+          ...st,
+          running: false,
+          runError:
+            err instanceof ApiError ? err.message : "Could not submit the Databricks run.",
+          runFieldErrors: err instanceof ApiError ? err.fieldErrors : [],
+        }))
+        return null
+      }
+      // Poll immediately (so the status updates without waiting a full interval), then every 5s.
+      void pollOnce(jobId)
+      pollRef.current = setInterval(() => void pollOnce(jobId), POLL_INTERVAL_MS)
+      return null
+    }
+
+    // ── Local backend: run synchronously and return the full envelope (unchanged) ──
     try {
       const envelope = await api.run(buildPayload(form))
-      setState((s) => ({
-        ...s,
+      setState((st) => ({
+        ...st,
         running: false,
         result: envelope,
         // A status:"error" envelope (HTTP 200 but logical error) carries .error.
@@ -146,32 +272,56 @@ export function AppProvider({ children }: { children: ReactNode }) {
       return envelope
     } catch (err) {
       const isApi = err instanceof ApiError
-      setState((s) => ({
-        ...s,
+      setState((st) => ({
+        ...st,
         running: false,
         runError: isApi ? err.message : "Unexpected error running the pipeline.",
         runFieldErrors: isApi ? err.fieldErrors : [],
       }))
       return null
     }
-  }, [])
+  }, [pollOnce, stopPolling])
 
-  const applyReloadedRun = useCallback((envelope: RunResponse) => {
-    // A run reloaded from MLflow (persistence read-path) replaces the current result, exactly as
-    // a fresh /run would — every result page reads `result` from here, so they all repopulate.
-    setState((s) => ({
-      ...s,
-      running: false,
-      result: envelope,
-      runError: envelope.status === "error" ? envelope.error : null,
-      runFieldErrors: [],
-    }))
-  }, [])
+  const applyReloadedRun = useCallback(
+    (envelope: RunResponse) => {
+      // A run reloaded from MLflow (persistence read-path) replaces the current result, exactly as
+      // a fresh /run would — every result page reads `result` from here, so they all repopulate.
+      stopPolling()
+      setState((s) => ({
+        ...s,
+        running: false,
+        jobId: null,
+        jobStatus: null,
+        result: envelope,
+        runError: envelope.status === "error" ? envelope.error : null,
+        runFieldErrors: [],
+      }))
+    },
+    [stopPolling],
+  )
 
   // useMemo so the context value is stable between renders (avoids needless re-renders).
   const value = useMemo(
-    () => ({ ...state, checkAPI, applyUpload, updateForm, formErrors, runPipeline, applyReloadedRun }),
-    [state, checkAPI, applyUpload, updateForm, formErrors, runPipeline, applyReloadedRun],
+    () => ({
+      ...state,
+      checkAPI,
+      applyUpload,
+      updateForm,
+      setDatabricksPat,
+      formErrors,
+      runPipeline,
+      applyReloadedRun,
+    }),
+    [
+      state,
+      checkAPI,
+      applyUpload,
+      updateForm,
+      setDatabricksPat,
+      formErrors,
+      runPipeline,
+      applyReloadedRun,
+    ],
   )
 
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>

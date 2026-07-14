@@ -44,7 +44,7 @@ def test_list_runs_surfaces_a_logged_run(api_client, mlflow_store) -> None:
     listed = api_client.get("/api/v1/runs")
     assert listed.status_code == 200
     payload = listed.json()
-    assert payload["schema_version"] == "1.10"
+    assert payload["schema_version"] == "1.11"
     assert payload["tracking_uri"] == mlflow_store
     rows = {r["run_id"]: r for r in payload["runs"]}
     assert run_id in rows
@@ -73,7 +73,7 @@ def test_reload_run_returns_byte_identical_envelope(api_client, mlflow_store) ->
     assert reloaded.status_code == 200
     body = reloaded.json()
     assert body["status"] == "ok"
-    assert body["schema_version"] == "1.10"
+    assert body["schema_version"] == "1.11"
     # The reshaped result must match the original run exactly (byte-identical reload).
     assert body["result"] == original["result"]
 

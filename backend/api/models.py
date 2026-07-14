@@ -37,7 +37,7 @@ from classifyos.config import (
 #: Current locked-contract version, reported in every ``/api/v1/run`` response and by the
 #: read-path endpoints. Bump ONLY for additive contract changes (docs/api_contract.md);
 #: never mutate an earlier version's field shapes. History lives on :class:`RunResponse`.
-SCHEMA_VERSION = "1.10"
+SCHEMA_VERSION = "1.11"
 
 # --------------------------------------------------------------------------- #
 # Request models                                                              #
@@ -114,13 +114,21 @@ class InputSourceConfig(BaseModel):
     Request-side dial only; ``build_config`` is the authoritative validator of the values.
     """
 
-    # Reject unknown keys so a typo'd field is a clear 422, not a silent no-op.
-    model_config = ConfigDict(extra="forbid")
+    # Reject unknown keys so a typo'd field is a clear 422, not a silent no-op. ``populate_by_name``
+    # lets the ``schema`` delta field be set by its alias ``schema`` (its Python name is ``db_schema``
+    # to avoid shadowing ``BaseModel.schema``).
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
     type: str = "file"
     connection_env: str = "CLASSIFYOS_PG_DSN"
     table: str | None = None
     query: str | None = None
+    # Databricks Delta source (§6.6 Step 4) — ignored for file/postgres. When ``type="delta"`` the
+    # run reads a Unity Catalog table (``catalog.schema.table``) on the cluster and materializes a
+    # snapshot to ``input_file`` (which must end in .parquet/.csv). ``build_config`` validates these.
+    catalog: str | None = None
+    db_schema: str | None = Field(None, alias="schema")
+    limit: int | None = None
 
 
 class MlflowConfig(BaseModel):
@@ -325,6 +333,10 @@ class RunConfig(BaseModel):
         overrides["user_features"] = [
             spec.model_dump(exclude_none=True) for spec in self.user_features
         ]
+        # Dump input_source BY ALIAS so the delta ``schema`` field lands under the key the engine
+        # expects (``schema``, not the Python field name ``db_schema``). File/postgres runs are
+        # unaffected (their extra delta keys default to None and are ignored by build_config).
+        overrides["input_source"] = self.input_source.model_dump(by_alias=True)
         return build_config(
             self.input_file,
             self.target,
@@ -642,6 +654,12 @@ class RunResponse(BaseModel):
     #     1.10 adds the MLflow read-path endpoints (``GET /runs`` + ``GET /runs/{run_id}``,
     #     Interim 2a) that list past runs and reload one; the version marker moves so the
     #     contract doc's advance is recorded (locked-contract rule). All fields unchanged.
+    # 1.11 (additive): NO change to this ``/run`` envelope. 1.11 adds the Databricks orchestration
+    #     layer (§6.6 Step 6): when the server runs the DATABRICKS execution backend, ``POST /run``
+    #     instead returns a :class:`RunSubmission` (``{job_id, run_id, status}``) and the run is
+    #     polled via ``GET /run/{job_id}/status`` → fetched via ``GET /run/{job_id}/results`` (which
+    #     returns THIS same envelope). In the default LOCAL backend ``/run`` is byte-identical to
+    #     1.10. Also adds the UC data-source proxies (``GET /databricks/{catalogs,schemas,tables}``).
     schema_version: str = SCHEMA_VERSION
     result: RunResult | None = None
     error: str | None = None
@@ -746,3 +764,64 @@ class InputSourceSelectRequest(BaseModel):
     table: str | None = None
     query: str | None = None
     target: str | None = None
+
+
+# --------------------------------------------------------------------------- #
+# Databricks orchestration models (schema 1.11, §6.6 Step 6 — async Jobs)      #
+# --------------------------------------------------------------------------- #
+#
+# These describe the DATABRICKS execution backend only. When the server runs the default LOCAL
+# backend, ``POST /run`` returns the usual :class:`RunResponse` and none of these are emitted.
+
+
+class RunSubmission(BaseModel):
+    """``POST /api/v1/run`` response in the DATABRICKS backend (NEW in 1.11).
+
+    Returned immediately after submitting the Databricks Job — the run does NOT block. ``job_id``
+    is our own persistent handle (used in the ``/run/{job_id}/status`` + ``/results`` paths);
+    ``run_id`` is the Databricks run id the service polls. ``status`` starts at ``"PENDING"``.
+    """
+
+    job_id: str
+    run_id: str
+    status: str = "PENDING"
+    schema_version: str = SCHEMA_VERSION
+
+
+class JobStatusResponse(BaseModel):
+    """``GET /api/v1/run/{job_id}/status`` (NEW in 1.11).
+
+    ``status`` is one of ``PENDING | RUNNING | COMPLETED | FAILED`` (mapped from the Databricks
+    ``RunState``); ``message`` is the workspace's human-readable state message (or the error on a
+    FAILED run). Fetch results via ``GET /run/{job_id}/results`` once ``status == "COMPLETED"``.
+    """
+
+    job_id: str
+    run_id: str | None = None
+    status: str
+    message: str | None = None
+    schema_version: str = SCHEMA_VERSION
+
+
+class CatalogsResponse(BaseModel):
+    """``GET /api/v1/databricks/catalogs`` — Unity Catalog catalog names (NEW in 1.11)."""
+
+    catalogs: list[str] = Field(default_factory=list)
+
+
+class SchemasResponse(BaseModel):
+    """``GET /api/v1/databricks/schemas?catalog=`` — schema names in a catalog (NEW in 1.11)."""
+
+    catalog: str
+    schemas: list[str] = Field(default_factory=list)
+
+
+class TablesResponse(BaseModel):
+    """``GET /api/v1/databricks/tables?catalog=&schema=`` — table names in a schema (NEW in 1.11)."""
+
+    catalog: str
+    schema_name: str = Field(..., alias="schema")
+    tables: list[str] = Field(default_factory=list)
+
+    # ``schema`` shadows BaseModel.schema(); expose it via an alias but let callers pass ``schema``.
+    model_config = ConfigDict(populate_by_name=True)

@@ -27,9 +27,14 @@ type MockApp = {
   serverPath: string | null
   // Upload reads:
   inspect: unknown
-  form: { target: string }
+  form: { target: string; feature_cols: string[]; input_source: unknown }
   applyUpload: ReturnType<typeof vi.fn>
   updateForm: ReturnType<typeof vi.fn>
+  // Databricks source fields (§6.6 Step 6) — the Databricks tab is gated on executionBackend.
+  executionBackend: "local" | "databricks"
+  databricksPat: string
+  setDatabricksPat: ReturnType<typeof vi.fn>
+  runPipeline: ReturnType<typeof vi.fn>
 }
 let mockApp: MockApp
 vi.mock("@/store/AppStore", () => ({ useApp: () => mockApp }))
@@ -56,9 +61,13 @@ function freshApp(): MockApp {
     runFieldErrors: [],
     serverPath: null,
     inspect: null,
-    form: { target: "" },
+    form: { target: "", feature_cols: [], input_source: null },
     applyUpload: vi.fn(),
     updateForm: vi.fn(),
+    executionBackend: "local",
+    databricksPat: "",
+    setDatabricksPat: vi.fn(),
+    runPipeline: vi.fn(),
   }
 }
 
