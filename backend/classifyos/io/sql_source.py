@@ -56,12 +56,13 @@ _SNAPSHOT_SUFFIXES = ("parquet", "csv")
 
 
 class InputSourceError(RuntimeError):
-    """A Postgres input source could not be read or materialized to a file.
+    """A database input source (Postgres or Delta) could not be read or materialized to a file.
 
     Raised for a missing/empty connection env var, an unreachable database, a failed query, an
-    empty result, or an unsupported snapshot suffix. The API ``/run`` route maps it to the
-    ``status="error"`` envelope (a 400-style run error, like a missing input file) rather than an
-    opaque 500.
+    empty result, or an unsupported snapshot suffix (Postgres); or for a missing PySpark / no
+    active SparkSession / failed table read (Delta — e.g. attempting a ``type="delta"`` run off a
+    Databricks cluster). The API ``/run`` route maps it to the ``status="error"`` envelope (a
+    400-style run error, like a missing input file) rather than an opaque 500.
     """
 
 
@@ -229,3 +230,117 @@ def materialize_source(config: dict[str, Any], storage: StorageAdapter) -> str:
         input_file,
     )
     return input_file
+
+
+def materialize_delta_source(config: dict[str, Any], storage: StorageAdapter) -> None:
+    """Materialize a Unity Catalog Delta table to a Parquet/CSV snapshot (Databricks §6.6 Step 4).
+
+    The Delta twin of :func:`materialize_source`, following the identical materialize-to-file
+    discipline so the pipeline stays byte-for-byte unchanged downstream:
+
+    * **Opt-in** — a **no-op** unless ``config["input_source"]["type"] == "delta"``. For a
+      ``file`` / ``postgres`` source this returns immediately, importing nothing, so the runner
+      can call it unconditionally next to :func:`materialize_source`.
+    * **Lazy import** — ``pyspark`` is imported *inside* the function (never at module load), so a
+      local file run — or an install without PySpark — never touches the dependency. PySpark is
+      pre-installed on Databricks clusters; off a cluster the import (or the absent SparkSession)
+      raises a clear :class:`InputSourceError`, it never crashes a file-based run.
+    * **Materialize-to-file** — reads the Delta table ONCE via the active SparkSession
+      (``spark.table("<catalog>.<schema>.<table>")`` or ``spark.sql(query)``), converts to pandas,
+      and writes the snapshot to ``config["input_file"]`` via :meth:`StorageAdapter.save_input`
+      (reusing :func:`_write_snapshot`). ``data_loader`` and everything downstream then run on that
+      plain file, completely unchanged.
+
+    ``config["input_source"]`` fields for ``type="delta"``:
+        catalog : Unity Catalog name, e.g. ``"main"`` (optional; qualifies the table name)
+        schema  : schema/database, e.g. ``"insurance"`` (optional)
+        table   : table name, e.g. ``"policy_lapse"`` (provide table OR query)
+        query   : optional raw SQL override — ``spark.sql(query)`` (takes precedence over table)
+        limit   : optional positive-int row cap (handy for dev/smoke runs)
+
+    [RISK] leakage — runs strictly BEFORE split/fit and only *writes* a snapshot file; it feeds
+    nothing back into fit/transform (identical to :func:`materialize_source`).
+    [RISK] SQL injection — ``catalog`` / ``schema`` / ``table`` are validated to safe SQL
+    identifiers at config-build time (:func:`classifyos.config._validate_delta_source`) because
+    they are interpolated into the dotted table name and cannot be bound parameters; a raw
+    ``query`` is the analyst's own opt-in SQL on their own cluster.
+    [RISK] Spark context — requires an active SparkSession (always present on a Databricks
+    cluster); its absence raises :class:`InputSourceError`, never an opaque failure.
+
+    Args:
+        config: A validated run config (see :func:`classifyos.config.build_config`). Reads
+            ``input_source`` and ``input_file``; nothing is mutated.
+        storage: Storage adapter — the snapshot is written through it into the INPUT root.
+
+    Raises:
+        InputSourceError: If PySpark is unavailable, there is no active SparkSession, neither
+            ``table`` nor ``query`` is set, the table/query read fails, or the result is empty.
+    """
+    src = config.get("input_source") or {}
+    if src.get("type") != "delta":
+        return  # no-op for file/postgres sources — keeps the runner call site unconditional
+
+    try:
+        from pyspark.sql import SparkSession  # noqa: PLC0415 — lazy, cluster-only import
+    except ImportError as exc:
+        raise InputSourceError(
+            "input_source.type='delta' requires PySpark, which is pre-installed on Databricks "
+            "clusters. Use input_source.type='file' for local runs."
+        ) from exc
+
+    spark = SparkSession.getActiveSession()
+    if spark is None:
+        raise InputSourceError(
+            "input_source.type='delta' found no active SparkSession; it must run on a Databricks "
+            "cluster (where a session is always present). Use input_source.type='file' locally."
+        )
+
+    catalog = src.get("catalog")
+    schema = src.get("schema")
+    table = src.get("table")
+    query = src.get("query")
+    limit = src.get("limit")
+    input_file = config["input_file"]
+
+    has_query = isinstance(query, str) and query.strip() != ""
+    has_table = isinstance(table, str) and table.strip() != ""
+    # config validation guarantees at least one of table/query; this is a defensive fallback for a
+    # hand-built config that bypassed build_config.
+    if not has_query and not has_table:
+        raise InputSourceError(
+            "input_source with type='delta' requires either 'table' or 'query'"
+        )
+
+    try:
+        if has_query:
+            # A raw query takes precedence over table when both are somehow present.
+            logger.info("input_source=delta: running custom query")
+            sdf = spark.sql(query)
+        else:
+            full_name = ".".join(part for part in (catalog, schema, table) if part)
+            logger.info("input_source=delta: reading table %s", full_name)
+            sdf = spark.table(full_name)
+        if limit:
+            sdf = sdf.limit(int(limit))
+        logger.info("input_source=delta: converting to pandas")
+        df = sdf.toPandas()
+    except InputSourceError:
+        raise
+    except Exception as exc:  # noqa: BLE001 — any Spark/read failure is a clean input error
+        raise InputSourceError(
+            f"failed to read the delta input source: {type(exc).__name__}: {exc}"
+        ) from exc
+
+    if df is None or df.empty:
+        raise InputSourceError(
+            "the delta input source returned no rows; nothing to materialize "
+            "(check your table/query)."
+        )
+
+    _write_snapshot(df, input_file, storage)
+    logger.info(
+        "input_source=delta: wrote %d row(s) x %d column(s) to %s",
+        len(df),
+        df.shape[1],
+        input_file,
+    )

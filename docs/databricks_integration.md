@@ -23,9 +23,10 @@
 | Interim 2a | MLflow backend store = Postgres (run history, persistent) | ✅ Done |
 | Interim 2b | Postgres as input source (materialize-to-file) | ✅ Done |
 | Phase B | `DatabricksVolumeStorage` + `get_default_storage()` update | ✅ Done (§6.6 Step 1, 2026-07-14) |
-| Phase B | Delta table input source (`materialize_delta_source`) | 🔲 Next (needs cluster to test) |
-| Phase B | MLflow env-var wiring for managed tracking server | 🔲 Next (zero code) |
+| Phase B | Delta table input source (`materialize_delta_source`) | ✅ Engine done + unit-tested (§6.6 Step 4, 2026-07-14); cluster end-to-end pending smoke test |
+| Phase B | MLflow env-var wiring for managed tracking server | ✅ Done — zero code, verified (§6.6 Step 3, 2026-07-14) |
 | Phase B | Wheel packaging (`pyproject.toml`) | ✅ Done (§6.6 Step 2, 2026-07-14) |
+| Phase B | Cluster smoke-test notebook (`notebooks/classifyos_smoke_test.py`) | ✅ Written (§6.6 Step 5, 2026-07-14); run pending cluster access |
 | Orchestration | Async API + Databricks Jobs REST integration (FastAPI layer) | 🔲 After Phase B |
 | Phase C | Unity Catalog Model Registry + Model Serving endpoint | 🔲 Deferred |
 | Phase D | Persistent dashboard / run history UI | 🔲 Deferred |
@@ -343,7 +344,7 @@ Detail: `ClassifyOS_Databricks_Enhancement_Guide.md` Enhancement 4.
 
 ---
 
-### Step 3 — MLflow env-var wiring (zero code)
+### Step 3 — MLflow env-var wiring (zero code) — ✅ DONE (verified 2026-07-14)
 
 Set on the cluster (Compute → Edit → Advanced → Environment Variables):
 ```
@@ -354,44 +355,75 @@ MLFLOW_REGISTRY_URI=databricks-uc
 The existing `mlflow_logging.py` reads `MLFLOW_TRACKING_URI` and never sets it — it
 automatically routes to the managed tracking server with no code change.
 
+**Verified (2026-07-14):** re-read `backend/classifyos/mlflow_logging.py` — it only *reads*
+`MLFLOW_TRACKING_URI` (in `_maybe_allow_file_store`, via `os.environ.get`), never calls
+`mlflow.set_tracking_uri()`, and relies entirely on MLflow's own env-driven store resolution
+(`log_run` reports back `mlflow.get_tracking_uri()`). `_maybe_allow_file_store` sets
+`MLFLOW_ALLOW_FILE_STORE` only for a `file:`/schemeless store and is inert for a `databricks`
+URI. So `MLFLOW_TRACKING_URI=databricks` + `MLFLOW_REGISTRY_URI=databricks-uc` route logging to
+the managed server / Unity Catalog registry with **no code change**. These are documented (as
+cluster-side env, commented) in `backend/.env.example`. A run still opts in via `mlflow.enabled`.
+
 ---
 
-### Step 4 — Delta table input source (needs cluster for end-to-end test)
+### Step 4 — Delta table input source — ✅ ENGINE DONE + unit-tested (2026-07-14)
 
 Files: `backend/classifyos/io/sql_source.py`, `config.py`, `runner.py`
 
-Add `materialize_delta_source()` — identical discipline to the existing Postgres
-materialize-to-file pattern. Reads a Unity Catalog Delta table via `spark.table()`,
-converts to pandas, writes a Parquet snapshot to the volume input root, then the normal
-pipeline runs unchanged on that file.
+`materialize_delta_source(config, storage)` added — identical discipline to the existing Postgres
+`materialize_source()` (opt-in, lazy import, materialize-to-file, no leakage). Reads a Unity
+Catalog Delta table via the active SparkSession (`spark.table("<catalog>.<schema>.<table>")`) or a
+raw `spark.sql(query)`, optionally `sdf.limit(n)`, converts to pandas (`toPandas()`), and writes a
+Parquet/CSV snapshot to the input volume root via `StorageAdapter.save_input` (reusing
+`_write_snapshot`); the normal file pipeline then runs unchanged. `runner._load()` calls it right
+after `materialize_source` — both no-op for a `file` source.
 
-Config:
+Config (`DEFAULT_CONFIG["input_source"]` gained `catalog` / `schema` / `limit`; `"delta"` added to
+`INPUT_SOURCE_TYPES`):
 ```python
 "input_source": {
     "type":    "delta",
     "catalog": "main",
     "schema":  "insurance",
-    "table":   "policy_lapse",
+    "table":   "policy_lapse",   # provide table OR query
+    "limit":   5000,             # optional positive-int row cap (dev/smoke runs)
 }
 ```
 
-Lazy PySpark import — outside a cluster this raises a clear `InputSourceError`, never
-crashes a local file run.
+Validation (`config._validate_delta_source`): requires `table` or `query`; **[RISK] SQL
+injection** — `catalog`/`schema`/`table` are validated against `_SQL_IDENTIFIER_RE` at
+config-build time (they are interpolated into the dotted table name and cannot be bound
+parameters); a raw `query` is the analyst's own opt-in SQL. `limit` must be a positive int; the
+snapshot destination (`input_file`) must be `.parquet`/`.csv`.
+
+Lazy PySpark import — outside a cluster (no PySpark, or no active SparkSession) this raises a clear
+`InputSourceError`, never crashes a local file run. Unit tests mock PySpark entirely
+(`backend/tests/test_sql_source.py`, "Delta input source" section) — no test contacts a real
+cluster. **Hallucination check ✅** (Microsoft Learn / Azure Databricks PySpark reference, Spark
+4.1.0 / DBR 18.2): `SparkSession.getActiveSession()` → `SparkSession | None`,
+`SparkSession.table(tableName)` / `.sql(query)` → `DataFrame`, `DataFrame.limit(num)` → `DataFrame`,
+`DataFrame.toPandas()` → `pandas.DataFrame`.
+
+Cluster end-to-end (a real Delta read) is exercised by the Step 5 smoke-test notebook.
 
 Detail: `ClassifyOS_Databricks_Enhancement_Guide.md` Enhancement 2 (~80 lines).
 
 ---
 
-### Step 5 — Smoke test on cluster (notebook)
+### Step 5 — Smoke test on cluster (notebook) — ✅ WRITTEN (2026-07-14); run pending cluster
 
-Install the wheel on the cluster, run a small Delta table end-to-end, verify:
+`notebooks/classifyos_smoke_test.py` (a Databricks notebook-source `.py`) installs the wheel, sets
+the Step 1/3 env vars, and runs a small Delta table end-to-end. It verifies:
 - `DatabricksVolumeStorage` reads/writes to the correct UC volume paths
-- MLflow experiment appears in the Databricks Experiments UI
-- Artifacts (PNGs, CSVs, `run_profile.json`) land in the output volume
-- No engine code changes were needed
+- the Delta read → `materialize_delta_source` → Parquet snapshot chain (Step 4)
+- the MLflow experiment appears in the Databricks Experiments UI (Step 3)
+- artifacts (PNGs, CSVs, `run_profile.json`) land in the output volume
+- no engine code changes were needed
 
-A notebook template for this smoke test is in `ClassifyOS_Databricks_Enhancement_Guide.md`
-Enhancement 4b.
+Note: the notebook calls the real `build_config(input_file, target, feature_cols, **overrides)`
+(the guide's `build_config(raw_config)` shorthand does not match the signature, and `feature_cols`
+is required) — set `feature_cols`, the catalog/schema/table, and the MLflow experiment path to your
+workspace before running.
 
 ---
 

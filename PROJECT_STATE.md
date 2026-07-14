@@ -5,7 +5,65 @@
 > planning/overseer chat stays in sync with the local repo.
 
 **Last updated:** 2026-07-14
-**Updated by:** Claude Code (**NEW — Databricks I/O Phase B, Steps 1 & 2: `DatabricksVolumeStorage`
+**Updated by:** Claude Code (**NEW — Databricks I/O Phase B, Steps 3, 4 & 5: MLflow managed-server
+env wiring (zero code) + Delta table input source (`materialize_delta_source`) + cluster
+smoke-test notebook (ADDITIVE/opt-in; NO engine-section change, NO API/contract change,
+`schema_version` stays 1.10).** Implements `docs/databricks_integration.md` §6.6 **Steps 3–5**
+(Enhancement Guide 2 + 3 + 4b). Off by default: a local run with no `input_source` (or
+`type="file"`) is byte-for-byte identical to before. **(1) Step 3 — MLflow env wiring (ZERO
+code), VERIFIED.** Re-read `classifyos/mlflow_logging.py`: it only *reads* `MLFLOW_TRACKING_URI`
+(`_maybe_allow_file_store`, via `os.environ.get`), never calls `mlflow.set_tracking_uri()`, and
+relies entirely on MLflow's env-driven store resolution — so setting `MLFLOW_TRACKING_URI=databricks`
++ `MLFLOW_REGISTRY_URI=databricks-uc` on the cluster routes logging to the managed tracking server /
+Unity Catalog registry with no code change (`_maybe_allow_file_store` is inert for a `databricks`
+URI). Documented (cluster-side, commented) in `.env.example`. **(2) Step 4 —
+`materialize_delta_source(config, storage)` (`classifyos/io/sql_source.py`), the Delta twin of the
+Interim-2b Postgres `materialize_source`, IDENTICAL discipline:** opt-in (no-op unless
+`input_source.type=="delta"`), lazy PySpark import *inside* the function (never at module load),
+materialize-to-file, no leakage (runs strictly before split/fit, only *writes* a snapshot). Reads a
+Unity Catalog Delta table via the active SparkSession — `spark.table("<catalog>.<schema>.<table>")`
+or a raw `spark.sql(query)` — optional `sdf.limit(n)`, `toPandas()`, then reuses `_write_snapshot`
+to write a Parquet/CSV snapshot to `input_file` under the input volume via `StorageAdapter.save_input`;
+the normal file pipeline runs unchanged. Off a cluster (no PySpark, or no active SparkSession) it
+raises a clear `InputSourceError`, NEVER crashes a file run. `config.py`: added `"delta"` to
+`INPUT_SOURCE_TYPES`; `DEFAULT_CONFIG["input_source"]` gained `catalog`/`schema`/`limit` (default
+`None`); new `_validate_delta_source` (requires `table` or `query`; **[RISK] SQL injection** —
+`catalog`/`schema`/`table` validated against `_SQL_IDENTIFIER_RE` at config-build time since they're
+interpolated into the dotted table name and can't be bound parameters; `limit` a positive int; a
+raw `query` is the analyst's own opt-in SQL) + `_require_snapshot_destination` (shared parquet/csv
+suffix guard, refactored out of the postgres path). `runner._load()` now calls
+`materialize_delta_source(cfg, self.storage)` right after `materialize_source` — both no-op for a
+`file` source. **(3) Step 5 — `notebooks/classifyos_smoke_test.py` (NEW).** A Databricks
+notebook-source `.py` (documentation/tooling, not a test): `%pip install` the wheel, set the
+Step 1/3 env vars, run a small Delta table end-to-end, `display` the scoreboard + the MLflow run
+pointer. Written against the REAL `build_config(input_file, target, feature_cols, **overrides)` (the
+guide's `build_config(raw_config)` shorthand doesn't match the signature and omits the required
+`feature_cols`) — the analyst sets `feature_cols`/catalog/schema/table + the MLflow experiment path.
+**Hallucination check ✅** (Microsoft Learn / Azure Databricks PySpark reference, Spark 4.1.0 / DBR
+18.2): `SparkSession.getActiveSession()` → `SparkSession | None`; `SparkSession.table(tableName)` /
+`.sql(query)` → `DataFrame`; `DataFrame.limit(num)` → `DataFrame`; `DataFrame.toPandas()` →
+`pandas.DataFrame`; 3-part `catalog.schema.table` names work with `.table()`. **Tests:**
+`tests/test_sql_source.py` — updated the default-shape assertion for the 3 new keys; +20 delta tests
+(config validation: accepts table/qualified/query/limit; rejects neither-table-nor-query, unsafe
+catalog/schema/table identifiers, bad `limit`, non-parquet/csv destination; `materialize_delta_source`
+with **PySpark mocked entirely** via injected fake `pyspark.sql` modules: file source = complete
+no-op; no-PySpark → `InputSourceError`; no active SparkSession → `InputSourceError`;
+neither-table-nor-query defensive branch; table→Parquet snapshot round-trips through `data_loader`;
+`limit` pushed to Spark; raw query→CSV; empty result → `InputSourceError`). **No test contacts a real
+cluster.** **Full backend 444 pytest green (+20 net; was 424), exit 0.** **NOT run on a real cluster
+yet** — the Delta read, managed-MLflow routing, and volume artifacts are exercised by the Step 5
+notebook once cluster access is available (Step 4 is engine-complete + fully mocked-tested; Step 3 is
+zero-code + verified by reading the source). **Scope guard:** the FastAPI layer, API routes, and
+every engine section are UNTOUCHED — the API's `InputSourceConfig` Pydantic model does NOT yet expose
+the delta `catalog`/`schema`/`limit` fields (`extra="forbid"`), so a `type="delta"` run is driven by
+the notebook via `build_config`, not the API; exposing delta over `/run` is part of Step 6
+(orchestration), deliberately deferred. `docs/databricks_integration.md` §6.6 Steps 3–5 + status
+table + `.env.example` + `backend_short_desc.md` updated; generation prompt archived at
+`prompts/backend_phases/phase_B_databricks_delta_and_mlflow_wiring.md`. **No plan_tweak entry** — this
+executes §6.6 Steps 3–5 as planned (the notebook `build_config` correction is a reference-doc fix per
+the governance hallucination-check rule, not a plan deviation). **Out of scope (untouched, still
+deferred):** Step 6 (FastAPI→Databricks Jobs orchestration), Phase C (Model Serving).)
+**Prior update (same day — Steps 1 & 2):** Claude Code (**Databricks I/O Phase B, Steps 1 & 2: `DatabricksVolumeStorage`
 + wheel packaging (ENGINE build-tooling only; ADDITIVE/opt-in; NO engine-section change, NO API/
 contract change, `schema_version` stays 1.10).** Implements `docs/databricks_integration.md` §6.6
 **Steps 1 & 2** (Enhancement Guide 1 + 4a) — both locally testable, no cluster. Off by default: a

@@ -20,6 +20,8 @@ from __future__ import annotations
 
 import os
 import shutil
+import sys
+import types
 from pathlib import Path
 
 import pandas as pd
@@ -27,7 +29,12 @@ import pytest
 
 from classifyos.config import build_config
 from classifyos.io.loader import data_loader
-from classifyos.io.sql_source import InputSourceError, list_tables, materialize_source
+from classifyos.io.sql_source import (
+    InputSourceError,
+    list_tables,
+    materialize_delta_source,
+    materialize_source,
+)
 from classifyos.io.storage import LocalFolderStorage
 from classifyos.runner import ModelRunner
 
@@ -53,6 +60,10 @@ def test_build_config_defaults_input_source_file() -> None:
         "connection_env": "CLASSIFYOS_PG_DSN",
         "table": None,
         "query": None,
+        # Delta (Databricks §6.6 Step 4) fields — default None, ignored for file/postgres.
+        "catalog": None,
+        "schema": None,
+        "limit": None,
     }
 
 
@@ -318,3 +329,228 @@ def test_end_to_end_postgres_source_matches_csv(
         assert pg_metrics.loc["LogisticRegression", metric] == pytest.approx(
             file_metrics.loc["LogisticRegression", metric], rel=1e-9, abs=1e-12
         ), metric
+
+
+# --------------------------------------------------------------------------- #
+# Delta input source (Databricks §6.6 Step 4) — PySpark is mocked entirely.    #
+# NEVER contacts a real cluster/SparkSession; a live smoke test is the         #
+# notebooks/classifyos_smoke_test.py notebook (documentation/tooling).         #
+# --------------------------------------------------------------------------- #
+
+
+class _FakeSparkDF:
+    """Stand-in for a Spark DataFrame: only the two methods the materializer uses."""
+
+    def __init__(self, pdf: pd.DataFrame) -> None:
+        self._pdf = pdf
+
+    def limit(self, num: int) -> "_FakeSparkDF":
+        return _FakeSparkDF(self._pdf.head(int(num)))
+
+    def toPandas(self) -> pd.DataFrame:  # noqa: N802 — mirrors the PySpark API name
+        return self._pdf.copy()
+
+
+class _FakeSpark:
+    """Stand-in SparkSession: records calls and returns seeded frames for table()/sql()."""
+
+    def __init__(
+        self,
+        tables: dict[str, pd.DataFrame] | None = None,
+        query_result: pd.DataFrame | None = None,
+    ) -> None:
+        self._tables = tables or {}
+        self._query_result = query_result
+        self.calls: list[tuple[str, str]] = []
+
+    def table(self, name: str) -> _FakeSparkDF:
+        self.calls.append(("table", name))
+        return _FakeSparkDF(self._tables[name])
+
+    def sql(self, query: str) -> _FakeSparkDF:
+        self.calls.append(("sql", query))
+        return _FakeSparkDF(self._query_result)
+
+
+def _install_fake_pyspark(monkeypatch: pytest.MonkeyPatch, active_session: object) -> None:
+    """Inject a minimal fake ``pyspark.sql`` whose ``SparkSession.getActiveSession()`` returns
+    ``active_session`` (pass ``None`` to simulate "no active session"). No real Spark involved.
+    """
+
+    class FakeSparkSession:
+        @staticmethod
+        def getActiveSession() -> object:  # noqa: N802 — mirrors the PySpark API name
+            return active_session
+
+    sql_mod = types.ModuleType("pyspark.sql")
+    sql_mod.SparkSession = FakeSparkSession  # type: ignore[attr-defined]
+    root_mod = types.ModuleType("pyspark")
+    root_mod.sql = sql_mod  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "pyspark", root_mod)
+    monkeypatch.setitem(sys.modules, "pyspark.sql", sql_mod)
+
+
+# --- config validation (build_config is the authoritative validator → 422) --------------
+
+
+@pytest.mark.parametrize(
+    "src",
+    [
+        {"type": "delta", "table": "policy_lapse"},
+        {"type": "delta", "catalog": "main", "schema": "insurance", "table": "policy_lapse"},
+        {"type": "delta", "query": "SELECT * FROM main.insurance.policy_lapse"},
+        {"type": "delta", "table": "policy_lapse", "limit": 5000},
+    ],
+)
+def test_build_config_accepts_delta(src) -> None:
+    cfg = build_config("snap.parquet", "t", ["a"], input_source=src)
+    assert cfg["input_source"]["type"] == "delta"
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        {"type": "delta"},                                        # neither table nor query
+        {"type": "delta", "table": "a; DROP TABLE b"},            # unsafe table identifier
+        {"type": "delta", "catalog": "main; DROP", "table": "t"},  # unsafe catalog identifier
+        {"type": "delta", "schema": "bad-schema", "table": "t"},   # unsafe schema identifier
+        {"type": "delta", "table": "t", "limit": 0},               # non-positive limit
+        {"type": "delta", "table": "t", "limit": -5},              # negative limit
+        {"type": "delta", "table": "t", "limit": "5000"},          # limit not an int
+    ],
+)
+def test_build_config_bad_delta_raises(bad) -> None:
+    with pytest.raises(ValueError):
+        build_config("snap.parquet", "t", ["a"], input_source=bad)
+
+
+def test_build_config_delta_requires_parquet_or_csv_destination() -> None:
+    with pytest.raises(ValueError, match="parquet"):
+        build_config(
+            "snap.xlsx", "t", ["a"], input_source={"type": "delta", "table": "t"}
+        )
+
+
+# --- materialize_delta_source — mocked PySpark, never a real cluster --------------------
+
+
+def test_materialize_delta_file_source_is_noop(temp_storage: LocalFolderStorage) -> None:
+    """The default file source is a complete no-op — nothing runs, nothing is written."""
+    cfg = build_config("x.csv", "t", ["a"])
+    assert materialize_delta_source(cfg, temp_storage) is None
+    assert list(temp_storage.list()) == []
+
+
+def test_materialize_delta_no_pyspark_raises(
+    temp_storage: LocalFolderStorage, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A local run (no PySpark installed) raises a clear InputSourceError, never a crash."""
+    monkeypatch.setitem(sys.modules, "pyspark", None)  # force the lazy import to fail
+    monkeypatch.setitem(sys.modules, "pyspark.sql", None)
+    cfg = build_config(
+        "snap.parquet",
+        "t",
+        ["a"],
+        input_source={"type": "delta", "catalog": "main", "schema": "ins", "table": "policy"},
+    )
+    with pytest.raises(InputSourceError, match="PySpark"):
+        materialize_delta_source(cfg, temp_storage)
+
+
+def test_materialize_delta_no_active_session_raises(
+    temp_storage: LocalFolderStorage, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """PySpark present but no active SparkSession (i.e. off a cluster) → InputSourceError."""
+    _install_fake_pyspark(monkeypatch, active_session=None)
+    cfg = build_config(
+        "snap.parquet", "t", ["a"], input_source={"type": "delta", "table": "policy"}
+    )
+    with pytest.raises(InputSourceError, match="SparkSession"):
+        materialize_delta_source(cfg, temp_storage)
+
+
+def test_materialize_delta_no_table_or_query_at_runtime_raises(
+    temp_storage: LocalFolderStorage, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A hand-built config that bypassed build_config still fails cleanly (defensive branch)."""
+    _install_fake_pyspark(monkeypatch, active_session=_FakeSpark())
+    cfg = {"input_file": "snap.parquet", "input_source": {"type": "delta"}}
+    with pytest.raises(InputSourceError, match="either"):
+        materialize_delta_source(cfg, temp_storage)
+
+
+def test_materialize_delta_table_parquet_roundtrip(
+    temp_storage: LocalFolderStorage, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A table read materializes a Parquet snapshot that data_loader reads back unchanged."""
+    df = pd.DataFrame({"a": [1, 2, 3], "b": ["x", "y", "z"], "will_lapse": [0, 1, 0]})
+    spark = _FakeSpark(tables={"main.insurance.policy_lapse": df})
+    _install_fake_pyspark(monkeypatch, active_session=spark)
+
+    cfg = build_config(
+        "snap.parquet",
+        "will_lapse",
+        ["a", "b"],
+        input_source={
+            "type": "delta",
+            "catalog": "main",
+            "schema": "insurance",
+            "table": "policy_lapse",
+        },
+    )
+    materialize_delta_source(cfg, temp_storage)
+
+    assert ("table", "main.insurance.policy_lapse") in spark.calls
+    assert temp_storage.exists("snap.parquet")
+    loaded = data_loader(cfg, temp_storage)
+    assert list(loaded.columns) == ["a", "b", "will_lapse"]
+    assert len(loaded) == 3
+
+
+def test_materialize_delta_applies_limit(
+    temp_storage: LocalFolderStorage, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The optional row cap is pushed down to Spark (sdf.limit) before materializing."""
+    df = pd.DataFrame({"a": list(range(10)), "y": [0, 1] * 5})
+    spark = _FakeSpark(tables={"t": df})
+    _install_fake_pyspark(monkeypatch, active_session=spark)
+
+    cfg = build_config(
+        "snap.parquet", "y", ["a"], input_source={"type": "delta", "table": "t", "limit": 4}
+    )
+    materialize_delta_source(cfg, temp_storage)
+    loaded = data_loader(cfg, temp_storage)
+    assert len(loaded) == 4
+
+
+def test_materialize_delta_query_csv(
+    temp_storage: LocalFolderStorage, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A raw query is run via spark.sql and materialized to the CSV snapshot destination."""
+    df = pd.DataFrame({"a": [1, 2], "y": [0, 1]})
+    spark = _FakeSpark(query_result=df)
+    _install_fake_pyspark(monkeypatch, active_session=spark)
+
+    cfg = build_config(
+        "snap.csv",
+        "y",
+        ["a"],
+        input_source={"type": "delta", "query": "SELECT a, y FROM main.ins.t"},
+    )
+    materialize_delta_source(cfg, temp_storage)
+    assert ("sql", "SELECT a, y FROM main.ins.t") in spark.calls
+    loaded = data_loader(cfg, temp_storage)
+    assert len(loaded) == 2
+
+
+def test_materialize_delta_empty_result_raises(
+    temp_storage: LocalFolderStorage, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An empty table/query result raises InputSourceError rather than writing an empty snapshot."""
+    spark = _FakeSpark(tables={"t": pd.DataFrame({"a": [], "y": []})})
+    _install_fake_pyspark(monkeypatch, active_session=spark)
+    cfg = build_config(
+        "snap.parquet", "y", ["a"], input_source={"type": "delta", "table": "t"}
+    )
+    with pytest.raises(InputSourceError, match="no rows"):
+        materialize_delta_source(cfg, temp_storage)

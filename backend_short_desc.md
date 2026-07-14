@@ -659,6 +659,57 @@ built and tested entirely locally with no cluster needed.
   managed-server wiring, the cluster smoke-test notebook, and the FastAPI→Databricks-Jobs
   orchestration. The API layer and every engine stage are untouched.
 
+## Databricks I/O — Delta table input + managed-MLflow wiring + smoke-test notebook (Phase B, Steps 3–5) (✅ Done, 2026-07-14)
+**In one line:** A run can now read its data straight from a Databricks "Delta table" (the cluster's
+native table format) instead of a file, results can be recorded in Databricks' built-in MLflow with
+no code change, and there's a ready-made cluster notebook that runs the whole thing end-to-end — the
+last engine-side pieces before wiring ClassifyOS into Databricks jobs.
+- **Why:** the next steps of the Databricks plan (`docs/databricks_integration.md` §6.6, Steps 3–5),
+  following the storage adapter + wheel (Steps 1 & 2). These finish the "engine runs cleanly on a
+  cluster" story; only the job-orchestration layer (Step 6) then remains.
+- **Delta table as an input source (Step 4).** A new `input_source` type, `delta`, sitting right
+  beside the existing `file` and `postgres` options and working the **exact same way** as the
+  Postgres one: it reads the chosen Unity Catalog table (`catalog.schema.table`) — or a raw SQL
+  query — **once**, snapshots the result to a Parquet file in the data folder, and then the ordinary
+  file pipeline runs on that snapshot completely unchanged. So the "all reads go through one file
+  gateway" rule and the "learn only from the training split" rule stay literally intact, and the
+  snapshot is a durable, auditable record of exactly the rows the run saw. An optional row cap
+  (`limit`) keeps quick/dev runs small.
+- **Cluster-only, and safe to fail off-cluster.** Reading a Delta table needs Spark, which only
+  exists on a Databricks cluster. The Spark library is imported **only** when a Delta source is
+  actually used, and if it's missing (or there's no live Spark session — i.e. you're not on a
+  cluster) the run stops with a **clear message** telling you to use `file` locally — it never
+  crashes an ordinary local run. With no `delta` source configured, a run is byte-for-byte identical
+  to before.
+- **Safety at the config boundary.** The catalog / schema / table names are checked against a
+  safe-identifier allowlist the moment the config is built (they're slotted into the table name and
+  can't be passed as safe parameters, so this guards against SQL injection — the same guard the
+  Postgres table name already uses). A raw query is the analyst's own opt-in SQL on their own
+  cluster. The snapshot file must be a `.parquet`/`.csv`, and `limit` must be a positive whole
+  number — bad values are rejected up front (a 422), never a crash mid-run.
+- **Managed MLflow with zero code (Step 3).** Databricks ships its own MLflow tracking server and
+  model registry. Because the logging code only ever **reads** the "where to log" setting from the
+  environment (and never sets it itself), simply setting two environment variables on the cluster
+  (`MLFLOW_TRACKING_URI=databricks`, `MLFLOW_REGISTRY_URI=databricks-uc`) makes every logged run
+  appear in the Databricks Experiments UI — **no code change at all**. This was verified by
+  re-reading the logging module, and the two variables are documented in the environment template.
+- **A ready-to-run cluster notebook (Step 5).** A new `notebooks/classifyos_smoke_test.py` (a plain
+  Databricks notebook) installs the packaged engine, sets the environment variables, reads a small
+  Delta table, trains a couple of models, and prints the scoreboard plus the MLflow run link — the
+  one-click way to confirm the whole chain works on a real cluster (Delta read → snapshot → train →
+  artifacts to the cloud folder → run visible in MLflow). It's written against the engine's real
+  config builder (the reference guide's shorthand didn't match it).
+- **Verified.** +20 new tests with **Spark mocked entirely** (a fake Spark session is injected — no
+  real cluster is ever contacted): the Delta source reads a table/query, applies the row cap,
+  snapshots to Parquet/CSV and round-trips through the loader; and every failure mode (no Spark, no
+  live session, no table/query, empty result, unsafe names) is covered. Full backend suite green.
+  **Hallucination check ✅** — every Spark call (`getActiveSession`, `table`, `sql`, `limit`,
+  `toPandas`) confirmed against the official Azure Databricks PySpark reference (Spark 4.1.0 / DBR
+  18.2). **Not yet run on a real cluster** (that's the smoke-test notebook's job once cluster access
+  is available); the FastAPI layer and every engine stage are untouched. **Still deferred:** wiring
+  Delta runs through the web API and the FastAPI→Databricks-Jobs orchestration (Step 6), and Model
+  Serving (Phase C).
+
 ---
 
 ## How to read this project

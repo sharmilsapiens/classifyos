@@ -55,10 +55,12 @@ OUTLIER_METHODS = ("iqr", "zscore", "none")
 #: Where a run's data comes from. ``file`` (default) reads ``input_file`` from DATA_DIR exactly
 #: as today (byte-identical behaviour). ``postgres`` runs a table/query against a SQL database
 #: ONCE and materializes the result to ``input_file`` under DATA_DIR (via ``StorageAdapter``)
-#: BEFORE the pipeline runs — so ``data_loader`` and everything downstream are unchanged and the
+#: BEFORE the pipeline runs. ``delta`` (Databricks §6.6 Step 4) does the same for a Unity Catalog
+#: Delta table read via an active SparkSession (cluster-only) — spark.table/spark.sql → pandas →
+#: Parquet snapshot. In every case ``data_loader`` and everything downstream are unchanged and the
 #: load → split → fit-on-train leakage discipline stays literally intact (see
 #: ``classifyos.io.sql_source``). Snapshotting to a file is intended (reproducibility / audit).
-INPUT_SOURCE_TYPES = ("file", "postgres")
+INPUT_SOURCE_TYPES = ("file", "postgres", "delta")
 #: Snapshot file formats a ``postgres`` source may be written to; the ``input_file`` suffix
 #: selects it, symmetric with ``data_loader``'s reader. Typed Parquet is preferred; CSV works.
 INPUT_SNAPSHOT_FORMATS = ("parquet", "csv")
@@ -150,18 +152,26 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "input_file": "",
     "target": "",
     "feature_cols": [],
-    # --- input source (Interim 2b — Databricks integration §6.5, Option B) --------
+    # --- input source (Interim 2b + Databricks §6.6 Step 4 — materialize-to-file, Option B) --
     # Default "file": read ``input_file`` from DATA_DIR as today (byte-identical behaviour).
     # "postgres": run ``query`` (or ``SELECT * FROM <table>``) ONCE against the database whose
     # SQLAlchemy DSN is held by the env var named in ``connection_env`` (NEVER a credential in
     # the config), materialize the result to ``input_file`` under DATA_DIR via ``StorageAdapter``,
     # then run the normal file pipeline on that snapshot. Provide EITHER ``table`` OR ``query``.
-    # ``data_loader`` and everything downstream are unchanged (see classifyos/io/sql_source.py).
+    # "delta" (Databricks-only): read a Unity Catalog Delta table via the active SparkSession —
+    # ``spark.table("<catalog>.<schema>.<table>")`` or ``spark.sql(query)`` → pandas → Parquet
+    # snapshot to ``input_file`` (``limit`` optionally caps rows for dev/smoke runs). Requires a
+    # cluster; a local run with type="delta" raises a clear InputSourceError, never a crash.
+    # In all cases ``data_loader`` and everything downstream are unchanged (see io/sql_source.py).
     "input_source": {
         "type": "file",
-        "connection_env": "CLASSIFYOS_PG_DSN",
+        "connection_env": "CLASSIFYOS_PG_DSN",  # postgres only
         "table": None,
         "query": None,
+        # Delta (Databricks) fields — ignored for file/postgres sources.
+        "catalog": None,  # e.g. "main"
+        "schema": None,  # e.g. "insurance"
+        "limit": None,  # optional positive-int row cap (dev/smoke runs)
     },
     # --- problem framing ---
     "problem_type": "binary",
@@ -583,23 +593,31 @@ def _validate_mlflow(m: Any) -> None:
 
 
 def _validate_input_source(src: Any, input_file: str) -> None:
-    """Validate the ``input_source`` block (Interim 2b — optional Postgres input source).
+    """Validate the ``input_source`` block (Interim 2b Postgres + Databricks §6.6 Step 4 Delta).
 
     ``type`` must be a member of :data:`INPUT_SOURCE_TYPES`. For the default ``file`` source the
     other fields are ignored (a file run is unchanged). For ``postgres`` the connection is
     referenced by ``connection_env`` — the NAME of an environment variable holding the SQLAlchemy
     DSN, never a credential in the config — and EXACTLY ONE of ``table`` / ``query`` must be given.
-    A ``table`` must be a safe SQL identifier (it is interpolated into ``SELECT * FROM <table>``),
-    and ``input_file`` (the snapshot destination) must end in a :data:`INPUT_SNAPSHOT_FORMATS`
-    suffix. The database is NOT contacted here — this only validates the request shape (a bad
-    value → ``ValueError`` → HTTP 422 at the API boundary). The query runs later, at materialize
-    time (:func:`classifyos.io.sql_source.materialize_source`).
+    A ``table`` must be a safe SQL identifier (it is interpolated into ``SELECT * FROM <table>``).
+    For ``delta`` (Databricks-only) either ``table`` or ``query`` must be given and the
+    ``catalog`` / ``schema`` / ``table`` identifiers are validated — they are interpolated into
+    ``spark.table("<catalog>.<schema>.<table>")`` so, exactly like the postgres ``table``, they
+    cannot be bound parameters and are allowlisted here at config-build time. In both DB cases
+    ``input_file`` (the snapshot destination) must end in a :data:`INPUT_SNAPSHOT_FORMATS` suffix.
+    No database / cluster is contacted here — this only validates the request shape (a bad value →
+    ``ValueError`` → HTTP 422 at the API boundary). The query runs later, at materialize time
+    (:func:`classifyos.io.sql_source.materialize_source` / ``materialize_delta_source``).
     """
     if not isinstance(src, dict):
         raise ValueError("'input_source' must be a dict")
     source_type = src.get("type", "file")
     _require_choice(source_type, INPUT_SOURCE_TYPES, "input_source.type")
     if source_type == "file":
+        return
+
+    if source_type == "delta":
+        _validate_delta_source(src, input_file)
         return
 
     # --- postgres source ---
@@ -624,11 +642,58 @@ def _validate_input_source(src: Any, input_file: str) -> None:
             "'input_source.table' must be a simple SQL identifier (optionally schema-qualified), "
             f"got {table!r}"
         )
+    _require_snapshot_destination(input_file, "postgres")
+
+
+def _validate_delta_source(src: dict[str, Any], input_file: str) -> None:
+    """Validate a ``type="delta"`` input source (Databricks §6.6 Step 4).
+
+    Requires EITHER a ``table`` (read via ``spark.table("<catalog>.<schema>.<table>")``) OR a raw
+    ``query`` (``spark.sql(query)``). The ``catalog`` / ``schema`` / ``table`` identifiers are
+    validated against :data:`_SQL_IDENTIFIER_RE` — [RISK] SQL injection: they are interpolated
+    into the dotted table name (an identifier cannot be a bound parameter), so the allowlist here
+    is the guard; a raw ``query`` is the analyst's own opt-in SQL on their own cluster. ``limit``,
+    if given, must be a positive int (a dev/smoke row cap). ``input_file`` must end in a snapshot
+    suffix. The cluster is NOT contacted here (the Delta read happens at materialize time).
+    """
+    table = src.get("table")
+    query = src.get("query")
+    has_table = isinstance(table, str) and table.strip() != ""
+    has_query = isinstance(query, str) and query.strip() != ""
+    if not has_table and not has_query:
+        raise ValueError(
+            "a delta 'input_source' requires either 'table' or 'query' (got neither)"
+        )
+    # Validate every identifier fragment interpolated into the dotted table name.
+    for field in ("catalog", "schema", "table"):
+        value = src.get(field)
+        if value is None:
+            continue
+        if not isinstance(value, str) or (value.strip() and not _SQL_IDENTIFIER_RE.match(value.strip())):
+            raise ValueError(
+                f"'input_source.{field}' must be a simple SQL identifier "
+                f"(optionally schema-qualified), got {value!r}"
+            )
+    limit = src.get("limit")
+    if limit is not None and (not isinstance(limit, int) or isinstance(limit, bool) or limit < 1):
+        raise ValueError(
+            f"'input_source.limit' must be a positive integer or None, got {limit!r}"
+        )
+    _require_snapshot_destination(input_file, "delta")
+
+
+def _require_snapshot_destination(input_file: str, source_type: str) -> None:
+    """Require ``input_file`` (a materialized snapshot destination) to end in a snapshot suffix.
+
+    Shared by the postgres and delta validators: the query/table result is written to
+    ``input_file`` via :meth:`StorageAdapter.save_input`, whose format is selected by the suffix
+    (:data:`INPUT_SNAPSHOT_FORMATS` — typed Parquet preferred, CSV allowed).
+    """
     suffix = input_file.lower().rsplit(".", 1)[-1] if "." in input_file else ""
     if suffix not in INPUT_SNAPSHOT_FORMATS:
         raise ValueError(
-            "for a postgres 'input_source', 'input_file' (the snapshot destination) must end in "
-            f"one of {list(INPUT_SNAPSHOT_FORMATS)}, got {input_file!r}"
+            f"for a {source_type} 'input_source', 'input_file' (the snapshot destination) must "
+            f"end in one of {list(INPUT_SNAPSHOT_FORMATS)}, got {input_file!r}"
         )
 
 

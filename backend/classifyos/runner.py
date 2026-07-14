@@ -335,16 +335,18 @@ class ModelRunner:
     def _load(self, cfg: dict[str, Any]) -> pd.DataFrame:
         """Stage 1 — load the dataset (imported lazily to keep the import graph flat).
 
-        Interim 2b: when ``input_source.type == "postgres"``, the configured table/query is run
-        ONCE and materialized to ``cfg["input_file"]`` under DATA_DIR (Option B) BEFORE the file
-        is read — a no-op for the default ``file`` source, so the load path below is unchanged.
-        ``data_loader`` and everything downstream still read a plain file (leakage discipline +
-        StorageAdapter rule stay literally intact).
+        Interim 2b / Databricks §6.6 Step 4: when ``input_source.type`` is ``"postgres"`` (a SQL
+        table/query) or ``"delta"`` (a Unity Catalog Delta table via Spark, cluster-only), the
+        source is run ONCE and materialized to ``cfg["input_file"]`` under DATA_DIR (Option B)
+        BEFORE the file is read — both are a no-op for the default ``file`` source, so the load
+        path below is unchanged. ``data_loader`` and everything downstream still read a plain file
+        (leakage discipline + StorageAdapter rule stay literally intact).
         """
         from .io.loader import data_loader
-        from .io.sql_source import materialize_source
+        from .io.sql_source import materialize_delta_source, materialize_source
 
-        materialize_source(cfg, self.storage)
+        materialize_source(cfg, self.storage)  # postgres: runs or no-ops
+        materialize_delta_source(cfg, self.storage)  # delta: runs or no-ops
         return data_loader(cfg, self.storage)
 
     def _engineer(
