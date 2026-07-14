@@ -113,28 +113,13 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def new_job_id() -> str:
-    """Return a fresh job handle (uuid4 hex).
-
-    Exposed so a caller can mint the ``job_id`` BEFORE submitting the Databricks Job — the id must
-    be forwarded to the notebook as a base parameter (to namespace its output) at submit time,
-    which is before the job row is persisted.
-    """
-    return uuid.uuid4().hex
-
-
 def create_job(
     databricks_run_id: str | None,
     status: str = "PENDING",
     config_json: str | None = None,
-    job_id: str | None = None,
 ) -> str:
-    """Insert a new job row and return its ``job_id``.
-
-    ``job_id`` defaults to a fresh :func:`new_job_id`; pass an explicit one when it was minted
-    earlier (e.g. forwarded to the notebook before the row is written).
-    """
-    job_id = job_id or new_job_id()
+    """Insert a new job row and return its generated ``job_id`` (a uuid4 hex handle)."""
+    job_id = uuid.uuid4().hex
     now = _now()
     with get_engine().begin() as conn:
         conn.execute(

@@ -39,8 +39,6 @@ def dbx_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv(
         "DATABRICKS_JOB_WHEEL_PATH", "/Volumes/main/classifyos/libs/classifyos-1.0.0-py3-none-any.whl"
     )
-    # Pin the output volume so the results-fetch path is deterministic (not read from a dev's .env).
-    monkeypatch.setenv("DBRICKS_OUTPUT_VOLUME", "/Volumes/aiml_rd/classifyos/output")
     dsn = f"sqlite:///{(tmp_path / 'jobs.db').as_posix()}"
     monkeypatch.setenv("CLASSIFYOS_JOBS_DSN", dsn)
     jobs_store.reset_engine()
@@ -89,7 +87,6 @@ def test_submit_returns_job_and_persists(api_client, dbx_env, monkeypatch) -> No
         params = body["tasks"][0]["notebook_task"]["base_parameters"]
         seen["user_token"] = params["user_token"]
         seen["run_config"] = json.loads(params["run_config"])
-        seen["job_id"] = params["job_id"]
         assert body["tasks"][0]["libraries"] == [
             {"whl": "/Volumes/main/classifyos/libs/classifyos-1.0.0-py3-none-any.whl"}
         ]
@@ -108,8 +105,6 @@ def test_submit_returns_job_and_persists(api_client, dbx_env, monkeypatch) -> No
     # The user's PAT was forwarded to the Job (for UC data access), the config too.
     assert seen["user_token"] == "user-pat-xyz"
     assert seen["run_config"]["target"] == "will_lapse"
-    # The job handle was minted before submit and forwarded so the Job can namespace its output.
-    assert seen["job_id"] == body["job_id"]
 
     # Persisted for reconnect/audit — but NOT the PAT.
     row = jobs_store.get_job(body["job_id"])
@@ -224,47 +219,31 @@ def test_status_unknown_job_is_404(api_client, dbx_env) -> None:
 # --------------------------------------------------------------------------- #
 
 
-def test_results_completed_returns_envelope(api_client, dbx_env, monkeypatch) -> None:
-    """Once COMPLETED, /results returns the locked envelope the Job wrote to the output volume.
-
-    The Job namespaces its output per job_id, so the app fetches
-    ``{DBRICKS_OUTPUT_VOLUME}/api/{job_id}/run_response.json`` via the Databricks Files API
-    (mocked here). The envelope is the full locked ``/run`` shape (Option A — §Problem 1), so it
-    drops straight into the result pages, byte-identical to a local run.
-    """
+def test_results_completed_returns_envelope(
+    api_client, dbx_env, monkeypatch, output_dir: Path
+) -> None:
+    """Once COMPLETED, /results returns the locked envelope the Job wrote to the output volume."""
+    job_id = _submit(
+        api_client,
+        monkeypatch,
+        states=[{"life_cycle_state": "TERMINATED", "result_state": "SUCCESS"}],
+    )
+    # The Job writes api/run_response.json to the UC output volume; the app's storage reads it.
     envelope = {
         "status": "ok",
         "schema_version": "1.11",
         "result": {"run": {"target": "will_lapse"}},
         "error": None,
     }
-    captured: dict = {}
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        if request.url.path.endswith("/jobs/runs/submit"):
-            # Capture the job_id the server minted + forwarded so we can assert the fetch path.
-            params = json.loads(request.content)["tasks"][0]["notebook_task"]["base_parameters"]
-            captured["job_id"] = params["job_id"]
-            return httpx.Response(200, json={"run_id": 777})
-        if request.url.path.endswith("/jobs/runs/get"):
-            return httpx.Response(200, json={"state": {"life_cycle_state": "TERMINATED", "result_state": "SUCCESS"}})
-        if "/api/2.0/fs/files" in request.url.path:
-            # The Files API serves raw bytes; the path must be the per-job envelope key.
-            expected = f"/api/2.0/fs/files/Volumes/aiml_rd/classifyos/output/api/{captured['job_id']}/run_response.json"
-            assert request.url.path == expected, request.url.path
-            return httpx.Response(200, content=json.dumps(envelope).encode("utf-8"))
-        return httpx.Response(404)  # pragma: no cover
-
-    _install_mock(monkeypatch, handler)
-    submitted = api_client.post(
-        "/api/v1/run", json=_payload(), headers={"X-Databricks-Token": "user-pat"}
-    )
-    assert submitted.status_code == 200, submitted.text
-    job_id = submitted.json()["job_id"]
+    dest = output_dir / "api" / "run_response.json"
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_text(json.dumps(envelope), encoding="utf-8")
 
     resp = api_client.get(f"/api/v1/run/{job_id}/results")
     assert resp.status_code == 200, resp.text
     assert resp.json() == envelope
+    # tidy so a later test's OUTPUT_DIR is clean
+    dest.unlink()
 
 
 def test_results_not_complete_is_409(api_client, dbx_env, monkeypatch) -> None:
