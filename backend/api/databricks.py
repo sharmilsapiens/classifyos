@@ -184,6 +184,7 @@ def _submit_payload(run_config: dict[str, Any], user_pat: str) -> dict[str, Any]
             "base_parameters": {
                 "run_config": json.dumps(run_config),
                 "user_token": user_pat,
+                "wheel_path": wheel_path,
             },
         },
     }

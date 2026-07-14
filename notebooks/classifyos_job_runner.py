@@ -29,18 +29,26 @@
 
 # MAGIC %md
 # MAGIC ## Cell 1 — install the engine wheel (notebook-scoped)
-# MAGIC Matches `DATABRICKS_JOB_WHEEL_PATH`. FastAPI also attaches this wheel as a task library; the
-# MAGIC explicit `%pip install` keeps the notebook runnable stand-alone too.
+# MAGIC When submitted by FastAPI the wheel is already installed as a task library before this
+# MAGIC notebook runs — no pip call needed. For standalone runs, set DATABRICKS_JOB_WHEEL_PATH
+# MAGIC or pass wheel_path as a widget and this cell installs it.
 
 # COMMAND ----------
 
-# MAGIC %pip install /Volumes/main/classifyos/libs/classifyos-1.0.0-py3-none-any.whl
+import importlib, os, subprocess
 
-# COMMAND ----------
+dbutils.widgets.text("wheel_path", "", "Wheel path (leave blank if installed via task library)")
+_wheel = dbutils.widgets.get("wheel_path").strip() or os.environ.get("DATABRICKS_JOB_WHEEL_PATH", "").strip()
 
-# A %pip install restarts Python on recent runtimes; if yours does not, uncomment this so the
-# freshly-installed classifyos is importable.
-# dbutils.library.restartPython()
+try:
+    importlib.import_module("classifyos")
+except ModuleNotFoundError:
+    if not _wheel:
+        raise RuntimeError(
+            "classifyos is not installed and no wheel_path was provided. "
+            "Set DATABRICKS_JOB_WHEEL_PATH or pass wheel_path as a widget."
+        )
+    subprocess.run(["pip", "install", _wheel], check=True)
 
 # COMMAND ----------
 
@@ -73,8 +81,8 @@ import sys
 from pathlib import Path
 
 os.environ["CLASSIFYOS_STORAGE_BACKEND"] = "databricks"
-os.environ.setdefault("DBRICKS_INPUT_VOLUME", "/Volumes/main/classifyos/data/input")
-os.environ.setdefault("DBRICKS_OUTPUT_VOLUME", "/Volumes/main/classifyos/data/output")
+os.environ.setdefault("DBRICKS_INPUT_VOLUME", "/Volumes/aiml_rd/classifyos/input")
+os.environ.setdefault("DBRICKS_OUTPUT_VOLUME", "/Volumes/aiml_rd/classifyos/output")
 os.environ["MLFLOW_TRACKING_URI"] = "databricks"
 os.environ["MLFLOW_REGISTRY_URI"] = "databricks-uc"
 # Unity Catalog reads run AS THE USER (their PAT), never the service token.
@@ -102,11 +110,11 @@ if not any((Path(p) / "api" / "result_builder.py").exists() for p in sys.path):
 
 # COMMAND ----------
 
-from api.models import RunConfig  # noqa: E402 — after the sys.path bootstrap
+from classifyos.config import build_config  # noqa: E402
 from classifyos.io.storage import get_default_storage  # noqa: E402
 from classifyos.runner import ModelRunner  # noqa: E402
 
-engine_config = RunConfig(**run_config).to_engine_config()
+engine_config = build_config(run_config)
 storage = get_default_storage()  # → DatabricksVolumeStorage (CLASSIFYOS_STORAGE_BACKEND=databricks)
 runner = ModelRunner(config=engine_config, storage=storage)
 runner.run()
@@ -121,20 +129,32 @@ runner.run()
 
 # COMMAND ----------
 
-from api.models import RunResponse  # noqa: E402
-from api.result_builder import build_run_result  # noqa: E402
-from api.serialize import safe_jsonify  # noqa: E402
+import json, numpy as np, pandas as pd  # noqa: E402
 
 RESULT_ENVELOPE_KEY = "api/run_response.json"
 
-result = build_run_result(runner, storage)
-envelope = RunResponse(status="ok", result=safe_jsonify(result)).model_dump(by_alias=True)
+def _serializable(obj):
+    if isinstance(obj, (np.integer,)): return int(obj)
+    if isinstance(obj, (np.floating,)): return float(obj)
+    if isinstance(obj, np.ndarray): return obj.tolist()
+    if isinstance(obj, pd.DataFrame): return obj.to_dict(orient="records")
+    return str(obj)
+
+# Write raw runner state — FastAPI's GET /run/{job_id}/results reshapes this
+envelope = {
+    "status": "ok",
+    "mlflow_run": getattr(runner, "mlflow_run_", None),
+    "metrics": _serializable(getattr(runner, "metrics_df_", pd.DataFrame())),
+    "best_model": getattr(runner, "best_model_name_", None),
+    "artifacts_written": True,
+}
 
 out_path = storage.path_for(RESULT_ENVELOPE_KEY, output=True)
 os.makedirs(os.path.dirname(out_path), exist_ok=True)
 with open(out_path, "w", encoding="utf-8") as fh:
-    json.dump(envelope, fh)
+    json.dump(envelope, fh, default=_serializable)
 
 print("Wrote result envelope to", out_path)
-display(runner.metrics_df_.sort_values("f1_weighted", ascending=False))
+if hasattr(runner, "metrics_df_"):
+    display(runner.metrics_df_.sort_values("f1_weighted", ascending=False))
 print("MLflow run:", getattr(runner, "mlflow_run_", None))
