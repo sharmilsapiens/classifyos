@@ -95,15 +95,55 @@ os.environ["MLFLOW_REGISTRY_URI"] = "databricks-uc"
 if user_token:
     os.environ["DATABRICKS_TOKEN"] = user_token
 
-# Make the `api` package importable. In a Databricks Repo the repo files sit next to this
-# notebook; walk up from the working directory to find the repo's backend/ dir.
-if not any((Path(p) / "api" / "result_builder.py").exists() for p in sys.path):
+# Make the `api` package importable — it holds the `/run` reshaper (`result_builder`/`models`/
+# `serialize`) that Cell 5 needs, and it is NOT in the classifyos WHEEL (the wheel ships the engine
+# only). So this notebook must run from a **Databricks Repo / Git folder** where the repo's
+# `backend/` dir is present; we add that dir to sys.path here. See docs/databricks_how_it_works.md §11.
+def _add_backend_to_path() -> None:
+    """Put the repo's `backend/` (the one containing `api/result_builder.py`) on sys.path.
+
+    Searches, in order: (a) sys.path already resolves `api` → nothing to do; (b) walking up from the
+    current working directory; (c) walking up from THIS notebook's own Git-folder path (reliable even
+    when the job's cwd is not the notebook's directory). Raises a clear, actionable error if none hit,
+    instead of a cryptic `ModuleNotFoundError: No module named 'api'` later in Cell 5.
+    """
+    def _has_api(d: Path) -> bool:
+        return (d / "api" / "result_builder.py").exists()
+
+    # (a) already importable via an existing sys.path entry
+    if any(_has_api(Path(p)) for p in sys.path):
+        return
+
+    candidates: list[Path] = []
+    # (b) walk up from the working directory
     here = Path.cwd()
-    for candidate in [here, *here.parents]:
-        backend_dir = candidate / "backend"
-        if (backend_dir / "api" / "result_builder.py").exists():
+    candidates += [c / "backend" for c in [here, *here.parents]]
+    # (c) derive from the notebook's own workspace path, e.g.
+    #     /Repos/<user>/<repo>/notebooks/classifyos_job_runner → /Workspace/Repos/<user>/<repo>/backend
+    try:
+        nb_path = (
+            dbutils.notebook.entry_point.getDbutils().notebook().getContext().notebookPath().get()
+        )
+        ws_root = Path("/Workspace" + nb_path) if not nb_path.startswith("/Workspace") else Path(nb_path)
+        candidates += [c / "backend" for c in ws_root.parents]
+    except Exception:  # noqa: BLE001 — best-effort; the cwd walk above may already have found it
+        pass
+
+    for backend_dir in candidates:
+        if _has_api(backend_dir):
             sys.path.insert(0, str(backend_dir))
-            break
+            return
+
+    raise RuntimeError(
+        "The `api` package (needed to build the full /run result envelope in Cell 5) is not "
+        "importable. Run this notebook from a Databricks Repo / Git folder so the repo's backend/ "
+        "dir is on sys.path — set DATABRICKS_JOB_NOTEBOOK_PATH to the /Repos path (NOT a /Workspace/"
+        "Users copy) and Pull after each push. See docs/databricks_how_it_works.md §11. (The "
+        "classifyos wheel ships the engine only; the api reshaper lives in the repo source.)"
+    )
+
+
+_add_backend_to_path()
 
 # COMMAND ----------
 

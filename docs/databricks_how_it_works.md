@@ -44,7 +44,7 @@ All set in `backend/.env` (gitignored). Template in `backend/.env.example`.
 | `DATABRICKS_TOKEN` | Service PAT — used by FastAPI to submit jobs and poll status. **Regenerate if exposed.** | `dapi...` |
 | `DATABRICKS_HTTP_PATH` | SQL warehouse path — used for Delta table queries | `/sql/1.0/warehouses/a533bb87aa12d132` |
 | `DATABRICKS_JOB_CLUSTER_ID` | Existing cluster the job runs on | `0421-071516-3h9grzl1` |
-| `DATABRICKS_JOB_NOTEBOOK_PATH` | Workspace path to the job runner notebook (no `.py` extension) | `/Workspace/Users/sharmil.basa@sapiens.com/classifyos/notebooks/classifyos_job_runner` |
+| `DATABRICKS_JOB_NOTEBOOK_PATH` | Path to the job runner notebook (no `.py` extension). **Must be a Git-folder `/Repos/…` path** so the `api` reshaper is importable (§7, §11) — a `/Workspace/Users/…` copy gives `No module named 'api'`. | `/Repos/sharmil.basa@sapiens.com/classifyos/notebooks/classifyos_job_runner` |
 | `DATABRICKS_JOB_WHEEL_PATH` | UC volume path to the classifyos wheel | `/Volumes/aiml_rd/classifyos/libs/classifyos-1.0.0-py3-none-any.whl` |
 | `CLASSIFYOS_STORAGE_BACKEND` | `databricks` = use `DatabricksVolumeStorage`; unset = local | `databricks` |
 | `DBRICKS_INPUT_VOLUME` | UC volume path for input data snapshots | `/Volumes/aiml_rd/classifyos/input` |
@@ -200,7 +200,7 @@ No cluster restart needed — wheel installs fresh per job.
 | `DATABRICKS_JOB_NOTEBOOK_PATH is not set` | Missing env var | Add to `backend/.env` |
 | `DATABRICKS_JOB_CLUSTER_ID is not set` | Missing env var | Add cluster ID from Databricks Compute UI |
 | `%pip install /Volumes/main/...` | Stale Workspace notebook | Delete + re-import notebook from repo |
-| `No module named 'api'` | Notebook not running from Databricks Repo | Set up Repos OR use self-contained notebook (Option B) |
+| `No module named 'api'` | Notebook running from a `/Workspace/Users/…` copy, not a Git folder — the `api` reshaper isn't in the wheel | Run from a **Databricks Repo / Git folder** and point `DATABRICKS_JOB_NOTEBOOK_PATH` at the `/Repos/…` path (see §11). Cell 3 then adds `backend/` to `sys.path`. |
 | `build_config() missing 2 required positional arguments` | Passing dict directly | Unpack: `build_config(input_file=..., target=..., feature_cols=..., **rest)` |
 | `'input_source.type' must be one of ['file', 'postgres']` | Old wheel without delta support | Rebuild wheel and re-upload |
 | `results envelope is not available yet (looked in …)` | Job did not write `api/{job_id}/run_response.json`, or a path mismatch | The 404 detail + the INFO log show the exact UC path fetched; confirm the notebook wrote the same `job_id`-namespaced path (Cell 5) |
@@ -210,17 +210,35 @@ No cluster restart needed — wheel installs fresh per job.
 
 ---
 
-## 11. Databricks Repos setup (recommended)
+## 11. Databricks Repos setup (REQUIRED for the full result envelope)
 
-Allows the notebook to import `api.*` from `backend/`, giving the full result envelope.
+**Why this is required, not just "recommended".** Cell 5 builds the locked `/run` envelope with
+`api.result_builder.build_run_result` (+ `api.models.RunResponse`, `api.serialize.safe_jsonify`).
+That `api` package is **not in the `classifyos` wheel** — the wheel ships the engine only
+(`pyproject.toml` → `include = ["classifyos*"]`, to keep it web-free). So `api` is importable on the
+cluster ONLY when the notebook runs from a **Databricks Repo / Git folder**, where the repo's
+`backend/` dir is on the cluster filesystem. Running the notebook from a **`/Workspace/Users/…`
+copy** (an imported notebook, not a Git folder) gives `ModuleNotFoundError: No module named 'api'`.
 
-1. Databricks UI → **Repos** → **Add repo**
-2. URL: `https://github.com/sharmilsapiens/classifyos`
-3. Set in `backend/.env`:
+Steps:
+
+1. Databricks UI → **Workspace → Repos** (or **Git folders**) → **Add repo** → `Create Git folder`.
+2. URL: `https://github.com/sharmilsapiens/classifyos` (the folder is created at
+   `/Workspace/Repos/<your-user>/classifyos`).
+3. Point the Job at the Git-folder notebook path (**a `/Repos/…` path, NOT `/Workspace/Users/…`**) —
+   set in `backend/.env`:
    ```
-   DATABRICKS_JOB_NOTEBOOK_PATH=/Workspace/Users/sharmil.basa@sapiens.com/classifyos/notebooks/classifyos_job_runner
+   DATABRICKS_JOB_NOTEBOOK_PATH=/Repos/sharmil.basa@sapiens.com/classifyos/notebooks/classifyos_job_runner
    ```
-4. After each code push: Repos → `classifyos` → **Pull**
+   (The equivalent `/Workspace/Repos/sharmil.basa@sapiens.com/classifyos/notebooks/classifyos_job_runner`
+   also works — both resolve to the same Git folder.)
+4. After each code push to `main`: Repos/Git folders → `classifyos` → **Pull** (so the cluster has the
+   latest `backend/` + notebook).
+
+Cell 3's `_add_backend_to_path()` then puts `<repo>/backend` on `sys.path` — it looks on the existing
+`sys.path`, walks up from the working directory, AND derives the repo root from the notebook's own
+`/Repos/…` path (so it works even when the Job's cwd isn't the notebook's folder). If `api` still
+can't be found it raises a clear error naming this section, rather than failing deep in Cell 5.
 
 ---
 
