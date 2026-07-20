@@ -89,9 +89,10 @@ def test_list_tables_passes_catalog_and_schema(api_client, uc_env, monkeypatch) 
 # GET /api/v1/databricks/clusters — the run-config cluster picker               #
 # --------------------------------------------------------------------------- #
 #
-# Same auth pattern as the UC list proxies (user PAT via X-Databricks-Token; 401 no PAT, 503
-# unreachable). Only clusters a Job can actually be submitted to are surfaced — RUNNING (live) or
-# TERMINATED (restartable) — sorted by cluster_name.
+# Authenticated with the SERVICE token (DATABRICKS_TOKEN), NOT the user's PAT: the service identity
+# submits the Job and picks the cluster, so the picker reflects where jobs actually run. Only
+# clusters a Job can actually be submitted to are surfaced — RUNNING (live) or TERMINATED
+# (restartable) — sorted by cluster_name. No user PAT is required.
 
 #: A clusters/list response spanning every state so the filter + shape can be asserted at once.
 _CLUSTERS = [
@@ -105,17 +106,25 @@ _CLUSTERS = [
 ]
 
 
-def test_list_clusters_filters_and_sorts(api_client, uc_env, monkeypatch) -> None:
+@pytest.fixture
+def clusters_env(monkeypatch: pytest.MonkeyPatch):
+    """Env for the clusters endpoint: the workspace host + the SERVICE token (not a user PAT)."""
+    monkeypatch.setenv("DATABRICKS_HOST", _MOCK_HOST)
+    monkeypatch.setenv("DATABRICKS_TOKEN", "svc-token")
+
+
+def test_list_clusters_filters_and_sorts(api_client, clusters_env, monkeypatch) -> None:
     """Only RUNNING/TERMINATED clusters are returned, sorted case-insensitively by name."""
 
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.url.path == "/api/2.0/clusters/list"
-        # The cluster picker authenticates with the USER's PAT, like the UC proxies.
-        assert request.headers["Authorization"] == "Bearer user-pat"
+        # The cluster picker authenticates with the SERVICE token, NOT a user PAT.
+        assert request.headers["Authorization"] == "Bearer svc-token"
         return httpx.Response(200, json={"clusters": _CLUSTERS})
 
     _install_mock(monkeypatch, handler)
-    resp = api_client.get("/api/v1/databricks/clusters", headers={"X-Databricks-Token": "user-pat"})
+    # No X-Databricks-Token header needed — this is a service-token operation.
+    resp = api_client.get("/api/v1/databricks/clusters")
     assert resp.status_code == 200, resp.text
     clusters = resp.json()["clusters"]
 
@@ -126,7 +135,7 @@ def test_list_clusters_filters_and_sorts(api_client, uc_env, monkeypatch) -> Non
     ]
 
 
-def test_list_clusters_empty_when_none_usable(api_client, uc_env, monkeypatch) -> None:
+def test_list_clusters_empty_when_none_usable(api_client, clusters_env, monkeypatch) -> None:
     """A workspace with no usable clusters returns an empty list (a valid 200, not an error)."""
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -135,13 +144,18 @@ def test_list_clusters_empty_when_none_usable(api_client, uc_env, monkeypatch) -
         ]})
 
     _install_mock(monkeypatch, handler)
-    resp = api_client.get("/api/v1/databricks/clusters", headers={"X-Databricks-Token": "user-pat"})
+    resp = api_client.get("/api/v1/databricks/clusters")
     assert resp.status_code == 200, resp.text
     assert resp.json()["clusters"] == []
 
 
-def test_list_clusters_missing_pat_is_401(api_client, uc_env, monkeypatch) -> None:
-    """No X-Databricks-Token → 401 before any HTTP call to Databricks."""
+def test_list_clusters_missing_service_token_is_500(api_client, uc_env, monkeypatch) -> None:
+    """With the host set but no DATABRICKS_TOKEN, it's a server-config error (500), before any HTTP.
+
+    ``uc_env`` sets only ``DATABRICKS_HOST``; conftest does not pin a service token, so
+    ``_service_token()`` raises ``DatabricksConfigError`` → 500 without contacting the workspace.
+    """
+    monkeypatch.delenv("DATABRICKS_TOKEN", raising=False)
     called = {"n": 0}
 
     def handler(request: httpx.Request) -> httpx.Response:  # pragma: no cover — must not be hit
@@ -150,16 +164,17 @@ def test_list_clusters_missing_pat_is_401(api_client, uc_env, monkeypatch) -> No
 
     _install_mock(monkeypatch, handler)
     resp = api_client.get("/api/v1/databricks/clusters")
-    assert resp.status_code == 401
+    assert resp.status_code == 500
+    assert "databricks_token" in resp.json()["detail"].lower()
     assert called["n"] == 0
 
 
-def test_list_clusters_unavailable_is_503(api_client, uc_env, monkeypatch) -> None:
+def test_list_clusters_unavailable_is_503(api_client, clusters_env, monkeypatch) -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         raise httpx.ConnectError("unreachable", request=request)
 
     _install_mock(monkeypatch, handler)
-    resp = api_client.get("/api/v1/databricks/clusters", headers={"X-Databricks-Token": "user-pat"})
+    resp = api_client.get("/api/v1/databricks/clusters")
     assert resp.status_code == 503
     assert "unavailable" in resp.json()["detail"].lower()
 

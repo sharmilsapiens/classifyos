@@ -50,7 +50,7 @@ vi.mock("@/api/client", () => ({
   listCatalogs: (pat: string) => listCatalogs(pat),
   listSchemas: (catalog: string, pat: string) => listSchemas(catalog, pat),
   listTables: (catalog: string, schema: string, pat: string) => listTables(catalog, schema, pat),
-  listClusters: (pat: string) => listClusters(pat),
+  listClusters: () => listClusters(),
   getTableProfile: (args: unknown, pat: string) => getTableProfile(args, pat),
   ApiError: class ApiError extends Error {},
 }))
@@ -242,7 +242,8 @@ describe("Upload — Databricks data source (§6.6 Step 6, toggle show/hide)", (
     fireEvent.click(screen.getByRole("tab", { name: /Databricks/i }))
     fireEvent.click(screen.getByRole("button", { name: /Connect/i }))
 
-    await waitFor(() => expect(listClusters).toHaveBeenCalledWith("dapi-xyz"))
+    // Clusters are resolved server-side with the service token, so no PAT is passed to listClusters.
+    await waitFor(() => expect(listClusters).toHaveBeenCalled())
     // Picking a cluster pushes its id into the run config (→ overrides the env var default).
     const clusterSelect = await screen.findByLabelText(/^Cluster$/i)
     fireEvent.change(clusterSelect, { target: { value: "0716-run" } })

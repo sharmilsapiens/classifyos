@@ -77,8 +77,9 @@ export default function DatabricksSourcePanel({
     setTables({ state: "idle" })
     // Fetch the cluster list in parallel with the catalog browse — the two are independent, and a
     // cluster-list failure must not block picking a table (the server env-var default still works).
+    // Clusters are resolved server-side with the SERVICE token, so no PAT is passed here.
     setClusters({ state: "loading" })
-    listClusters(pat.trim())
+    listClusters()
       .then((res) => setClusters({ state: "ready", items: res.clusters }))
       .catch((err) =>
         setClusters({ state: "error", message: errMessage(err, "Could not list clusters.") }),

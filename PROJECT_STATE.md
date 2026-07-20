@@ -9,13 +9,17 @@
 at run time (ADDITIVE; env-var fallback preserved; engine + locked `/run` envelope UNTOUCHED).** Until
 now `DATABRICKS_JOB_CLUSTER_ID` (in `backend/.env`) was the only way to say which cluster a training
 Job runs on; the UI can now pick one. **(1) List endpoint.** New client fn
-`api/databricks.py::list_clusters(user_pat)` — `GET {DATABRICKS_HOST}/api/2.0/clusters/list` (user PAT
-via `X-Databricks-Token`, **same pattern as** `list_catalogs`/`list_schemas`/`list_tables`: `_build_client`
-+ `_request`, `DatabricksAuthError`→401 / `DatabricksUnavailable`→503). Returns only **submittable**
-clusters — state ∈ `{RUNNING, TERMINATED}` (excludes TERMINATING/ERROR/UNKNOWN/PENDING/RESTARTING),
-reduced to `{cluster_id, cluster_name, state}` and **sorted by `cluster_name`**. New endpoint
-`GET /api/v1/databricks/clusters` (`routes/databricks.py`, `ClustersResponse`) mirrors `catalogs_endpoint`
-(NOT backend-gated — needs only host+PAT). **(2) cluster_id through the run config.** `RunConfig`
+`api/databricks.py::list_clusters()` — `GET {DATABRICKS_HOST}/api/2.0/clusters/list` authenticated with
+the **SERVICE token** (`DATABRICKS_TOKEN`), NOT a user PAT: the *service* identity submits the Job and
+picks the cluster (see `submit_run` → `existing_cluster_id`), so the picker reflects where jobs actually
+run — this mirrors the other Jobs-API calls (submit/poll), whereas only the Unity Catalog *data* browsers
+use the user's PAT (they show user-scoped data). Uses `_build_client(_service_token())` + `_request`;
+`DatabricksConfigError`→500 (host/token unconfigured) / `DatabricksAuthError`→401 / `DatabricksUnavailable`
+→503. Returns only **submittable** clusters — state ∈ `{RUNNING, TERMINATED}` (excludes
+TERMINATING/ERROR/UNKNOWN/PENDING/RESTARTING), reduced to `{cluster_id, cluster_name, state}` and
+**sorted by `cluster_name`**. New endpoint `GET /api/v1/databricks/clusters` (`routes/databricks.py`,
+`ClustersResponse`) — **no `X-Databricks-Token` required** (pure service operation), so it also works for
+server-only deployments. **(2) cluster_id through the run config.** `RunConfig`
 (`api/models.py`) gains optional `cluster_id: str | None = None`; it is a **submission knob, NOT an
 engine key**, so `to_engine_config` **excludes** it (`build_config` rejects unknown keys). The
 databricks branch of `POST /run` (`routes/run.py`) reads `cfg.cluster_id`, passes it to `submit_run(…,
@@ -30,7 +34,7 @@ section of the run-config form) gains a **Cluster** dropdown: Connect now also f
 `cluster_id` when blank** (local run byte-identical; env-var fallback intact). **Constraints honored:**
 locked `/run` schema unchanged (new field is optional/additive, `cluster_id: null` → env fallback);
 local execution path completely unaffected; server-only deployments unchanged. **Tests:** backend
-`test_api_databricks.py` +4 (list/filter/sort, empty, 401, 503) & `test_api_jobs.py` +2 (request override
+`test_api_databricks.py` +4 (list/filter/sort, empty, missing-service-token 500, unreachable 503) & `test_api_jobs.py` +2 (request override
 sets `existing_cluster_id` and is kept out of base_parameters; env-var fallback) — all Databricks REST
 **mocked** via `httpx.MockTransport`; frontend `buildPayload.test.ts` +2 (omit-when-blank, send-trimmed)
 and `upload.test.tsx` mock updated. **Full frontend 164 vitest green; `tsc --noEmit` clean; 0 new lint

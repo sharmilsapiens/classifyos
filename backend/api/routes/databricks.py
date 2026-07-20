@@ -192,16 +192,19 @@ def tables_endpoint(
 
 
 @router.get("/databricks/clusters", response_model=ClustersResponse)
-def clusters_endpoint(user_pat: str | None = Depends(get_user_pat)) -> Any:
-    """List the Databricks clusters the caller's PAT can submit a run to (usable state, sorted).
+def clusters_endpoint() -> Any:
+    """List the Databricks clusters a run can be submitted to (usable state, sorted).
 
     Powers the run-config cluster picker: the returned ``cluster_id`` is echoed back on ``/run`` as
     the optional ``cluster_id`` field to override the server's ``DATABRICKS_JOB_CLUSTER_ID`` default.
-    Same PAT/auth + error mapping as the ``/catalogs``/``/schemas``/``/tables`` proxies (401 no PAT,
-    503 unreachable) — only usable clusters are returned (see :func:`api.databricks.list_clusters`).
+    Unlike the ``/catalogs``/``/schemas``/``/tables`` data browsers (which run as the user's PAT),
+    this uses the **service token** — the service identity is what submits the Job and picks the
+    cluster, so the picker reflects where jobs actually run. No user PAT is required. Errors: an
+    unconfigured server (missing host/service token) → 500, unreachable/rejected workspace →
+    503/401 (see :func:`api.databricks.list_clusters`).
     """
     try:
-        clusters = list_clusters(user_pat or "")
+        clusters = list_clusters()
     except DatabricksError as exc:
         return _auth_or_unavailable(exc)
     return ClustersResponse(clusters=clusters)

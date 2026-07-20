@@ -271,7 +271,7 @@ def get_run_status(databricks_run_id: str) -> dict[str, str]:
 
 
 # --------------------------------------------------------------------------- #
-# Clusters — compute picker (authenticated with the USER's PAT)                #
+# Clusters — compute picker (authenticated with the SERVICE token)             #
 # --------------------------------------------------------------------------- #
 
 #: Cluster states a training Job can actually be submitted to: ``RUNNING`` is live and
@@ -281,27 +281,31 @@ def get_run_status(databricks_run_id: str) -> dict[str, str]:
 _USABLE_CLUSTER_STATES = frozenset({"RUNNING", "TERMINATED"})
 
 
-def list_clusters(user_pat: str) -> list[dict[str, str]]:
-    """List the Databricks clusters ``user_pat`` can submit a Job to (usable state, sorted by name).
+def list_clusters() -> list[dict[str, str]]:
+    """List the Databricks clusters a run can be submitted to (usable state, sorted by name).
 
-    Calls ``GET /api/2.0/clusters/list`` with the caller's PAT (never the service token, mirroring
-    the Unity Catalog browsers) and keeps only clusters a run can actually target: state in
-    :data:`_USABLE_CLUSTER_STATES` (``RUNNING``/``TERMINATED``) and either a live
-    ``spark_context_id`` or one of those restartable states. Each surviving entry is reduced to the
-    three fields the UI's cluster picker needs — ``cluster_id``, ``cluster_name`` (falls back to the
-    id when unnamed), and ``state`` — and the list is sorted case-insensitively by ``cluster_name``.
+    Authenticated with the **service token** (``DATABRICKS_TOKEN``), NOT a user PAT — a training run
+    is submitted to a cluster by the *service* identity (see :func:`submit_run` →
+    ``existing_cluster_id``), so the picker must reflect the clusters that identity can actually run
+    on, not the browsing user's view. This mirrors the other Jobs-API calls (submit/poll), which are
+    also service-token authenticated; only the Unity Catalog *data* browsers use the user's PAT,
+    because those expose user-scoped data.
 
-    Args:
-        user_pat: The requesting user's Databricks PAT (``X-Databricks-Token``); never stored.
+    Calls ``GET /api/2.0/clusters/list`` and keeps only clusters a run can actually target: state in
+    :data:`_USABLE_CLUSTER_STATES` (``RUNNING``/``TERMINATED``) and either a live ``spark_context_id``
+    or one of those restartable states. Each surviving entry is reduced to the three fields the UI's
+    cluster picker needs — ``cluster_id``, ``cluster_name`` (falls back to the id when unnamed), and
+    ``state`` — and the list is sorted case-insensitively by ``cluster_name``.
 
     Returns:
         A list of ``{"cluster_id", "cluster_name", "state"}`` dicts, sorted by ``cluster_name``.
 
     Raises:
-        DatabricksAuthError: The PAT was missing or the workspace rejected it (→ 401).
+        DatabricksConfigError: ``DATABRICKS_HOST``/``DATABRICKS_TOKEN`` is not configured (→ 500).
+        DatabricksAuthError: The workspace rejected the service token (→ 401).
         DatabricksUnavailable: The workspace could not be reached / returned an error (→ 503).
     """
-    with _build_client(_require_pat(user_pat)) as client:
+    with _build_client(_service_token()) as client:
         body = _request(client, "GET", _CLUSTERS_PATH)
     raw = body.get("clusters")
     if not isinstance(raw, list):

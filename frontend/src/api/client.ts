@@ -237,14 +237,14 @@ export async function listTables(
 }
 
 /**
- * GET /databricks/clusters — list the clusters the user's PAT can submit a run to (usable state,
- * sorted by name). The chosen cluster_id is set on the RunConfig to override the server's
- * DATABRICKS_JOB_CLUSTER_ID env var. Consumed by: Upload (Databricks cluster picker).
+ * GET /databricks/clusters — list the clusters a run can be submitted to (usable state, sorted by
+ * name). Authenticated server-side with the SERVICE token (not the user's PAT), since the service
+ * identity submits the Job and picks the cluster — so no X-Databricks-Token header is sent. The
+ * chosen cluster_id is set on the RunConfig to override the server's DATABRICKS_JOB_CLUSTER_ID env
+ * var. Consumed by: Upload (Databricks cluster picker).
  */
-export async function listClusters(pat: string): Promise<ClustersResponse> {
-  const res = await request(`${API_BASE}/databricks/clusters`, {
-    headers: { "X-Databricks-Token": pat },
-  })
+export async function listClusters(): Promise<ClustersResponse> {
+  const res = await request(`${API_BASE}/databricks/clusters`)
   return handleJson<ClustersResponse>(res)
 }
 
