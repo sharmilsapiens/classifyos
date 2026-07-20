@@ -37,11 +37,12 @@ from ..databricks import (
     execution_backend,
     get_table_columns,
     list_catalogs,
+    list_clusters,
     list_schemas,
     list_tables,
 )
 from ..deps import get_user_pat
-from ..models import CatalogsResponse, SchemasResponse, TablesResponse
+from ..models import CatalogsResponse, ClustersResponse, SchemasResponse, TablesResponse
 from ..serialize import safe_jsonify
 
 router = APIRouter(tags=["databricks"])
@@ -188,6 +189,22 @@ def tables_endpoint(
     except DatabricksError as exc:
         return _auth_or_unavailable(exc)
     return TablesResponse(catalog=catalog, schema=schema, tables=names)
+
+
+@router.get("/databricks/clusters", response_model=ClustersResponse)
+def clusters_endpoint(user_pat: str | None = Depends(get_user_pat)) -> Any:
+    """List the Databricks clusters the caller's PAT can submit a run to (usable state, sorted).
+
+    Powers the run-config cluster picker: the returned ``cluster_id`` is echoed back on ``/run`` as
+    the optional ``cluster_id`` field to override the server's ``DATABRICKS_JOB_CLUSTER_ID`` default.
+    Same PAT/auth + error mapping as the ``/catalogs``/``/schemas``/``/tables`` proxies (401 no PAT,
+    503 unreachable) — only usable clusters are returned (see :func:`api.databricks.list_clusters`).
+    """
+    try:
+        clusters = list_clusters(user_pat or "")
+    except DatabricksError as exc:
+        return _auth_or_unavailable(exc)
+    return ClustersResponse(clusters=clusters)
 
 
 @router.get("/databricks/table-profile", response_model=None)

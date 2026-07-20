@@ -114,6 +114,51 @@ def test_submit_returns_job_and_persists(api_client, dbx_env, monkeypatch) -> No
     assert "user-pat-xyz" not in (row["config_json"] or "")
 
 
+def test_submit_cluster_id_overrides_env(api_client, dbx_env, monkeypatch) -> None:
+    """A request-supplied ``cluster_id`` targets that cluster; it is NOT leaked into base_parameters.
+
+    The env var ``DATABRICKS_JOB_CLUSTER_ID`` (set by ``dbx_env``) is the fallback default; a
+    non-empty ``cluster_id`` in the /run body overrides it as ``existing_cluster_id``. Because
+    ``cluster_id`` is a submission knob (not a RunConfig the notebook rebuilds), it must be excluded
+    from the notebook ``base_parameters`` so ``build_config`` on the cluster never sees it.
+    """
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        task = body["tasks"][0]
+        seen["cluster"] = task["existing_cluster_id"]
+        seen["run_config"] = json.loads(task["notebook_task"]["base_parameters"]["run_config"])
+        return httpx.Response(200, json={"run_id": 77})
+
+    _install_mock(monkeypatch, handler)
+    payload = _payload()
+    payload["cluster_id"] = "0716-picked-9999"
+    resp = api_client.post(
+        "/api/v1/run", json=payload, headers={"X-Databricks-Token": "user-pat"}
+    )
+    assert resp.status_code == 200, resp.text
+    assert seen["cluster"] == "0716-picked-9999"  # request override, not the env default
+    assert "cluster_id" not in seen["run_config"]  # never reaches the notebook's build_config
+
+
+def test_submit_falls_back_to_env_cluster(api_client, dbx_env, monkeypatch) -> None:
+    """With no ``cluster_id`` in the request, the ``DATABRICKS_JOB_CLUSTER_ID`` env var is used."""
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        seen["cluster"] = body["tasks"][0]["existing_cluster_id"]
+        return httpx.Response(200, json={"run_id": 78})
+
+    _install_mock(monkeypatch, handler)
+    resp = api_client.post(
+        "/api/v1/run", json=_payload(), headers={"X-Databricks-Token": "user-pat"}
+    )
+    assert resp.status_code == 200, resp.text
+    assert seen["cluster"] == "0716-000000-abcd"  # the dbx_env env-var default
+
+
 def test_submit_missing_pat_is_401(api_client, dbx_env, monkeypatch) -> None:
     """A databricks-backend /run with no X-Databricks-Token is a clean 401 (never submits)."""
     called = {"n": 0}

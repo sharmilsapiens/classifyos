@@ -233,6 +233,8 @@ export default function UploadPage() {
             onPatChange={setDatabricksPat}
             onSelectTable={(sel) => void doSelectUc(sel)}
             selectedTable={ucSelection?.table ?? null}
+            clusterId={form.cluster_id}
+            onClusterChange={(clusterId) => updateForm({ cluster_id: clusterId })}
             busy={busy || running}
           />
           {busy && (

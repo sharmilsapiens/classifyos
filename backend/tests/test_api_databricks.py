@@ -85,6 +85,85 @@ def test_list_tables_passes_catalog_and_schema(api_client, uc_env, monkeypatch) 
     assert body["tables"] == ["claims", "policy_lapse"]
 
 
+# --------------------------------------------------------------------------- #
+# GET /api/v1/databricks/clusters — the run-config cluster picker               #
+# --------------------------------------------------------------------------- #
+#
+# Same auth pattern as the UC list proxies (user PAT via X-Databricks-Token; 401 no PAT, 503
+# unreachable). Only clusters a Job can actually be submitted to are surfaced — RUNNING (live) or
+# TERMINATED (restartable) — sorted by cluster_name.
+
+#: A clusters/list response spanning every state so the filter + shape can be asserted at once.
+_CLUSTERS = [
+    {"cluster_id": "0716-run", "cluster_name": "zeta-running", "state": "RUNNING",
+     "spark_context_id": 123},
+    {"cluster_id": "0716-term", "cluster_name": "Alpha-terminated", "state": "TERMINATED"},
+    {"cluster_id": "0716-terming", "cluster_name": "beta-terminating", "state": "TERMINATING"},
+    {"cluster_id": "0716-err", "cluster_name": "err-cluster", "state": "ERROR"},
+    {"cluster_id": "0716-unk", "cluster_name": "unknown-cluster", "state": "UNKNOWN"},
+    {"cluster_id": "0716-pend", "cluster_name": "pending-cluster", "state": "PENDING"},
+]
+
+
+def test_list_clusters_filters_and_sorts(api_client, uc_env, monkeypatch) -> None:
+    """Only RUNNING/TERMINATED clusters are returned, sorted case-insensitively by name."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/api/2.0/clusters/list"
+        # The cluster picker authenticates with the USER's PAT, like the UC proxies.
+        assert request.headers["Authorization"] == "Bearer user-pat"
+        return httpx.Response(200, json={"clusters": _CLUSTERS})
+
+    _install_mock(monkeypatch, handler)
+    resp = api_client.get("/api/v1/databricks/clusters", headers={"X-Databricks-Token": "user-pat"})
+    assert resp.status_code == 200, resp.text
+    clusters = resp.json()["clusters"]
+
+    # TERMINATING / ERROR / UNKNOWN / PENDING are dropped; the two usable ones remain, name-sorted.
+    assert clusters == [
+        {"cluster_id": "0716-term", "cluster_name": "Alpha-terminated", "state": "TERMINATED"},
+        {"cluster_id": "0716-run", "cluster_name": "zeta-running", "state": "RUNNING"},
+    ]
+
+
+def test_list_clusters_empty_when_none_usable(api_client, uc_env, monkeypatch) -> None:
+    """A workspace with no usable clusters returns an empty list (a valid 200, not an error)."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"clusters": [
+            {"cluster_id": "x", "cluster_name": "x", "state": "TERMINATING"},
+        ]})
+
+    _install_mock(monkeypatch, handler)
+    resp = api_client.get("/api/v1/databricks/clusters", headers={"X-Databricks-Token": "user-pat"})
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["clusters"] == []
+
+
+def test_list_clusters_missing_pat_is_401(api_client, uc_env, monkeypatch) -> None:
+    """No X-Databricks-Token → 401 before any HTTP call to Databricks."""
+    called = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:  # pragma: no cover — must not be hit
+        called["n"] += 1
+        return httpx.Response(200, json={"clusters": _CLUSTERS})
+
+    _install_mock(monkeypatch, handler)
+    resp = api_client.get("/api/v1/databricks/clusters")
+    assert resp.status_code == 401
+    assert called["n"] == 0
+
+
+def test_list_clusters_unavailable_is_503(api_client, uc_env, monkeypatch) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("unreachable", request=request)
+
+    _install_mock(monkeypatch, handler)
+    resp = api_client.get("/api/v1/databricks/clusters", headers={"X-Databricks-Token": "user-pat"})
+    assert resp.status_code == 503
+    assert "unavailable" in resp.json()["detail"].lower()
+
+
 def test_missing_pat_is_401(api_client, uc_env, monkeypatch) -> None:
     """No X-Databricks-Token → 401 (before any HTTP call to Databricks)."""
     called = {"n": 0}

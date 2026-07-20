@@ -134,6 +134,7 @@
 | `GET`  | `/api/v1/databricks/catalogs` | **(1.11)** Proxy Unity Catalog catalogs (user PAT via `X-Databricks-Token`) → `{catalogs[]}`. `401` no PAT, `503` unreachable. |
 | `GET`  | `/api/v1/databricks/schemas` | **(1.11)** `?catalog=` → `{catalog, schemas[]}`. |
 | `GET`  | `/api/v1/databricks/tables` | **(1.11)** `?catalog=&schema=` → `{catalog, schema, tables[]}`. |
+| `GET`  | `/api/v1/databricks/clusters` | **(1.11, additive)** List the clusters the user's PAT can submit a run to (user PAT via `X-Databricks-Token`) → `{clusters: [{cluster_id, cluster_name, state}]}` — only submittable clusters (`state` ∈ `RUNNING`\|`TERMINATED`), sorted by `cluster_name`. Powers the run-config cluster picker; the chosen `cluster_id` is echoed back on `/run` (optional field). `401` no PAT, `503` unreachable. |
 | `GET`  | `/api/v1/databricks/table-profile` | **(1.11)** `?catalog=&schema=&table=` → the chosen Unity Catalog table's schema in the **same `InspectProfile` shape as `/upload`** (+ a `delta` `input_source` + snapshot `server_path`), so the column picker is populated with no manual entry. `503` not the databricks backend / unreachable / columnless table, `422` bad identifier, `401` no PAT. See below. |
 | `GET`  | `/api/v1/runs` | **(1.10)** List past MLflow-logged runs (most-recent first) → `{schema_version, tracking_uri, runs[]}`. See below. |
 | `GET`  | `/api/v1/runs/{run_id}` | **(1.10)** Reload ONE past run → the same locked `/run` envelope it was rendered with (byte-identical). `404` if the run is unknown or has no persisted snapshot; `503` if the tracking store is unreachable. |
@@ -333,7 +334,11 @@ problem there is returned as HTTP 422.
     { "name": "start_year", "type": "single",             // one column; col_b must be omitted
       "op": "year",                                       // single: log|abs|bin | year|month|day|dayofweek|hour
       "col_a": "policy_start_date" }
-  ]
+  ],
+  "cluster_id": null            // OPTIONAL (1.11, additive; databricks backend only). Which existing Databricks
+                                // cluster the Job runs on; non-empty overrides the server's DATABRICKS_JOB_CLUSTER_ID
+                                // env var, null/omitted falls back to it. Ignored by the local backend, and NOT an
+                                // engine key (to_engine_config excludes it) → a local run is byte-identical without it.
 }
 ```
 

@@ -43,6 +43,8 @@ _GET_RUN_PATH = "/api/2.1/jobs/runs/get"
 _CATALOGS_PATH = "/api/2.1/unity-catalog/catalogs"
 _SCHEMAS_PATH = "/api/2.1/unity-catalog/schemas"
 _TABLES_PATH = "/api/2.1/unity-catalog/tables"
+#: Compute 2.0 — list the workspace's clusters for the run-config cluster picker (user's PAT).
+_CLUSTERS_PATH = "/api/2.0/clusters/list"
 
 #: The four public job states the API surfaces (mapped from Databricks' RunState).
 JOB_STATUSES = ("PENDING", "RUNNING", "COMPLETED", "FAILED")
@@ -158,25 +160,35 @@ def _request(client: httpx.Client, method: str, path: str, **kwargs: Any) -> Any
 # --------------------------------------------------------------------------- #
 
 
-def _submit_payload(run_config: dict[str, Any], user_pat: str) -> dict[str, Any]:
+def _submit_payload(
+    run_config: dict[str, Any], user_pat: str, cluster_id: str | None = None
+) -> dict[str, Any]:
     """Build the ``jobs/runs/submit`` body: install the wheel, run the entrypoint notebook.
 
     The task carries the RunConfig JSON and the user's PAT as ``base_parameters`` so the cluster
     job builds the engine config and reads Unity Catalog data as the requesting user. Requires
-    ``DATABRICKS_JOB_NOTEBOOK_PATH`` (the entrypoint) and ``DATABRICKS_JOB_CLUSTER_ID`` (an existing
-    cluster); the wheel path (``DATABRICKS_JOB_WHEEL_PATH``) is attached as a library when set.
+    ``DATABRICKS_JOB_NOTEBOOK_PATH`` (the entrypoint) and a cluster to run on; the wheel path
+    (``DATABRICKS_JOB_WHEEL_PATH``) is attached as a library when set.
+
+    Cluster selection (schema 1.11, additive): a non-empty ``cluster_id`` (from the UI picker)
+    overrides the ``DATABRICKS_JOB_CLUSTER_ID`` env var. When ``cluster_id`` is absent/empty the env
+    var is used, exactly as before (so server-only deployments are unchanged). If neither is set a
+    :class:`DatabricksConfigError` is raised, preserving the existing behaviour.
     """
     notebook_path = (os.environ.get("DATABRICKS_JOB_NOTEBOOK_PATH") or "").strip()
-    cluster_id = (os.environ.get("DATABRICKS_JOB_CLUSTER_ID") or "").strip()
+    # A request-supplied cluster overrides the env default; fall back to the env var otherwise.
+    resolved_cluster_id = (cluster_id or "").strip() or (
+        os.environ.get("DATABRICKS_JOB_CLUSTER_ID") or ""
+    ).strip()
     wheel_path = (os.environ.get("DATABRICKS_JOB_WHEEL_PATH") or "").strip()
     if not notebook_path:
         raise DatabricksConfigError("DATABRICKS_JOB_NOTEBOOK_PATH is not set")
-    if not cluster_id:
+    if not resolved_cluster_id:
         raise DatabricksConfigError("DATABRICKS_JOB_CLUSTER_ID is not set")
 
     task: dict[str, Any] = {
         "task_key": "classifyos_run",
-        "existing_cluster_id": cluster_id,
+        "existing_cluster_id": resolved_cluster_id,
         "notebook_task": {
             "notebook_path": notebook_path,
             # base_parameters reach the notebook as string widgets. [RISK] the PAT is visible in
@@ -199,14 +211,18 @@ def _submit_payload(run_config: dict[str, Any], user_pat: str) -> dict[str, Any]
     }
 
 
-def submit_run(run_config: dict[str, Any], user_pat: str) -> dict[str, Any]:
+def submit_run(
+    run_config: dict[str, Any], user_pat: str, cluster_id: str | None = None
+) -> dict[str, Any]:
     """Submit a one-off Databricks Job for ``run_config``; return ``{"run_id": "<id>"}``.
 
-    Authenticated with the service token; the user's PAT rides along as a task parameter. Raises
+    Authenticated with the service token; the user's PAT rides along as a task parameter. When
+    ``cluster_id`` is a non-empty id (from the UI cluster picker) the Job runs on that cluster,
+    otherwise the ``DATABRICKS_JOB_CLUSTER_ID`` env var is used (see :func:`_submit_payload`). Raises
     :class:`DatabricksUnavailable` if the workspace can't be reached, :class:`DatabricksAuthError`
     on a rejected service token, or :class:`DatabricksConfigError` on missing config.
     """
-    payload = _submit_payload(run_config, user_pat)
+    payload = _submit_payload(run_config, user_pat, cluster_id)
     with _build_client(_service_token()) as client:
         body = _request(client, "POST", _SUBMIT_PATH, json=payload)
     run_id = body.get("run_id")
@@ -252,6 +268,66 @@ def get_run_status(databricks_run_id: str) -> dict[str, str]:
     state = body.get("state") or body.get("status") or body
     status, message = _status_from_state(state if isinstance(state, dict) else {})
     return {"status": status, "message": message}
+
+
+# --------------------------------------------------------------------------- #
+# Clusters — compute picker (authenticated with the USER's PAT)                #
+# --------------------------------------------------------------------------- #
+
+#: Cluster states a training Job can actually be submitted to: ``RUNNING`` is live and
+#: ``TERMINATED`` can be auto-started by the Jobs API. Every other state — ``TERMINATING``,
+#: ``ERROR``, ``UNKNOWN``, ``PENDING``, ``RESTARTING``, ``RESIZING`` — is excluded because a submit
+#: against one would fail or hang. (Verified against the Clusters 2.0 ``ClusterState`` enum.)
+_USABLE_CLUSTER_STATES = frozenset({"RUNNING", "TERMINATED"})
+
+
+def list_clusters(user_pat: str) -> list[dict[str, str]]:
+    """List the Databricks clusters ``user_pat`` can submit a Job to (usable state, sorted by name).
+
+    Calls ``GET /api/2.0/clusters/list`` with the caller's PAT (never the service token, mirroring
+    the Unity Catalog browsers) and keeps only clusters a run can actually target: state in
+    :data:`_USABLE_CLUSTER_STATES` (``RUNNING``/``TERMINATED``) and either a live
+    ``spark_context_id`` or one of those restartable states. Each surviving entry is reduced to the
+    three fields the UI's cluster picker needs — ``cluster_id``, ``cluster_name`` (falls back to the
+    id when unnamed), and ``state`` — and the list is sorted case-insensitively by ``cluster_name``.
+
+    Args:
+        user_pat: The requesting user's Databricks PAT (``X-Databricks-Token``); never stored.
+
+    Returns:
+        A list of ``{"cluster_id", "cluster_name", "state"}`` dicts, sorted by ``cluster_name``.
+
+    Raises:
+        DatabricksAuthError: The PAT was missing or the workspace rejected it (→ 401).
+        DatabricksUnavailable: The workspace could not be reached / returned an error (→ 503).
+    """
+    with _build_client(_require_pat(user_pat)) as client:
+        body = _request(client, "GET", _CLUSTERS_PATH)
+    raw = body.get("clusters")
+    if not isinstance(raw, list):
+        return []
+
+    usable: list[dict[str, str]] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        cluster_id = item.get("cluster_id")
+        state = str(item.get("state") or "").upper()
+        if not cluster_id or state not in _USABLE_CLUSTER_STATES:
+            continue
+        # A submittable cluster is live (a spark_context_id is present) or in a restartable state —
+        # both hold for the usable states above, so this is a belt-and-braces guard, not a 2nd filter.
+        if not (item.get("spark_context_id") or state in ("RUNNING", "TERMINATED")):
+            continue
+        usable.append(
+            {
+                "cluster_id": str(cluster_id),
+                "cluster_name": str(item.get("cluster_name") or cluster_id),
+                "state": state,
+            }
+        )
+    usable.sort(key=lambda c: c["cluster_name"].lower())
+    return usable
 
 
 # --------------------------------------------------------------------------- #

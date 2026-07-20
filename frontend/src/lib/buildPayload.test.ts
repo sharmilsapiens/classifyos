@@ -165,6 +165,17 @@ describe("buildPayload", () => {
     expect(payload.input_file).toBe("db_snapshots/iris.parquet")
   })
 
+  it("omits cluster_id when none is picked (server env-var default; local run unchanged)", () => {
+    // Default form has cluster_id "" → the request must not carry a cluster_id key at all.
+    expect("cluster_id" in buildPayload(form)).toBe(false)
+    expect("cluster_id" in buildPayload({ ...form, cluster_id: "   " })).toBe(false) // blank → omit
+  })
+
+  it("sends the picked cluster_id (trimmed) to override the server default", () => {
+    const payload = buildPayload({ ...form, cluster_id: "  0716-abc-9999  " })
+    expect(payload.cluster_id).toBe("0716-abc-9999")
+  })
+
   it("carries user-defined feature specs through to the payload verbatim", () => {
     const specs = [
       { name: "premium_per_sum", type: "numeric" as const, op: "divide", col_a: "premium", col_b: "sum_assured" },

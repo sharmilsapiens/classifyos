@@ -91,6 +91,12 @@ export interface ConfigFormState {
   mlflow_enabled: boolean
   // user-defined structured features (built via the feature-builder panel)
   user_features: UserFeatureSpec[]
+  /**
+   * Databricks cluster to run the Job on (databricks backend only). "" (the default) → omit from
+   * the payload so the server falls back to its DATABRICKS_JOB_CLUSTER_ID env var; a non-empty id
+   * (from the cluster picker) overrides it. Ignored by the local backend.
+   */
+  cluster_id: string
 }
 
 /** Defaults mirror backend/api/models.py RunConfig (so an untouched form is valid). */
@@ -148,6 +154,7 @@ export const DEFAULT_FORM_STATE: ConfigFormState = {
   // engine if no MLflow store is configured/reachable, so ON-by-default is safe.
   mlflow_enabled: true,
   user_features: [],
+  cluster_id: "", // no cluster picked → server uses its DATABRICKS_JOB_CLUSTER_ID env default
 }
 
 /** The three fields the contract requires; everything else has a default. */
@@ -240,5 +247,8 @@ export function buildPayload(form: ConfigFormState): RunConfig {
     },
     // Structured specs only — assembled from dropdowns; never a free-text formula.
     user_features: form.user_features,
+    // Only sent when a cluster was picked; omitting it keeps a local run's request byte-identical
+    // and lets the databricks backend fall back to its DATABRICKS_JOB_CLUSTER_ID env var.
+    ...(form.cluster_id.trim() ? { cluster_id: form.cluster_id.trim() } : {}),
   }
 }

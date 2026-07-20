@@ -14,6 +14,7 @@
 
 import type {
   CatalogsResponse,
+  ClustersResponse,
   ExplainRequest,
   ExplainResponse,
   HealthResponse,
@@ -233,6 +234,18 @@ export async function listTables(
   const url = `${API_BASE}/databricks/tables?catalog=${encodeURIComponent(catalog)}&schema=${encodeURIComponent(schema)}`
   const res = await request(url, { headers: { "X-Databricks-Token": pat } })
   return handleJson<TablesResponse>(res)
+}
+
+/**
+ * GET /databricks/clusters — list the clusters the user's PAT can submit a run to (usable state,
+ * sorted by name). The chosen cluster_id is set on the RunConfig to override the server's
+ * DATABRICKS_JOB_CLUSTER_ID env var. Consumed by: Upload (Databricks cluster picker).
+ */
+export async function listClusters(pat: string): Promise<ClustersResponse> {
+  const res = await request(`${API_BASE}/databricks/clusters`, {
+    headers: { "X-Databricks-Token": pat },
+  })
+  return handleJson<ClustersResponse>(res)
 }
 
 /**

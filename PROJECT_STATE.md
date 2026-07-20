@@ -4,8 +4,42 @@
 > A copy is uploaded to the ClassifyOS Claude Project knowledge after each update so the
 > planning/overseer chat stays in sync with the local repo.
 
-**Last updated:** 2026-07-14
-**Updated by:** Claude Code (**NEW — Databricks UC table-profile: populate the column picker from a
+**Last updated:** 2026-07-20
+**Updated by:** Claude Code (**NEW — Databricks cluster picker: choose the training cluster from the UI
+at run time (ADDITIVE; env-var fallback preserved; engine + locked `/run` envelope UNTOUCHED).** Until
+now `DATABRICKS_JOB_CLUSTER_ID` (in `backend/.env`) was the only way to say which cluster a training
+Job runs on; the UI can now pick one. **(1) List endpoint.** New client fn
+`api/databricks.py::list_clusters(user_pat)` — `GET {DATABRICKS_HOST}/api/2.0/clusters/list` (user PAT
+via `X-Databricks-Token`, **same pattern as** `list_catalogs`/`list_schemas`/`list_tables`: `_build_client`
++ `_request`, `DatabricksAuthError`→401 / `DatabricksUnavailable`→503). Returns only **submittable**
+clusters — state ∈ `{RUNNING, TERMINATED}` (excludes TERMINATING/ERROR/UNKNOWN/PENDING/RESTARTING),
+reduced to `{cluster_id, cluster_name, state}` and **sorted by `cluster_name`**. New endpoint
+`GET /api/v1/databricks/clusters` (`routes/databricks.py`, `ClustersResponse`) mirrors `catalogs_endpoint`
+(NOT backend-gated — needs only host+PAT). **(2) cluster_id through the run config.** `RunConfig`
+(`api/models.py`) gains optional `cluster_id: str | None = None`; it is a **submission knob, NOT an
+engine key**, so `to_engine_config` **excludes** it (`build_config` rejects unknown keys). The
+databricks branch of `POST /run` (`routes/run.py`) reads `cfg.cluster_id`, passes it to `submit_run(…,
+cluster_id)` → `_submit_payload(…, cluster_id)`, which uses a non-empty request value as
+`existing_cluster_id` and otherwise **falls back to `DATABRICKS_JOB_CLUSTER_ID`** (raises
+`DatabricksConfigError` if neither — unchanged). `cluster_id` is **excluded from the submitted
+`run_config` base_parameters** so the notebook's `build_config(**rest)` never sees it and the deployed
+notebook needs **no change**. **(3) UI dropdown.** `DatabricksSourcePanel` (the Databricks data-source
+section of the run-config form) gains a **Cluster** dropdown: Connect now also fetches the cluster list
+(`listClusters`, in parallel — a cluster-list failure never blocks table browsing); "— server default —"
+(value "") leaves the choice to the env var; a pick sets `form.cluster_id`. `buildPayload` **omits
+`cluster_id` when blank** (local run byte-identical; env-var fallback intact). **Constraints honored:**
+locked `/run` schema unchanged (new field is optional/additive, `cluster_id: null` → env fallback);
+local execution path completely unaffected; server-only deployments unchanged. **Tests:** backend
+`test_api_databricks.py` +4 (list/filter/sort, empty, 401, 503) & `test_api_jobs.py` +2 (request override
+sets `existing_cluster_id` and is kept out of base_parameters; env-var fallback) — all Databricks REST
+**mocked** via `httpx.MockTransport`; frontend `buildPayload.test.ts` +2 (omit-when-blank, send-trimmed)
+and `upload.test.tsx` mock updated. **Full frontend 164 vitest green; `tsc --noEmit` clean; 0 new lint
+issues; backend Databricks+jobs 33/33 green, local `/run` 47/47 green.** **Hallucination check ✅** —
+`GET /api/2.0/clusters/list`, the `ClusterState` enum (`RUNNING`/`TERMINATED`/…), and `spark_context_id`
+verified against the Databricks Clusters 2.0 API. **NOT run on a real cluster yet** (mocked in tests).
+`docs/databricks_how_it_works.md` NOT touched (maintained separately, per task). **Engine + locked
+`/run` envelope UNTOUCHED** (byte-identical).)
+**Prior update (2026-07-14 — Databricks UC table-profile):** Claude Code (**Databricks UC table-profile: populate the column picker from a
 table's schema (ADDITIVE; upload/profile-side, NO `schema_version` bump; engine UNTOUCHED).** Closes
 the plan_tweak #48 follow-up (the UC browser proxies return table names only, so the Databricks picker
 made users type the target + feature columns by hand). **(A) Backend.** New client fn

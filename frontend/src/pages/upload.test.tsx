@@ -23,7 +23,7 @@ const runPipeline = vi.fn()
 const mockApp = {
   inspect: null as InspectProfile | null,
   serverPath: null as string | null,
-  form: { target: "", input_source: null, feature_cols: [] as string[] },
+  form: { target: "", input_source: null, feature_cols: [] as string[], cluster_id: "" },
   applyUpload,
   updateForm,
   executionBackend: "local" as "local" | "databricks",
@@ -41,6 +41,7 @@ const uploadFile = vi.fn()
 const listCatalogs = vi.fn()
 const listSchemas = vi.fn()
 const listTables = vi.fn()
+const listClusters = vi.fn()
 const getTableProfile = vi.fn()
 vi.mock("@/api/client", () => ({
   listInputTables: () => listInputTables(),
@@ -49,6 +50,7 @@ vi.mock("@/api/client", () => ({
   listCatalogs: (pat: string) => listCatalogs(pat),
   listSchemas: (catalog: string, pat: string) => listSchemas(catalog, pat),
   listTables: (catalog: string, schema: string, pat: string) => listTables(catalog, schema, pat),
+  listClusters: (pat: string) => listClusters(pat),
   getTableProfile: (args: unknown, pat: string) => getTableProfile(args, pat),
   ApiError: class ApiError extends Error {},
 }))
@@ -115,6 +117,9 @@ beforeEach(() => {
   listCatalogs.mockReset()
   listSchemas.mockReset()
   listTables.mockReset()
+  listClusters.mockReset()
+  // Connect always fetches the cluster list; default to none so the UC-browse tests are unaffected.
+  listClusters.mockResolvedValue({ clusters: [] })
   getTableProfile.mockReset()
   applyUpload.mockReset()
   updateForm.mockReset()
@@ -122,7 +127,7 @@ beforeEach(() => {
   runPipeline.mockReset()
   mockApp.inspect = null
   mockApp.serverPath = null
-  mockApp.form = { target: "", input_source: null, feature_cols: [] }
+  mockApp.form = { target: "", input_source: null, feature_cols: [], cluster_id: "" }
   mockApp.executionBackend = "local"
   mockApp.databricksPat = ""
   mockApp.running = false
@@ -221,6 +226,31 @@ describe("Upload — Databricks data source (§6.6 Step 6, toggle show/hide)", (
     await waitFor(() => expect(listCatalogs).toHaveBeenCalledWith("dapi-xyz"))
     // The catalog dropdown is populated.
     expect(await screen.findByRole("option", { name: "main" })).toBeInTheDocument()
+  })
+
+  it("Connect fetches clusters; picking one sets cluster_id on the run config", async () => {
+    mockApp.executionBackend = "databricks"
+    mockApp.databricksPat = "dapi-xyz"
+    listCatalogs.mockResolvedValue({ catalogs: ["main"] })
+    listClusters.mockResolvedValue({
+      clusters: [
+        { cluster_id: "0716-run", cluster_name: "prod-cluster", state: "RUNNING" },
+        { cluster_id: "0716-term", cluster_name: "dev-cluster", state: "TERMINATED" },
+      ],
+    })
+    renderPage(<UploadPage />)
+    fireEvent.click(screen.getByRole("tab", { name: /Databricks/i }))
+    fireEvent.click(screen.getByRole("button", { name: /Connect/i }))
+
+    await waitFor(() => expect(listClusters).toHaveBeenCalledWith("dapi-xyz"))
+    // Picking a cluster pushes its id into the run config (→ overrides the env var default).
+    const clusterSelect = await screen.findByLabelText(/^Cluster$/i)
+    fireEvent.change(clusterSelect, { target: { value: "0716-run" } })
+    expect(updateForm).toHaveBeenCalledWith({ cluster_id: "0716-run" })
+
+    // Clearing the choice ("server default") sends "" → the server falls back to the env var.
+    fireEvent.change(clusterSelect, { target: { value: "" } })
+    expect(updateForm).toHaveBeenCalledWith({ cluster_id: "" })
   })
 })
 

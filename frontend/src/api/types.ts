@@ -184,6 +184,13 @@ export interface RunConfig {
   mlflow: MlflowConfig
   /** OPTIONAL; [] / omitted → no user-defined features (request unchanged). */
   user_features: UserFeatureSpec[]
+  /**
+   * OPTIONAL (schema 1.11, databricks backend only). Which existing Databricks cluster the training
+   * Job runs on. A non-empty id (from the cluster picker) overrides the server's
+   * DATABRICKS_JOB_CLUSTER_ID env var; omitted/null falls back to that env var. Ignored entirely by
+   * the local backend, so a local run's request is byte-identical whether or not it is present.
+   */
+  cluster_id?: string | null
 }
 
 /* ─────────────────────── RESPONSE: locked /run envelope ─────────────────── */
@@ -559,6 +566,21 @@ export interface TablesResponse {
   catalog: string
   schema: string
   tables: string[]
+}
+
+/** One usable cluster in GET /api/v1/databricks/clusters (RUNNING/TERMINATED only). */
+export interface ClusterInfo {
+  cluster_id: string
+  cluster_name: string
+  state: string
+}
+
+/**
+ * GET /api/v1/databricks/clusters → clusters a run can be submitted to, sorted by name.
+ * Consumed by: Upload (Databricks cluster picker). The chosen cluster_id is echoed back on /run.
+ */
+export interface ClustersResponse {
+  clusters: ClusterInfo[]
 }
 
 /* ─────────────────── Data Profile (additive /upload blocks) ──────────────── */

@@ -11,9 +11,10 @@
    schema and the user never types a column name by hand. */
 
 import { useCallback, useEffect, useState } from "react"
-import { Database, Plug, RefreshCw, Table2 } from "lucide-react"
+import { Cpu, Database, Plug, RefreshCw, Table2 } from "lucide-react"
 
-import { ApiError, listCatalogs, listSchemas, listTables } from "@/api/client"
+import { ApiError, listCatalogs, listClusters, listSchemas, listTables } from "@/api/client"
+import type { ClusterInfo } from "@/api/types"
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -30,6 +31,10 @@ interface Props {
   onSelectTable: (sel: { catalog: string; schema: string; table: string }) => void
   /** The currently selected table name (highlights its row). */
   selectedTable: string | null
+  /** The currently selected cluster id ("" = server default), reflected in the cluster dropdown. */
+  clusterId: string
+  /** Called when the user picks a cluster ("" clears the choice → server env-var default). */
+  onClusterChange: (clusterId: string) => void
   /** The parent is submitting a run (disables the controls). */
   busy?: boolean
 }
@@ -49,6 +54,8 @@ export default function DatabricksSourcePanel({
   onPatChange,
   onSelectTable,
   selectedTable,
+  clusterId,
+  onClusterChange,
   busy,
 }: Props) {
   const [catalogs, setCatalogs] = useState<Load<string[]>>({ state: "idle" })
@@ -56,6 +63,7 @@ export default function DatabricksSourcePanel({
   const [schemas, setSchemas] = useState<Load<string[]>>({ state: "idle" })
   const [schema, setSchema] = useState("")
   const [tables, setTables] = useState<Load<string[]>>({ state: "idle" })
+  const [clusters, setClusters] = useState<Load<ClusterInfo[]>>({ state: "idle" })
 
   const connect = useCallback(async () => {
     if (!pat.trim()) {
@@ -67,6 +75,14 @@ export default function DatabricksSourcePanel({
     setSchemas({ state: "idle" })
     setSchema("")
     setTables({ state: "idle" })
+    // Fetch the cluster list in parallel with the catalog browse — the two are independent, and a
+    // cluster-list failure must not block picking a table (the server env-var default still works).
+    setClusters({ state: "loading" })
+    listClusters(pat.trim())
+      .then((res) => setClusters({ state: "ready", items: res.clusters }))
+      .catch((err) =>
+        setClusters({ state: "error", message: errMessage(err, "Could not list clusters.") }),
+      )
     try {
       const res = await listCatalogs(pat.trim())
       setCatalogs({ state: "ready", items: res.catalogs })
@@ -133,6 +149,44 @@ export default function DatabricksSourcePanel({
             Used only for this session to browse Unity Catalog and to run as you — never stored.
           </p>
         </div>
+
+        {/* Cluster picker — which compute the training Job runs on. Appears once Connect fetches the
+            cluster list; "server default" leaves the choice to the DATABRICKS_JOB_CLUSTER_ID env var. */}
+        {clusters.state !== "idle" && (
+          <div className="space-y-1.5">
+            <Label htmlFor="dbx-cluster" className="flex items-center gap-2">
+              <Cpu className="h-4 w-4 text-primary" aria-hidden />
+              Cluster
+            </Label>
+            {clusters.state === "loading" && (
+              <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                <Spinner /> Loading clusters…
+              </div>
+            )}
+            {clusters.state === "error" && <ErrorState message={clusters.message} />}
+            {clusters.state === "ready" && (
+              <>
+                <Select
+                  id="dbx-cluster"
+                  value={clusterId}
+                  onChange={(e) => onClusterChange(e.target.value)}
+                  disabled={busy}
+                >
+                  <option value="">— server default —</option>
+                  {clusters.items.map((c) => (
+                    <option key={c.cluster_id} value={c.cluster_id}>
+                      {c.cluster_name} ({c.state.toLowerCase()})
+                    </option>
+                  ))}
+                </Select>
+                <p className="text-xs text-muted-foreground">
+                  Which cluster the training job runs on. Leave as “server default” to use the
+                  cluster configured on the server.
+                </p>
+              </>
+            )}
+          </div>
+        )}
 
         {catalogs.state === "loading" && (
           <div className="flex items-center gap-2 text-sm text-muted-foreground">

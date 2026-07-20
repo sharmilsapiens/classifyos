@@ -102,10 +102,15 @@ async def _submit_to_databricks(cfg: RunConfig, user_pat: str | None) -> Any:
     # Forward the request-shaped RunConfig to the Job (the entrypoint rebuilds the engine config).
     # by_alias so a delta input_source carries the ``schema`` key (its wire name), not the internal
     # ``db_schema`` field name — the notebook's RunConfig(**run_config) round-trips it either way,
-    # but this keeps the submitted params byte-identical to the original request.
-    run_config = cfg.model_dump(by_alias=True)
+    # but this keeps the submitted params byte-identical to the original request. ``cluster_id`` is
+    # excluded: it is a submission knob (→ existing_cluster_id below), NOT part of the RunConfig the
+    # notebook rebuilds via build_config (which would reject the unknown key), so the base_parameters
+    # stay byte-identical to before this field existed and the deployed notebook needs no change.
+    run_config = cfg.model_dump(by_alias=True, exclude={"cluster_id"})
     try:
-        submitted = await run_in_threadpool(submit_run, run_config, user_pat.strip())
+        submitted = await run_in_threadpool(
+            submit_run, run_config, user_pat.strip(), cfg.cluster_id
+        )
     except DatabricksAuthError as exc:
         return JSONResponse(status_code=401, content={"detail": str(exc)})
     except DatabricksConfigError as exc:

@@ -280,6 +280,15 @@ class RunConfig(BaseModel):
     # authoritative validator of the allowed value (config.PERMUTATION_METRICS).
     permutation_metric: str = "f1_weighted"
 
+    # --- Databricks orchestration (schema 1.11, additive; not an engine knob) ---
+    # Which existing Databricks cluster the training Job runs on. OPTIONAL: a non-empty cluster id
+    # (from the UI cluster picker) overrides the server's ``DATABRICKS_JOB_CLUSTER_ID`` env var;
+    # ``None``/absent falls back to that env var (server-only deployments are unchanged). Consumed
+    # ONLY by the databricks execution backend — it is NOT a ``DEFAULT_CONFIG`` key, so
+    # ``to_engine_config`` excludes it (build_config rejects unknown keys) and the LOCAL backend
+    # ignores it entirely.
+    cluster_id: str | None = None
+
     # --- nested capability configs ---
     # Input source (Interim 2b). Default ``file`` = today's behaviour (reads ``input_file`` from
     # storage). ``postgres`` materializes a table/query to ``input_file`` under DATA_DIR before the
@@ -326,7 +335,9 @@ class RunConfig(BaseModel):
         problem there raises ``ValueError``, which the route turns into an HTTP 422 — so the
         engine's validation and the API's validation stay one and the same, never duplicated.
         """
-        overrides = self.model_dump(exclude={"input_file", "target", "feature_cols"})
+        # ``cluster_id`` is a Databricks-submission knob, not an engine config key — build_config
+        # rejects unknown keys, so it is excluded here (the databricks route reads it separately).
+        overrides = self.model_dump(exclude={"input_file", "target", "feature_cols", "cluster_id"})
         # The engine reads each user-feature spec as a plain dict and treats a present
         # ``unit``/``col_b`` of ``None`` as invalid; dump each spec with ``exclude_none`` so
         # the optional keys drop out and the shape matches the engine's spec exactly.
@@ -825,3 +836,24 @@ class TablesResponse(BaseModel):
 
     # ``schema`` shadows BaseModel.schema(); expose it via an alias but let callers pass ``schema``.
     model_config = ConfigDict(populate_by_name=True)
+
+
+class ClusterInfo(BaseModel):
+    """One cluster row in ``GET /api/v1/databricks/clusters`` (NEW in 1.11).
+
+    A usable Databricks cluster a run can target: ``cluster_id`` is the handle passed to the Jobs
+    API as ``existing_cluster_id`` (and to ``/run`` as the optional ``cluster_id`` field);
+    ``cluster_name`` is the display label; ``state`` is the cluster's current lifecycle state (only
+    the submittable ``RUNNING``/``TERMINATED`` states are surfaced — see
+    :func:`api.databricks.list_clusters`).
+    """
+
+    cluster_id: str
+    cluster_name: str
+    state: str
+
+
+class ClustersResponse(BaseModel):
+    """``GET /api/v1/databricks/clusters`` — usable clusters for the run-config picker (NEW in 1.11)."""
+
+    clusters: list[ClusterInfo] = Field(default_factory=list)
