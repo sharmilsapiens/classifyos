@@ -228,10 +228,9 @@ describe("Upload — Databricks data source (§6.6 Step 6, toggle show/hide)", (
     expect(await screen.findByRole("option", { name: "main" })).toBeInTheDocument()
   })
 
-  it("Connect fetches clusters; picking one sets cluster_id on the run config", async () => {
+  it("loads clusters on mount (no PAT / no Connect) and picking one sets cluster_id", async () => {
     mockApp.executionBackend = "databricks"
-    mockApp.databricksPat = "dapi-xyz"
-    listCatalogs.mockResolvedValue({ catalogs: ["main"] })
+    mockApp.databricksPat = "" // no PAT entered yet — clusters use the service token, not a PAT
     listClusters.mockResolvedValue({
       clusters: [
         { cluster_id: "0716-run", cluster_name: "prod-cluster", state: "RUNNING" },
@@ -240,12 +239,11 @@ describe("Upload — Databricks data source (§6.6 Step 6, toggle show/hide)", (
     })
     renderPage(<UploadPage />)
     fireEvent.click(screen.getByRole("tab", { name: /Databricks/i }))
-    fireEvent.click(screen.getByRole("button", { name: /Connect/i }))
 
-    // Clusters are resolved server-side with the service token, so no PAT is passed to listClusters.
+    // Clusters are fetched on mount — before Connect, with no PAT — and the picker is selectable.
     await waitFor(() => expect(listClusters).toHaveBeenCalled())
-    // Picking a cluster pushes its id into the run config (→ overrides the env var default).
     const clusterSelect = await screen.findByLabelText(/^Cluster$/i)
+    // Picking a cluster pushes its id into the run config (→ overrides the env var default).
     fireEvent.change(clusterSelect, { target: { value: "0716-run" } })
     expect(updateForm).toHaveBeenCalledWith({ cluster_id: "0716-run" })
 

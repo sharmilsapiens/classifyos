@@ -63,7 +63,10 @@ export default function DatabricksSourcePanel({
   const [schemas, setSchemas] = useState<Load<string[]>>({ state: "idle" })
   const [schema, setSchema] = useState("")
   const [tables, setTables] = useState<Load<string[]>>({ state: "idle" })
-  const [clusters, setClusters] = useState<Load<ClusterInfo[]>>({ state: "idle" })
+  // Clusters are resolved server-side with the SERVICE token (no PAT), so the picker loads on mount —
+  // the user can choose a cluster BEFORE connecting/entering their PAT. Start in "loading" so the
+  // fetch effect only ever setState()s from its async callbacks (no synchronous setState-in-effect).
+  const [clusters, setClusters] = useState<Load<ClusterInfo[]>>({ state: "loading" })
 
   const connect = useCallback(async () => {
     if (!pat.trim()) {
@@ -75,15 +78,6 @@ export default function DatabricksSourcePanel({
     setSchemas({ state: "idle" })
     setSchema("")
     setTables({ state: "idle" })
-    // Fetch the cluster list in parallel with the catalog browse — the two are independent, and a
-    // cluster-list failure must not block picking a table (the server env-var default still works).
-    // Clusters are resolved server-side with the SERVICE token, so no PAT is passed here.
-    setClusters({ state: "loading" })
-    listClusters()
-      .then((res) => setClusters({ state: "ready", items: res.clusters }))
-      .catch((err) =>
-        setClusters({ state: "error", message: errMessage(err, "Could not list clusters.") }),
-      )
     try {
       const res = await listCatalogs(pat.trim())
       setCatalogs({ state: "ready", items: res.catalogs })
@@ -91,6 +85,23 @@ export default function DatabricksSourcePanel({
       setCatalogs({ state: "error", message: errMessage(err, "Could not reach Databricks.") })
     }
   }, [pat])
+
+  // Fetch the cluster list once on mount — it needs no PAT (service-token, server-side), so the
+  // cluster picker is usable before the user connects. A failure is shown in the picker only and
+  // never blocks the data browsing below (the server env-var default still applies).
+  useEffect(() => {
+    let cancelled = false
+    listClusters()
+      .then((res) => !cancelled && setClusters({ state: "ready", items: res.clusters }))
+      .catch(
+        (err) =>
+          !cancelled &&
+          setClusters({ state: "error", message: errMessage(err, "Could not list clusters.") }),
+      )
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   // Load schemas when a catalog is chosen; tables when a schema is chosen (cascading).
   useEffect(() => {
@@ -120,173 +131,180 @@ export default function DatabricksSourcePanel({
   }, [catalog, schema, pat])
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="flex items-center gap-2">
-          <Database className="h-4 w-4 text-primary" aria-hidden />
-          Unity Catalog
-        </CardTitle>
-      </CardHeader>
-      <CardContent className="space-y-4">
-        {/* PAT + connect */}
-        <div className="space-y-1.5">
-          <Label htmlFor="dbx-pat">Databricks personal access token</Label>
-          <div className="flex gap-2">
-            <Input
-              id="dbx-pat"
-              type="password"
-              value={pat}
-              placeholder="dapi…"
-              onChange={(e) => onPatChange(e.target.value)}
-              disabled={busy}
-              className="font-mono text-xs"
-            />
-            <Button variant="outline" size="sm" onClick={() => void connect()} disabled={busy || !pat.trim()}>
-              <Plug className="h-4 w-4" />
-              Connect
-            </Button>
-          </div>
-          <p className="text-xs text-muted-foreground">
-            Used only for this session to browse Unity Catalog and to run as you — never stored.
-          </p>
-        </div>
-
-        {/* Cluster picker — which compute the training Job runs on. Appears once Connect fetches the
-            cluster list; "server default" leaves the choice to the DATABRICKS_JOB_CLUSTER_ID env var. */}
-        {clusters.state !== "idle" && (
-          <div className="space-y-1.5">
-            <Label htmlFor="dbx-cluster" className="flex items-center gap-2">
-              <Cpu className="h-4 w-4 text-primary" aria-hidden />
-              Cluster
-            </Label>
-            {clusters.state === "loading" && (
-              <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                <Spinner /> Loading clusters…
-              </div>
-            )}
-            {clusters.state === "error" && <ErrorState message={clusters.message} />}
-            {clusters.state === "ready" && (
-              <>
-                <Select
-                  id="dbx-cluster"
-                  value={clusterId}
-                  onChange={(e) => onClusterChange(e.target.value)}
-                  disabled={busy}
-                >
-                  <option value="">— server default —</option>
-                  {clusters.items.map((c) => (
-                    <option key={c.cluster_id} value={c.cluster_id}>
-                      {c.cluster_name} ({c.state.toLowerCase()})
-                    </option>
-                  ))}
-                </Select>
-                <p className="text-xs text-muted-foreground">
-                  Which cluster the training job runs on. Leave as “server default” to use the
-                  cluster configured on the server.
-                </p>
-              </>
-            )}
-          </div>
-        )}
-
-        {catalogs.state === "loading" && (
-          <div className="flex items-center gap-2 text-sm text-muted-foreground">
-            <Spinner /> Loading catalogs…
-          </div>
-        )}
-        {catalogs.state === "error" && (
-          <ErrorState title="Databricks unreachable" message={catalogs.message} onRetry={() => void connect()} />
-        )}
-
-        {catalogs.state === "ready" && (
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-            <div className="space-y-1.5">
-              <Label htmlFor="dbx-catalog">Catalog</Label>
+    <div className="space-y-5">
+      {/* Compute — which cluster the training Job runs on. Resolved server-side with the SERVICE
+          token (no PAT), so it loads on mount and can be set BEFORE connecting. "server default"
+          leaves the choice to the DATABRICKS_JOB_CLUSTER_ID env var. */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Cpu className="h-4 w-4 text-primary" aria-hidden />
+            Compute
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-1.5">
+          <Label htmlFor="dbx-cluster">Cluster</Label>
+          {clusters.state === "loading" && (
+            <div className="flex items-center gap-2 text-sm text-muted-foreground">
+              <Spinner /> Loading clusters…
+            </div>
+          )}
+          {clusters.state === "error" && <ErrorState message={clusters.message} />}
+          {clusters.state === "ready" && (
+            <>
               <Select
-                id="dbx-catalog"
-                value={catalog}
-                onChange={(e) => setCatalog(e.target.value)}
-                disabled={busy || catalogs.items.length === 0}
+                id="dbx-cluster"
+                value={clusterId}
+                onChange={(e) => onClusterChange(e.target.value)}
+                disabled={busy}
               >
-                <option value="">— choose —</option>
-                {catalogs.items.map((c) => (
-                  <option key={c} value={c}>{c}</option>
+                <option value="">— server default —</option>
+                {clusters.items.map((c) => (
+                  <option key={c.cluster_id} value={c.cluster_id}>
+                    {c.cluster_name} ({c.state.toLowerCase()})
+                  </option>
                 ))}
               </Select>
+              <p className="text-xs text-muted-foreground">
+                Which cluster the training job runs on — no token needed. Leave as “server default”
+                to use the cluster configured on the server.
+              </p>
+            </>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Unity Catalog — the data source (requires the user's PAT). */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Database className="h-4 w-4 text-primary" aria-hidden />
+            Unity Catalog
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {/* PAT + connect */}
+          <div className="space-y-1.5">
+            <Label htmlFor="dbx-pat">Databricks personal access token</Label>
+            <div className="flex gap-2">
+              <Input
+                id="dbx-pat"
+                type="password"
+                value={pat}
+                placeholder="dapi…"
+                onChange={(e) => onPatChange(e.target.value)}
+                disabled={busy}
+                className="font-mono text-xs"
+              />
+              <Button variant="outline" size="sm" onClick={() => void connect()} disabled={busy || !pat.trim()}>
+                <Plug className="h-4 w-4" />
+                Connect
+              </Button>
             </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="dbx-schema">Schema</Label>
-              <Select
-                id="dbx-schema"
-                value={schema}
-                onChange={(e) => setSchema(e.target.value)}
-                disabled={busy || schemas.state !== "ready"}
-              >
-                <option value="">— choose —</option>
-                {schemas.state === "ready" &&
-                  schemas.items.map((s) => (
-                    <option key={s} value={s}>{s}</option>
+            <p className="text-xs text-muted-foreground">
+              Used only for this session to browse Unity Catalog and to run as you — never stored.
+            </p>
+          </div>
+
+          {catalogs.state === "loading" && (
+            <div className="flex items-center gap-2 text-sm text-muted-foreground">
+              <Spinner /> Loading catalogs…
+            </div>
+          )}
+          {catalogs.state === "error" && (
+            <ErrorState title="Databricks unreachable" message={catalogs.message} onRetry={() => void connect()} />
+          )}
+
+          {catalogs.state === "ready" && (
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+              <div className="space-y-1.5">
+                <Label htmlFor="dbx-catalog">Catalog</Label>
+                <Select
+                  id="dbx-catalog"
+                  value={catalog}
+                  onChange={(e) => setCatalog(e.target.value)}
+                  disabled={busy || catalogs.items.length === 0}
+                >
+                  <option value="">— choose —</option>
+                  {catalogs.items.map((c) => (
+                    <option key={c} value={c}>{c}</option>
                   ))}
-              </Select>
+                </Select>
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="dbx-schema">Schema</Label>
+                <Select
+                  id="dbx-schema"
+                  value={schema}
+                  onChange={(e) => setSchema(e.target.value)}
+                  disabled={busy || schemas.state !== "ready"}
+                >
+                  <option value="">— choose —</option>
+                  {schemas.state === "ready" &&
+                    schemas.items.map((s) => (
+                      <option key={s} value={s}>{s}</option>
+                    ))}
+                </Select>
+              </div>
             </div>
-          </div>
-        )}
+          )}
 
-        {schemas.state === "loading" && (
-          <div className="flex items-center gap-2 text-sm text-muted-foreground">
-            <Spinner /> Loading schemas…
-          </div>
-        )}
-        {schemas.state === "error" && <ErrorState message={schemas.message} />}
+          {schemas.state === "loading" && (
+            <div className="flex items-center gap-2 text-sm text-muted-foreground">
+              <Spinner /> Loading schemas…
+            </div>
+          )}
+          {schemas.state === "error" && <ErrorState message={schemas.message} />}
 
-        {tables.state === "loading" && (
-          <div className="flex items-center gap-2 text-sm text-muted-foreground">
-            <Spinner /> Loading tables…
-          </div>
-        )}
-        {tables.state === "error" && <ErrorState message={tables.message} />}
-        {tables.state === "ready" && tables.items.length === 0 && (
-          <EmptyState title="No tables" description={`No tables in ${catalog}.${schema}.`} />
-        )}
-        {tables.state === "ready" && tables.items.length > 0 && (
-          <div className="space-y-2">
-            <Label>Pick a table to run on</Label>
-            <ul className="max-h-60 divide-y overflow-y-auto rounded-md border">
-              {tables.items.map((t) => {
-                const active = t === selectedTable
-                return (
-                  <li key={t}>
-                    <button
-                      type="button"
-                      aria-pressed={active}
-                      disabled={busy}
-                      onClick={() => onSelectTable({ catalog, schema, table: t })}
-                      className={cn(
-                        "flex w-full items-center gap-2 px-3 py-2 text-left text-sm transition-colors",
-                        "hover:bg-accent focus-visible:bg-accent focus-visible:outline-none",
-                        "disabled:cursor-not-allowed disabled:opacity-60",
-                        active && "bg-accent font-semibold text-primary",
-                      )}
-                    >
-                      <Table2 className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden />
-                      <span className="font-mono">{catalog}.{schema}.{t}</span>
-                    </button>
-                  </li>
-                )
-              })}
-            </ul>
-            <button
-              type="button"
-              className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:underline"
-              onClick={() => void connect()}
-              disabled={busy}
-            >
-              <RefreshCw className="h-3 w-3" />
-              Reconnect
-            </button>
-          </div>
-        )}
-      </CardContent>
-    </Card>
+          {tables.state === "loading" && (
+            <div className="flex items-center gap-2 text-sm text-muted-foreground">
+              <Spinner /> Loading tables…
+            </div>
+          )}
+          {tables.state === "error" && <ErrorState message={tables.message} />}
+          {tables.state === "ready" && tables.items.length === 0 && (
+            <EmptyState title="No tables" description={`No tables in ${catalog}.${schema}.`} />
+          )}
+          {tables.state === "ready" && tables.items.length > 0 && (
+            <div className="space-y-2">
+              <Label>Pick a table to run on</Label>
+              <ul className="max-h-60 divide-y overflow-y-auto rounded-md border">
+                {tables.items.map((t) => {
+                  const active = t === selectedTable
+                  return (
+                    <li key={t}>
+                      <button
+                        type="button"
+                        aria-pressed={active}
+                        disabled={busy}
+                        onClick={() => onSelectTable({ catalog, schema, table: t })}
+                        className={cn(
+                          "flex w-full items-center gap-2 px-3 py-2 text-left text-sm transition-colors",
+                          "hover:bg-accent focus-visible:bg-accent focus-visible:outline-none",
+                          "disabled:cursor-not-allowed disabled:opacity-60",
+                          active && "bg-accent font-semibold text-primary",
+                        )}
+                      >
+                        <Table2 className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden />
+                        <span className="font-mono">{catalog}.{schema}.{t}</span>
+                      </button>
+                    </li>
+                  )
+                })}
+              </ul>
+              <button
+                type="button"
+                className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:underline"
+                onClick={() => void connect()}
+                disabled={busy}
+              >
+                <RefreshCw className="h-3 w-3" />
+                Reconnect
+              </button>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+    </div>
   )
 }
