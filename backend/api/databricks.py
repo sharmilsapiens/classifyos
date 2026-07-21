@@ -397,7 +397,7 @@ def fetch_uc_file(volume_path: str) -> bytes:
     """Download a file from a Unity Catalog volume path using the Databricks Files API.
 
     ``volume_path`` must be an absolute UC volume path, e.g.
-    ``/Volumes/aiml_rd/classifyos/output/api/run_response.json``.
+    ``/Volumes/aiml_rd/classifyos/output/api/{job_id}/run_response.json``.
     Authenticated with the service token. Raises :class:`DatabricksUnavailable` if the
     file does not exist or cannot be fetched.
     """
