@@ -3,7 +3,7 @@
 > **Purpose:** practical reference for any Claude session working on the Databricks
 > execution path. Read this alongside `docs/databricks_integration.md` (the design/roadmap
 > doc) and `docs/enabling_parallelization.md` (scale/perf planning).
-> **Last updated:** 2026-07-14
+> **Last updated:** 2026-07-21
 
 ---
 
@@ -69,10 +69,11 @@ aiml_rd  (catalog)
     ├── input/    (volume) — Delta table snapshots written here before training
     └── output/   (volume) — artifacts written here after training
         ├── api/
-        │   └── run_response.json  ← result envelope FastAPI fetches
-        ├── plot1.png ... plot6.png
-        ├── classification_results.csv
-        └── run_profile.json
+        │   └── {job_id}/
+        │       └── run_response.json  ← result envelope FastAPI fetches
+        ├── artifacts/
+        │   └── {job_id}/  ← plots, CSVs, run_profile.json per run
+        └── (runs are isolated by job_id — no overwriting between concurrent runs)
 ```
 
 ---
@@ -118,7 +119,7 @@ aiml_rd  (catalog)
 | 2 | Reads `run_config` (JSON) and `user_token` from Databricks widgets (passed as `base_parameters`) |
 | 3 | Sets env vars: `CLASSIFYOS_STORAGE_BACKEND=databricks`, UC volume paths, MLflow URIs. Sets `DATABRICKS_TOKEN` to user's PAT so UC reads run as the user. Adds `backend/` to `sys.path` if running from a Databricks Repo. |
 | 4 | `build_config(input_file, target, feature_cols, **rest)` → `ModelRunner.run()` |
-| 5 | Writes simplified result envelope to `api/run_response.json` on output volume |
+| 5 | Writes the full locked `/run` envelope (via `api.result_builder.build_run_result`) to `api/{job_id}/run_response.json` on the output volume |
 
 **Important:** The wheel is installed as a **task library** by FastAPI before the notebook runs. The notebook does NOT need a `%pip install` magic command. Cell 1 only falls back to pip if the wheel wasn't installed (standalone run).
 
@@ -138,14 +139,12 @@ Because there is no cached job state, a transient Databricks outage on either en
 `503` (never a fabricated last-known status), and an unrecognised `job_id` is decided by Databricks
 itself (a rejected id → `503`, a finished-but-failed run → `FAILED`) rather than a local `404`.
 
-**Known issue (in progress):** The notebook currently writes a simplified envelope
-`{ status, mlflow_run, metrics, best_model, artifacts_written }` — not the full locked
-`/run` envelope the frontend expects. This means the dashboard shows limited results
-(metrics table only, no charts). Fix options:
-- Option A (correct): Set up Databricks Repos so `backend/` is on `sys.path` in the
-  notebook, then use `api.result_builder.build_run_result` to write the full envelope.
-- Option B (quick): Have `GET /run/{job_id}/results` in FastAPI reshape the simplified
-  envelope by reading the artifacts from the UC volume directly.
+**Known issue (in progress):** The notebook reads `job_id` from a widget but FastAPI does
+not yet pass it as a `base_parameter`. The notebook falls back to `"local"` as the
+namespace, writing to `api/local/run_response.json` while FastAPI fetches from
+`api/{run_id}/run_response.json` — path mismatch → 404. Fix: have the notebook read its
+own run_id from the Databricks notebook context (`dbutils.notebook.entry_point...currentRunId()`)
+instead of relying on the widget.
 
 ---
 
@@ -187,7 +186,7 @@ No cluster restart needed — wheel installs fresh per job.
 | `No module named 'api'` | Notebook not running from Databricks Repo | Set up Repos OR use self-contained notebook (Option B) |
 | `build_config() missing 2 required positional arguments` | Passing dict directly | Unpack: `build_config(input_file=..., target=..., feature_cols=..., **rest)` |
 | `'input_source.type' must be one of ['file', 'postgres']` | Old wheel without delta support | Rebuild wheel and re-upload |
-| `results envelope is not available yet` | FastAPI reading local storage instead of UC volume | `fetch_uc_file` in `jobs.py` must use Databricks Files API |
+| `results envelope is not available yet` | `job_id` not passed to notebook — notebook writes to `api/local/`, FastAPI reads `api/{run_id}/` | Fix notebook to read its own run_id from `dbutils` context (see §7 known issue) |
 | `Databricks unreachable` | `DATABRICKS_HOST` missing `https://` or empty | Fix URL format in `.env` |
 | `Permission denied` on volume | Cluster lacks READ on that volume | Grant `READ VOLUME` in Unity Catalog permissions |
 
