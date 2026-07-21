@@ -265,30 +265,30 @@ def test_status_unknown_job_is_404(api_client, dbx_env) -> None:
 
 
 def test_results_completed_returns_envelope(
-    api_client, dbx_env, monkeypatch, output_dir: Path
+    api_client, dbx_env, monkeypatch
 ) -> None:
-    """Once COMPLETED, /results returns the locked envelope the Job wrote to the output volume."""
+    """Once COMPLETED, /results fetches the per-job envelope from the UC output volume."""
     job_id = _submit(
         api_client,
         monkeypatch,
         states=[{"life_cycle_state": "TERMINATED", "result_state": "SUCCESS"}],
     )
-    # The Job writes api/run_response.json to the UC output volume; the app's storage reads it.
     envelope = {
         "status": "ok",
         "schema_version": "1.11",
         "result": {"run": {"target": "will_lapse"}},
         "error": None,
     }
-    dest = output_dir / "api" / "run_response.json"
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    dest.write_text(json.dumps(envelope), encoding="utf-8")
-
+    # In Databricks mode the endpoint calls fetch_uc_file (a bare httpx.get that bypasses
+    # _build_client). Patch it directly so no real network call is made.
+    monkeypatch.setenv("DBRICKS_OUTPUT_VOLUME", "/Volumes/aiml_rd/classifyos/output")
+    monkeypatch.setattr(
+        "api.routes.jobs.fetch_uc_file",
+        lambda path: json.dumps(envelope).encode(),
+    )
     resp = api_client.get(f"/api/v1/run/{job_id}/results")
     assert resp.status_code == 200, resp.text
     assert resp.json() == envelope
-    # tidy so a later test's OUTPUT_DIR is clean
-    dest.unlink()
 
 
 def test_results_not_complete_is_409(api_client, dbx_env, monkeypatch) -> None:

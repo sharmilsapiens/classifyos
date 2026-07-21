@@ -127,7 +127,7 @@ def get_results_endpoint(
         output_volume = os.environ.get("DBRICKS_OUTPUT_VOLUME", "").rstrip("/")
         if not output_volume:
             raise HTTPException(status_code=500, detail="DBRICKS_OUTPUT_VOLUME is not set")
-        uc_path = f"{output_volume}/{RESULT_ENVELOPE_KEY}"
+        uc_path = f"{output_volume}/api/{job_id}/run_response.json"
         try:
             raw = fetch_uc_file(uc_path)
         except DatabricksUnavailable:
