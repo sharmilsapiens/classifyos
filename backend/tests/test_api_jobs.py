@@ -1,11 +1,13 @@
-"""Databricks orchestration tests — submit / poll / fetch + persistent job state (§6.6 Step 6).
+"""Databricks orchestration tests — submit / poll / fetch (§6.6 Step 6, stateless).
 
 Everything Databricks is MOCKED: the REST client's ``_build_client`` seam is swapped for an
-``httpx.MockTransport`` so no real workspace is contacted, and the job-state store is pointed at a
-per-test **sqlite** file (a swap of the Postgres DSN — the SQLAlchemy Core path is identical). This
-exercises the whole databricks-backend flow — the env-gated ``POST /run`` submission, status
-mapping, results fetch from the (temp) output volume, and restart-survival of an in-flight job —
-without any external dependency, exactly as CI requires.
+``httpx.MockTransport`` so no real workspace is contacted. This exercises the whole
+databricks-backend flow — the env-gated ``POST /run`` submission, status mapping, and results
+fetch from the (temp) output volume — without any external dependency, exactly as CI requires.
+
+The design is **stateless**: there is no local job store. The Databricks ``run_id`` returned by the
+submit IS the ``job_id`` the client polls with, so ``/run/{job_id}/status`` and ``/results`` poll
+Databricks directly on every request.
 
 The default LOCAL backend (and its full synchronous ``/run`` envelope) is covered by
 ``test_api_run.py``; conftest pins ``CLASSIFYOS_EXECUTION_BACKEND=local`` for the base suite, and
@@ -15,13 +17,11 @@ these tests flip it to ``databricks`` per-test via monkeypatch.
 from __future__ import annotations
 
 import json
-from pathlib import Path
 
 import httpx
 import pytest
 
 import api.databricks as dbx
-import api.jobs_store as jobs_store
 
 from .conftest import LAPSE_FEATURES, _run_payload
 
@@ -29,8 +29,8 @@ _MOCK_HOST = "https://mock.databricks.net"
 
 
 @pytest.fixture
-def dbx_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    """Configure the databricks backend + a temp sqlite jobs store for one test."""
+def dbx_env(monkeypatch: pytest.MonkeyPatch):
+    """Configure the databricks execution backend for one test (stateless — no job store)."""
     monkeypatch.setenv("CLASSIFYOS_EXECUTION_BACKEND", "databricks")
     monkeypatch.setenv("DATABRICKS_HOST", _MOCK_HOST)
     monkeypatch.setenv("DATABRICKS_TOKEN", "svc-token")
@@ -39,12 +39,6 @@ def dbx_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv(
         "DATABRICKS_JOB_WHEEL_PATH", "/Volumes/main/classifyos/libs/classifyos-1.0.0-py3-none-any.whl"
     )
-    dsn = f"sqlite:///{(tmp_path / 'jobs.db').as_posix()}"
-    monkeypatch.setenv("CLASSIFYOS_JOBS_DSN", dsn)
-    jobs_store.reset_engine()
-    jobs_store.init_db()
-    yield dsn
-    jobs_store.reset_engine()
 
 
 def _install_mock(monkeypatch: pytest.MonkeyPatch, handler) -> None:
@@ -71,12 +65,12 @@ def _payload() -> dict:
 
 
 # --------------------------------------------------------------------------- #
-# POST /run (databricks backend) — submit + persist                            #
+# POST /run (databricks backend) — submit + return the run_id as the job_id     #
 # --------------------------------------------------------------------------- #
 
 
-def test_submit_returns_job_and_persists(api_client, dbx_env, monkeypatch) -> None:
-    """Databricks submit returns {job_id, run_id}, forwards the user PAT, and persists the job."""
+def test_submit_returns_job_and_forwards_pat(api_client, dbx_env, monkeypatch) -> None:
+    """Databricks submit returns {job_id == run_id, status} and forwards the user PAT + config."""
     seen = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -98,6 +92,8 @@ def test_submit_returns_job_and_persists(api_client, dbx_env, monkeypatch) -> No
     )
     assert resp.status_code == 200, resp.text
     body = resp.json()
+    # Stateless: the job_id IS the Databricks run_id (both present for contract compatibility).
+    assert body["job_id"] == "55501"
     assert body["run_id"] == "55501"
     assert body["status"] == "PENDING"
     assert body["schema_version"] == "1.11"
@@ -105,13 +101,8 @@ def test_submit_returns_job_and_persists(api_client, dbx_env, monkeypatch) -> No
     # The user's PAT was forwarded to the Job (for UC data access), the config too.
     assert seen["user_token"] == "user-pat-xyz"
     assert seen["run_config"]["target"] == "will_lapse"
-
-    # Persisted for reconnect/audit — but NOT the PAT.
-    row = jobs_store.get_job(body["job_id"])
-    assert row is not None
-    assert row["databricks_run_id"] == "55501"
-    assert row["status"] == "PENDING"
-    assert "user-pat-xyz" not in (row["config_json"] or "")
+    # The PAT is never echoed back into the submitted run config.
+    assert "user-pat-xyz" not in json.dumps(seen["run_config"])
 
 
 def test_submit_cluster_id_overrides_env(api_client, dbx_env, monkeypatch) -> None:
@@ -237,9 +228,9 @@ def test_status_progression_pending_running_completed(api_client, dbx_env, monke
     assert api_client.get(f"/api/v1/run/{job_id}/status").json()["status"] == "RUNNING"
     final = api_client.get(f"/api/v1/run/{job_id}/status").json()
     assert final["status"] == "COMPLETED"
+    # run_id echoes the job_id (they are the same value in the stateless design).
     assert final["run_id"] == "777"
-    # The terminal status is persisted.
-    assert jobs_store.get_job(job_id)["status"] == "COMPLETED"
+    assert final["job_id"] == "777"
 
 
 def test_status_failed_path(api_client, dbx_env, monkeypatch) -> None:
@@ -252,11 +243,18 @@ def test_status_failed_path(api_client, dbx_env, monkeypatch) -> None:
     body = api_client.get(f"/api/v1/run/{job_id}/status").json()
     assert body["status"] == "FAILED"
     assert body["message"] == "OOM"
-    assert jobs_store.get_job(job_id)["error"] == "OOM"
 
 
-def test_status_unknown_job_is_404(api_client, dbx_env) -> None:
-    assert api_client.get("/api/v1/run/does-not-exist/status").status_code == 404
+def test_status_unknown_job_polls_databricks(api_client, dbx_env, monkeypatch) -> None:
+    """No local store: an unrecognised job_id is polled straight to Databricks. A run id the
+    workspace rejects (HTTP 400 RESOURCE_DOES_NOT_EXIST) surfaces as a 503 — never a fabricated
+    404 from a cache."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(400, json={"error_code": "RESOURCE_DOES_NOT_EXIST"})
+
+    _install_mock(monkeypatch, handler)
+    assert api_client.get("/api/v1/run/does-not-exist/status").status_code == 503
 
 
 # --------------------------------------------------------------------------- #
@@ -299,25 +297,11 @@ def test_results_not_complete_is_409(api_client, dbx_env, monkeypatch) -> None:
     assert resp.json()["status"] == "RUNNING"
 
 
-def test_results_unknown_job_is_404(api_client, dbx_env) -> None:
-    assert api_client.get("/api/v1/run/nope/results").status_code == 404
+def test_results_unknown_job_polls_databricks(api_client, dbx_env, monkeypatch) -> None:
+    """Same as /status: an unknown job_id → a Databricks poll → 503 (no store, no fabricated 404)."""
 
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(400, json={"error_code": "RESOURCE_DOES_NOT_EXIST"})
 
-# --------------------------------------------------------------------------- #
-# Persistent job state — survives a FastAPI restart                            #
-# --------------------------------------------------------------------------- #
-
-
-def test_job_state_survives_restart(dbx_env) -> None:
-    """A RUNNING job persisted by one engine is still retrievable after the engine is rebuilt.
-
-    ``reset_engine`` drops the cached SQLAlchemy engine; the next ``get_job`` rebuilds it against
-    the SAME sqlite DSN — i.e. a new FastAPI process reading the same DB. An in-flight job must
-    still be there (the whole point of Part B).
-    """
-    job_id = jobs_store.create_job(databricks_run_id="999", status="RUNNING", config_json="{}")
-    jobs_store.reset_engine()  # simulate a FastAPI restart (fresh engine, same DB)
-    row = jobs_store.get_job(job_id)
-    assert row is not None
-    assert row["status"] == "RUNNING"
-    assert row["databricks_run_id"] == "999"
+    _install_mock(monkeypatch, handler)
+    assert api_client.get("/api/v1/run/nope/results").status_code == 503

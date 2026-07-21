@@ -44,7 +44,6 @@ from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
 
 from .databricks import execution_backend  # noqa: E402
 from .deps import get_storage  # noqa: E402
-from .jobs_store import init_db  # noqa: E402
 from .routes import databricks as databricks_routes  # noqa: E402
 from .routes import (  # noqa: E402
     explain,
@@ -92,13 +91,10 @@ async def lifespan(app: FastAPI):
     output_dir = getattr(storage, "output_dir", "<n/a>")
     logger.info("ClassifyOS API starting — DATA_DIR=%s OUTPUT_DIR=%s", data_dir, output_dir)
     logger.info("CORS allowlist: %s", _cors_origins() or "(none configured)")
-    # Databricks orchestration backend (§6.6 Step 6): ensure the persistent job-state table exists
-    # so a restart can reconnect to in-flight runs. Gated on the databricks backend so a purely
-    # local deployment never creates a stray jobs DB; init_db is idempotent and never raises.
-    backend = execution_backend()
-    logger.info("Execution backend: %s", backend)
-    if backend == "databricks":
-        init_db()
+    # Databricks orchestration backend (§6.6 Step 6) is STATELESS: the Databricks run_id is the
+    # job_id the UI polls with, so there is no job-state store to initialise here — status/results
+    # poll Databricks directly (see routes/jobs.py). Just record the resolved backend.
+    logger.info("Execution backend: %s", execution_backend())
     yield
     logger.info("ClassifyOS API shutting down")
 

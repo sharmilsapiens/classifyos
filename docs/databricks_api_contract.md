@@ -111,9 +111,10 @@ per-task library so the notebook needs no `%pip install` magic.
 { "run_id": 55501 }   // read as body["run_id"]; missing → DatabricksUnavailable
 ```
 
-`submit_run` returns `{"run_id": "<id>"}` (stringified). `routes/run.py` then mints its own
-persistent `job_id` (UUID) and stores `{job_id, databricks_run_id, status:"PENDING"}` in the
-`classifyos_jobs` Postgres table before returning `RunSubmission` to the browser.
+`submit_run` returns `{"run_id": "<id>"}` (stringified). This `run_id` **IS** the `job_id` —
+`routes/run.py` returns `RunSubmission(job_id=run_id, run_id=run_id, status="PENDING")` directly.
+There is **no job store** (stateless): `/status` and `/results` poll Databricks with that id on
+every request, so a FastAPI restart loses nothing and Databricks is the only external dependency.
 
 ### `GET /api/2.1/jobs/runs/get` — poll a run's status
 
@@ -142,9 +143,13 @@ The relevant `RunState` sub-fields: `life_cycle_state`, `result_state`, `state_m
 `"unknown"`. `get_run_status` returns `{"status", "message"}`. Both `SUCCESS` (Jobs API) and
 `SUCCEEDED` (system tables) count as success.
 
-**Polling resilience** (`routes/jobs.py::_refresh_status`): a transient `DatabricksUnavailable`
-during a poll returns the **last-known stored status** rather than failing, so a polling client never
-sees the run "reset". A `DatabricksAuthError` still propagates (→ 401).
+**Polling behaviour** (`routes/jobs.py::_refresh_status`): with no store there is no cached
+fallback, so `_refresh_status(job_id)` polls Databricks directly and lets failures propagate to the
+endpoint, which maps them consistently for both `/status` and `/results`: `DatabricksAuthError` →
+**401**, `DatabricksConfigError` → **500**, and any other `DatabricksError` (incl. a transient
+`DatabricksUnavailable`) → **503**. A transient outage is therefore an honest 503, not a fabricated
+last-known status; an unrecognised `job_id` is decided by Databricks (rejected id → 503,
+finished-but-failed → `FAILED`), never a local 404.
 
 ---
 

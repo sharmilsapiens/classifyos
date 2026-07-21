@@ -52,8 +52,9 @@
 > Unity Catalog output volume the Job wrote it to). Also adds three read-only **Unity Catalog browser
 > proxies** — `GET /api/v1/databricks/{catalogs,schemas,tables}` — for the UI's data-source picker.
 > The user's Databricks PAT is passed per request in the `X-Databricks-Token` header (for UC data
-> access) and is **never persisted**; job state lives in a `classifyos_jobs` table (the existing
-> MLflow Postgres) so a FastAPI restart does not lose an in-flight run. `GET /api/v1/health` gains an
+> access) and is **never persisted**; job state is **stateless** — the Databricks `run_id` IS the
+> `job_id`, so status/results poll Databricks directly (no database, so a restart loses nothing).
+> `GET /api/v1/health` gains an
 > additive `execution_backend` field so the client knows which `/run` behaviour to expect. No
 > `1.0`–`1.10` field was renamed, retyped, or removed. Additionally, the request-side
 > `input_source` object gains optional `catalog`/`schema`/`limit` fields so a run can read a Unity
@@ -129,8 +130,8 @@
 | `GET`  | `/api/v1/input-sources/tables` | **(Interim 2b UI)** List the tables in the input DB (via the `CLASSIFYOS_PG_DSN` DSN) → `{connection_env, tables[]}`, for the "Import from database" picker. `503` if the DB is unreachable/unconfigured. See below. |
 | `POST` | `/api/v1/input-sources/select` | **(Interim 2b UI)** Materialize + profile a chosen DB table/query → the **same `InspectProfile` shape as `/upload`** plus an `input_source` block for the run. `422` bad request, `503` DB unavailable. See below. |
 | `POST` | `/api/v1/run` | Execute the full pipeline. **local** backend → runs synchronously, returns the locked envelope below. **databricks** backend → submits a Databricks Job, returns `RunSubmission` `{job_id, run_id, status}` (1.11). See below. |
-| `GET`  | `/api/v1/run/{job_id}/status` | **(1.11, databricks)** Poll a submitted Job → `{job_id, run_id, status: PENDING\|RUNNING\|COMPLETED\|FAILED, message}`. `404` unknown job. See below. |
-| `GET`  | `/api/v1/run/{job_id}/results` | **(1.11, databricks)** Once `COMPLETED`, fetch the run's locked `/run` envelope (from the UC output volume). `409` if not complete; `404` unknown job / envelope not written yet. See below. |
+| `GET`  | `/api/v1/run/{job_id}/status` | **(1.11, databricks)** Poll a submitted Job (`job_id` == Databricks `run_id`; stateless) → `{job_id, run_id, status: PENDING\|RUNNING\|COMPLETED\|FAILED, message}`. `503` if Databricks is unreachable. See below. |
+| `GET`  | `/api/v1/run/{job_id}/results` | **(1.11, databricks)** Once `COMPLETED`, fetch the run's locked `/run` envelope (from the UC output volume). `409` if not complete; `404` if the envelope is not written yet; `503` if Databricks is unreachable. See below. |
 | `GET`  | `/api/v1/databricks/catalogs` | **(1.11)** Proxy Unity Catalog catalogs (user PAT via `X-Databricks-Token`) → `{catalogs[]}`. `401` no PAT, `503` unreachable. |
 | `GET`  | `/api/v1/databricks/schemas` | **(1.11)** `?catalog=` → `{catalog, schemas[]}`. |
 | `GET`  | `/api/v1/databricks/tables` | **(1.11)** `?catalog=&schema=` → `{catalog, schema, tables[]}`. |
@@ -671,8 +672,9 @@ No leakage surface and no ML: these endpoints only read back what a completed ru
 
 Only active in the **databricks** execution backend. All Databricks REST calls are server-side; the
 user's PAT travels per request in the `X-Databricks-Token` header (for Unity Catalog data access)
-and is **never persisted**. Job state is stored in a `classifyos_jobs` table (the existing MLflow
-Postgres by default, or `CLASSIFYOS_JOBS_DSN`) so a FastAPI restart can still poll an in-flight run.
+and is **never persisted**. Job state is **stateless**: the Databricks `run_id` returned by the
+submit IS the `job_id`, so `/status` and `/results` poll Databricks directly with that id on every
+request — no database is used for job state, and a FastAPI restart loses nothing.
 
 ### `POST /api/v1/run` → `RunSubmission`
 
@@ -682,30 +684,33 @@ The request body is the usual `RunConfig` (validated by `build_config` exactly a
 the user PAT ride along as task parameters) and the response is:
 
 ```jsonc
-{ "job_id": "3f9c…", "run_id": "55501", "status": "PENDING", "schema_version": "1.11" }
+{ "job_id": "55501", "run_id": "55501", "status": "PENDING", "schema_version": "1.11" }
 ```
 
-`job_id` is our persistent handle (used in the paths below); `run_id` is the Databricks run id.
-A workspace that can't be reached → **503**; a server misconfigured for databricks → **500**.
+`job_id` and `run_id` carry the **same value** (the Databricks run id); both fields are kept so the
+frontend contract is unchanged. `job_id` is used in the paths below. A workspace that can't be
+reached → **503**; a server misconfigured for databricks → **500**.
 
 ### `GET /api/v1/run/{job_id}/status`
 
 Polls `GET /api/2.1/jobs/runs/get` and maps the Databricks `RunState` to a coarse status:
 
 ```jsonc
-{ "job_id": "3f9c…", "run_id": "55501", "status": "RUNNING", "message": "…", "schema_version": "1.11" }
+{ "job_id": "55501", "run_id": "55501", "status": "RUNNING", "message": "…", "schema_version": "1.11" }
 ```
 
-`status` ∈ `PENDING | RUNNING | COMPLETED | FAILED`. Unknown `job_id` → **404**. A transient
-Databricks blip returns the last-known stored status (never a 500) so a polling client survives it.
+`status` ∈ `PENDING | RUNNING | COMPLETED | FAILED`. Since `job_id` is the Databricks run id and
+there is no local store, an unrecognised `job_id` is decided by Databricks itself (a rejected id →
+**503**, a finished-but-failed run → `FAILED`), not a local 404. A transient Databricks outage →
+**503** (an honest failure, not a fabricated last-known status), so a polling client can retry.
 
 ### `GET /api/v1/run/{job_id}/results`
 
 Once `status == "COMPLETED"`, returns the **exact locked `/run` envelope** (`{status,
 schema_version, result, error}`) the Job wrote to `api/run_response.json` on the Unity Catalog
 output volume — byte-identical to a local run, so the dashboard drops it straight into the result
-pages. `409` if the run is not complete (with the current `status`); `404` unknown job, or completed
-but the envelope is not on the volume yet.
+pages. `409` if the run is not complete (with the current `status`); `404` if completed but the
+envelope is not on the volume yet; `503` if Databricks is unreachable (no cached fallback).
 
 ### `GET /api/v1/databricks/{catalogs,schemas,tables}`
 

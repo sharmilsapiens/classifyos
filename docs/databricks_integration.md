@@ -443,16 +443,17 @@ the async Databricks-Jobs flow. The API contract bumped `1.10 → 1.11` (additiv
   wrote to `api/run_response.json` on the UC output volume (via `StorageAdapter`) and returns it.
 - `GET /api/v1/databricks/{catalogs,schemas,tables}` → read-only Unity Catalog browser proxies for
   the UI data-source picker (user PAT via `X-Databricks-Token`).
-- **Persistent job state** in a `classifyos_jobs` table (SQLAlchemy Core), created at startup — the
-  existing MLflow Postgres by default (`MLFLOW_TRACKING_URI` when `postgresql://`) or
-  `CLASSIFYOS_JOBS_DSN` — so a FastAPI restart doesn't lose an in-flight run.
+- **Stateless job state** — the Databricks `run_id` IS the `job_id`, so `/status` and `/results`
+  poll Databricks directly with that id on every request. There is **no job store / database**; a
+  FastAPI restart loses nothing and Databricks is the only external dependency. *(The initial Step 6
+  cut used a `classifyos_jobs` Postgres table; it was removed — see `plan_tweak.md` #49.)*
 - **User's Databricks PAT** passed per-request in `X-Databricks-Token`, forwarded to the Job for UC
   data access, **never persisted**; the service token (`DATABRICKS_TOKEN`) is used only for the Jobs
   API calls.
 
-New backend files: `api/databricks.py` (REST client + status mapping + UC proxies), `api/jobs_store.py`
-(the job-state table + CRUD), `api/result_builder.py` (the canonical `/run` reshaper, extracted from
-`routes/run.py`), `api/routes/jobs.py`, `api/routes/databricks.py`. Frontend: the store polls the Job
+New backend files: `api/databricks.py` (REST client + status mapping + UC proxies),
+`api/result_builder.py` (the canonical `/run` reshaper, extracted from `routes/run.py`),
+`api/routes/jobs.py`, `api/routes/databricks.py`. Frontend: the store polls the Job
 (`AppStore.tsx`), Overview shows the "Training in progress…" spinner, and a Databricks (Unity Catalog)
 data-source tab (`components/upload/DatabricksSourcePanel.tsx`) browses catalogs/schemas/tables. The
 Job entrypoint is `notebooks/classifyos_job_runner.py` (tooling — runs the engine on the cluster and

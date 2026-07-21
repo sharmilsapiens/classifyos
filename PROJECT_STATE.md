@@ -4,8 +4,24 @@
 > A copy is uploaded to the ClassifyOS Claude Project knowledge after each update so the
 > planning/overseer chat stays in sync with the local repo.
 
-**Last updated:** 2026-07-20
-**Updated by:** Claude Code (**NEW — Databricks cluster picker: choose the training cluster from the UI
+**Last updated:** 2026-07-21
+**Updated by:** Claude Code (**NEW — Databricks job state made STATELESS: removed the Postgres job store.**
+For deployment we want zero managed databases — Databricks is the only external dependency. **(1)** The
+Databricks `run_id` returned by `jobs/runs/submit` **IS** the `job_id`: `routes/run.py` drops the
+`jobs_store.create_job()` call and returns `RunSubmission(job_id=run_id, run_id=run_id, status="PENDING")`.
+**(2)** `routes/jobs.py` `_refresh_status(job_id)` now polls `get_run_status(job_id)` directly — no store,
+no cached fallback. Unknown `job_id` is decided by Databricks (rejected id → **503**, finished-but-failed
+→ `FAILED`) instead of a fabricated **404**; a transient outage is an honest **503**. Auth→401 / misconfig→500
+mapping shared by `/status` + `/results`. **(3)** DELETED `backend/api/jobs_store.py` (SQLAlchemy Core
+`classifyos_jobs` table) and its `main.py` `init_db()` startup wiring; removed `CLASSIFYOS_JOBS_DSN` from
+`.env.example`. **SQLAlchemy stays in `requirements.txt`** — still used by the Postgres input source
+(`io/sql_source.py`, Interim 2b) + MLflow's backend store; only `jobs_store.py` is gone. **API contract
+UNCHANGED** — `RunSubmission` still `{job_id, run_id, status, schema_version}` (both fields present, now
+the same value); no `schema_version` bump. `test_api_jobs.py` simplified (store fixture/assertions removed,
+`test_job_state_survives_restart` deleted, the two unknown-job tests now assert the Databricks-poll 503).
+**Backend suite green** (jobs/run/health verified; full sweep confirmed). Engine + notebook UNTOUCHED.
+Reverses row #47's Part B "persistent job state" — logged as plan_tweak #48.)
+**Prior update (2026-07-20 — Databricks cluster picker):** Claude Code (**NEW — Databricks cluster picker: choose the training cluster from the UI
 at run time (ADDITIVE; env-var fallback preserved; engine + locked `/run` envelope UNTOUCHED).** Until
 now `DATABRICKS_JOB_CLUSTER_ID` (in `backend/.env`) was the only way to say which cluster a training
 Job runs on; the UI can now pick one. **(1) List endpoint.** New client fn

@@ -51,7 +51,10 @@ All set in `backend/.env` (gitignored). Template in `backend/.env.example`.
 | `DBRICKS_OUTPUT_VOLUME` | UC volume path for run artifacts and result envelope | `/Volumes/aiml_rd/classifyos/output` |
 | `MLFLOW_TRACKING_URI` | Set to `databricks` on cluster to use managed MLflow | `databricks` |
 | `MLFLOW_REGISTRY_URI` | Set to `databricks-uc` on cluster for UC model registry | `databricks-uc` |
-| `CLASSIFYOS_JOBS_DSN` | Postgres DSN for persistent job state (defaults to MLflow Postgres) | `postgresql://...` |
+
+> **Job state is stateless** — there is no database for job tracking. The Databricks `run_id`
+> returned by the submit IS the `job_id` the UI polls with, so status/results poll Databricks
+> directly. Databricks is the only external dependency (no Postgres, no `CLASSIFYOS_JOBS_DSN`).
 
 ---
 
@@ -80,8 +83,7 @@ aiml_rd  (catalog)
 |---|---|
 | `backend/api/databricks.py` | All Databricks REST calls: submit job, poll status, UC browser, `fetch_uc_file()` |
 | `backend/api/routes/run.py` | `POST /api/v1/run` — branches on `CLASSIFYOS_EXECUTION_BACKEND` |
-| `backend/api/routes/jobs.py` | `GET /run/{job_id}/status` + `/results` — polling + result fetch |
-| `backend/api/jobs_store.py` | Persistent job state in Postgres (`classifyos_jobs` table) |
+| `backend/api/routes/jobs.py` | `GET /run/{job_id}/status` + `/results` — polls Databricks directly (stateless; `job_id` == `run_id`) |
 | `backend/api/routes/databricks.py` | UC browser endpoints (`/catalogs`, `/schemas`, `/tables`, `/table-profile`) |
 | `backend/classifyos/io/storage.py` | `DatabricksVolumeStorage` — POSIX paths to UC volumes |
 | `backend/classifyos/io/sql_source.py` | `materialize_delta_source()` — Delta table → pandas snapshot |
@@ -99,8 +101,10 @@ aiml_rd  (catalog)
    - `libraries` = `[{"whl": DATABRICKS_JOB_WHEEL_PATH}]`
    - `base_parameters` = `{ run_config (JSON), user_token (PAT), wheel_path }`
 2. Databricks returns `run_id` immediately
-3. FastAPI generates a `job_id` (UUID), stores `{ job_id, run_id, status=PENDING }` in Postgres
-4. Returns `{ job_id, run_id, status }` to UI
+3. That `run_id` **IS** the `job_id` — there is no separate handle and no store. FastAPI returns
+   `{ job_id: <run_id>, run_id: <run_id>, status: PENDING }` to the UI (both fields carry the same
+   value for contract compatibility). The UI then polls `GET /run/{job_id}/status` and, once
+   `COMPLETED`, fetches `GET /run/{job_id}/results` — both poll Databricks directly with that id.
 
 ---
 
@@ -124,10 +128,15 @@ aiml_rd  (catalog)
 
 `GET /api/v1/run/{job_id}/results`:
 
-1. Polls Databricks for current job state
-2. If `COMPLETED`: calls `fetch_uc_file(DBRICKS_OUTPUT_VOLUME + "/api/run_response.json")`
+1. Polls Databricks for current job state (`job_id` == Databricks `run_id`, so this is a direct
+   `jobs/runs/get` call — there is **no intermediate store**; the same poll backs `/status`)
+2. If `COMPLETED`: calls `fetch_uc_file(DBRICKS_OUTPUT_VOLUME + "/api/{job_id}/run_response.json")`
 3. `fetch_uc_file` hits `GET {DATABRICKS_HOST}/api/2.0/fs/files{volume_path}` with service token
 4. Returns the JSON envelope to the frontend
+
+Because there is no cached job state, a transient Databricks outage on either endpoint is an honest
+`503` (never a fabricated last-known status), and an unrecognised `job_id` is decided by Databricks
+itself (a rejected id → `503`, a finished-but-failed run → `FAILED`) rather than a local `404`.
 
 **Known issue (in progress):** The notebook currently writes a simplified envelope
 `{ status, mlflow_run, metrics, best_model, artifacts_written }` — not the full locked

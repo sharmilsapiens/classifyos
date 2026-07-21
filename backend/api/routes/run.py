@@ -30,7 +30,6 @@ Design notes worth understanding as a reader:
 
 from __future__ import annotations
 
-import json
 from typing import Any
 
 from fastapi import APIRouter, Depends
@@ -49,7 +48,6 @@ from ..databricks import (
     submit_run,
 )
 from ..deps import get_storage, get_user_pat
-from ..jobs_store import create_job
 from ..models import RunConfig, RunResponse, RunSubmission
 from ..result_builder import build_run_result
 from ..serialize import safe_jsonify
@@ -88,11 +86,16 @@ async def run_endpoint(
 
 
 async def _submit_to_databricks(cfg: RunConfig, user_pat: str | None) -> Any:
-    """Databricks backend: submit a Job, persist the job row, return a :class:`RunSubmission`.
+    """Databricks backend: submit a Job and return a :class:`RunSubmission` (stateless — no store).
 
     The user's PAT is required (``X-Databricks-Token`` header) — a missing PAT is a clean 401 so the
-    UI can prompt for it. The PAT is forwarded to the Job for UC data access and is **never stored**;
-    only the (already client-supplied) RunConfig is persisted for audit/reconnect.
+    UI can prompt for it. The PAT is forwarded to the Job for UC data access and is **never stored**.
+
+    **Statelessness (§6.6 Step 6).** The Databricks ``run_id`` the submit returns IS the ``job_id``
+    the client polls with — there is no local job store. ``GET /run/{job_id}/status`` and
+    ``/results`` (``routes/jobs.py``) poll Databricks directly with that id on every request, so a
+    FastAPI restart loses nothing (nothing was persisted) and the only external dependency stays
+    Databricks itself.
     """
     if not user_pat or not user_pat.strip():
         return JSONResponse(
@@ -119,11 +122,10 @@ async def _submit_to_databricks(cfg: RunConfig, user_pat: str | None) -> Any:
     except DatabricksError as exc:  # DatabricksUnavailable + any other client failure
         return JSONResponse(status_code=503, content={"detail": f"Databricks unavailable: {exc}"})
 
+    # The Databricks run_id IS the job_id (both fields carry the same value for contract
+    # compatibility — the frontend uses job_id in the poll paths, run_id as the workspace handle).
     run_id = submitted["run_id"]
-    job_id = create_job(
-        databricks_run_id=run_id, status="PENDING", config_json=json.dumps(run_config)
-    )
-    return RunSubmission(job_id=job_id, run_id=run_id, status="PENDING")
+    return RunSubmission(job_id=run_id, run_id=run_id, status="PENDING")
 
 
 async def _run_locally(cfg: RunConfig, storage: StorageAdapter) -> Any:

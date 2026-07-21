@@ -258,9 +258,10 @@ working exactly as before, because the whole thing is switched on by one setting
   completed, `GET /run/{job_id}/results` returns the **exact same result envelope** the dashboard
   already knows — read back from the file the job wrote to the cluster's storage. So a Databricks run
   and a local run look identical to every result page.
-- **Never loses your job.** The web server is stateless, so it records each submitted job in a small
-  database table (`classifyos_jobs`, reusing the MLflow Postgres). If the server restarts mid-run, it
-  can still find and poll the job — verified by rebuilding the connection and re-reading a running job.
+- **Stateless — no database for jobs.** The web server keeps no job store: the Databricks `run_id`
+  IS the `job_id`, so `/status` and `/results` poll Databricks directly with that id on every
+  request. A server restart loses nothing (nothing was stored), and Databricks is the only external
+  dependency — no managed database to run for deployment.
 - **Your token, used carefully.** The user's Databricks personal access token is sent per-request in a
   header, forwarded to the job so it reads Unity Catalog data **as that user**, and is **never stored**.
   A separate service token is used only for the job-management calls.
