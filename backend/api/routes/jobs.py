@@ -36,6 +36,7 @@ from ..databricks import (
     execution_backend,
     fetch_uc_file,
     get_run_status,
+    get_task_run_id,
     get_user_email,
 )
 from ..deps import get_storage, get_user_pat
@@ -135,10 +136,13 @@ def get_results_endpoint(
         output_volume = os.environ.get("DBRICKS_OUTPUT_VOLUME", "").rstrip("/")
         if not output_volume:
             raise HTTPException(status_code=500, detail="DBRICKS_OUTPUT_VOLUME is not set")
-        # Rebuild the same {user_email}/{job_id} prefix the Job wrote under (see routes/run.py +
-        # the notebook). get_user_email never raises — a missing/rejected PAT → "unknown_user".
+        # The notebook namespaces output under {user_email}/{task_run_id}/ where task_run_id is what
+        # currentRunId() returns inside the notebook — different from the outer run_id FastAPI uses
+        # as job_id for a SUBMIT_RUN multi-task job. get_task_run_id bridges the gap with one extra
+        # /runs/get call. get_user_email never raises — a missing/rejected PAT → "unknown_user".
         user_email = get_user_email((user_pat or "").strip())
-        uc_path = f"{output_volume}/{user_email}/{job_id}/api/run_response.json"
+        task_run_id = get_task_run_id(job_id)
+        uc_path = f"{output_volume}/{user_email}/{task_run_id}/api/run_response.json"
         try:
             raw = fetch_uc_file(uc_path)
         except DatabricksUnavailable:

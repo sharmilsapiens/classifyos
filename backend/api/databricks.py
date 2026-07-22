@@ -288,6 +288,24 @@ def get_run_status(databricks_run_id: str) -> dict[str, str]:
     return {"status": status, "message": message}
 
 
+def get_task_run_id(outer_run_id: str) -> str:
+    """Return the first task's run_id for a SUBMIT_RUN job.
+
+    For ``SUBMIT_RUN`` jobs the outer ``run_id`` (what FastAPI receives from the submit and uses as
+    ``job_id``) differs from the task-level ``run_id`` that ``dbutils.notebook.entry_point...
+    currentRunId()`` returns inside the notebook. The notebook namespaces its output under the task
+    run_id; this function bridges the gap so ``GET /run/{job_id}/results`` can build the correct UC
+    path. Authenticated with the service token. Falls back to ``outer_run_id`` if the response
+    carries no tasks (e.g. a flat single-task run or an unexpected payload shape).
+    """
+    with _build_client(_service_token()) as client:
+        body = _request(client, "GET", _GET_RUN_PATH, params={"run_id": outer_run_id})
+    tasks = body.get("tasks") or []
+    if tasks and isinstance(tasks[0], dict) and tasks[0].get("run_id"):
+        return str(tasks[0]["run_id"])
+    return outer_run_id
+
+
 # --------------------------------------------------------------------------- #
 # Clusters — compute picker (authenticated with the SERVICE token)             #
 # --------------------------------------------------------------------------- #

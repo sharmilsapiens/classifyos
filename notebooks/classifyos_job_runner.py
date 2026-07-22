@@ -71,16 +71,19 @@ dbutils.widgets.text("user_email", "", "User email (namespaces output)")
 run_config = json.loads(dbutils.widgets.get("run_config"))
 user_token = dbutils.widgets.get("user_token")
 
-# Namespace output by the notebook's OWN Databricks run id — the value FastAPI polls with and
-# fetches results under — so GET /run/{job_id}/results always finds the envelope. FastAPI does NOT
-# pass job_id as a base_parameter, so the widget is empty on a FastAPI-submitted run; reading the
-# run id from the notebook context is the fix. The widget stays as a fallback for standalone runs.
+# Namespace output by the notebook's OWN Databricks task run id so FastAPI can locate the envelope.
+# currentRunId() returns the TASK-level run_id (not the outer submit run_id), potentially wrapped
+# as "RunId(858655363815036)" — strip non-digits to get just the number. FastAPI resolves the task
+# run_id from the outer run_id via GET /runs/get (get_task_run_id in routes/jobs.py) so the paths
+# always match regardless of which level of run_id each side sees.
+import re as _re
 try:
-    _ctx_run_id = str(
+    _raw_run_id = str(
         dbutils.notebook.entry_point
         .getDbutils().notebook().getContext()
         .currentRunId().get()
     )
+    _ctx_run_id = _re.sub(r'[^0-9]', '', _raw_run_id)  # strips "RunId(...)" wrapper → just digits
 except Exception:
     _ctx_run_id = ""
 
