@@ -36,8 +36,9 @@ from ..databricks import (
     execution_backend,
     fetch_uc_file,
     get_run_status,
+    get_user_email,
 )
-from ..deps import get_storage
+from ..deps import get_storage, get_user_pat
 from ..models import JobStatusResponse
 
 router = APIRouter(tags=["jobs"])
@@ -94,6 +95,7 @@ def get_status_endpoint(job_id: str) -> Any:
 def get_results_endpoint(
     job_id: str,
     storage: StorageAdapter = Depends(get_storage),
+    user_pat: str | None = Depends(get_user_pat),
 ) -> Any:
     """Return the locked ``/run`` envelope for a COMPLETED run (fetched from the UC output volume).
 
@@ -106,7 +108,10 @@ def get_results_endpoint(
       local run.
 
     ``job_id`` is the Databricks run id (stateless — no local store); the status poll can raise the
-    same 401 / 500 / 503 as ``/status``.
+    same 401 / 500 / 503 as ``/status``. In the databricks backend the caller's PAT
+    (``X-Databricks-Token``) is used to resolve the same ``{user_email}`` prefix the Job wrote
+    under, so the fetch path matches; a missing PAT falls back to ``"unknown_user"`` (the run's
+    envelope will then only be found if it, too, landed under that fallback).
     """
     try:
         status, message = _refresh_status(job_id)
@@ -130,7 +135,10 @@ def get_results_endpoint(
         output_volume = os.environ.get("DBRICKS_OUTPUT_VOLUME", "").rstrip("/")
         if not output_volume:
             raise HTTPException(status_code=500, detail="DBRICKS_OUTPUT_VOLUME is not set")
-        uc_path = f"{output_volume}/api/{job_id}/run_response.json"
+        # Rebuild the same {user_email}/{job_id} prefix the Job wrote under (see routes/run.py +
+        # the notebook). get_user_email never raises — a missing/rejected PAT → "unknown_user".
+        user_email = get_user_email((user_pat or "").strip())
+        uc_path = f"{output_volume}/{user_email}/{job_id}/api/run_response.json"
         try:
             raw = fetch_uc_file(uc_path)
         except DatabricksUnavailable:

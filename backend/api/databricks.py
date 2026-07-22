@@ -31,6 +31,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 from typing import Any
 
 import httpx
@@ -45,6 +46,8 @@ _SCHEMAS_PATH = "/api/2.1/unity-catalog/schemas"
 _TABLES_PATH = "/api/2.1/unity-catalog/tables"
 #: Compute 2.0 — list the workspace's clusters for the run-config cluster picker (user's PAT).
 _CLUSTERS_PATH = "/api/2.0/clusters/list"
+#: SCIM 2.0 — "who am I" for the requesting user's PAT; ``userName`` is their account email.
+_SCIM_ME_PATH = "/api/2.0/preview/scim/v2/Me"
 
 #: The four public job states the API surfaces (mapped from Databricks' RunState).
 JOB_STATUSES = ("PENDING", "RUNNING", "COMPLETED", "FAILED")
@@ -161,7 +164,10 @@ def _request(client: httpx.Client, method: str, path: str, **kwargs: Any) -> Any
 
 
 def _submit_payload(
-    run_config: dict[str, Any], user_pat: str, cluster_id: str | None = None
+    run_config: dict[str, Any],
+    user_pat: str,
+    cluster_id: str | None = None,
+    user_email: str | None = None,
 ) -> dict[str, Any]:
     """Build the ``jobs/runs/submit`` body: install the wheel, run the entrypoint notebook.
 
@@ -174,6 +180,12 @@ def _submit_payload(
     overrides the ``DATABRICKS_JOB_CLUSTER_ID`` env var. When ``cluster_id`` is absent/empty the env
     var is used, exactly as before (so server-only deployments are unchanged). If neither is set a
     :class:`DatabricksConfigError` is raised, preserving the existing behaviour.
+
+    Output isolation (additive): ``user_email`` (already resolved + sanitized by
+    :func:`get_user_email`) rides along as a ``base_parameter`` so the notebook namespaces its
+    output under ``{DBRICKS_OUTPUT_VOLUME}/{user_email}/{job_id}/`` — the same prefix
+    ``GET /run/{job_id}/results`` rebuilds when fetching the envelope. Falls back to
+    ``"unknown_user"`` so a run is never blocked on email resolution.
     """
     notebook_path = (os.environ.get("DATABRICKS_JOB_NOTEBOOK_PATH") or "").strip()
     # A request-supplied cluster overrides the env default; fall back to the env var otherwise.
@@ -197,6 +209,7 @@ def _submit_payload(
                 "run_config": json.dumps(run_config),
                 "user_token": user_pat,
                 "wheel_path": wheel_path,
+                "user_email": (user_email or "").strip() or "unknown_user",
             },
         },
     }
@@ -212,17 +225,22 @@ def _submit_payload(
 
 
 def submit_run(
-    run_config: dict[str, Any], user_pat: str, cluster_id: str | None = None
+    run_config: dict[str, Any],
+    user_pat: str,
+    cluster_id: str | None = None,
+    user_email: str | None = None,
 ) -> dict[str, Any]:
     """Submit a one-off Databricks Job for ``run_config``; return ``{"run_id": "<id>"}``.
 
     Authenticated with the service token; the user's PAT rides along as a task parameter. When
     ``cluster_id`` is a non-empty id (from the UI cluster picker) the Job runs on that cluster,
-    otherwise the ``DATABRICKS_JOB_CLUSTER_ID`` env var is used (see :func:`_submit_payload`). Raises
-    :class:`DatabricksUnavailable` if the workspace can't be reached, :class:`DatabricksAuthError`
-    on a rejected service token, or :class:`DatabricksConfigError` on missing config.
+    otherwise the ``DATABRICKS_JOB_CLUSTER_ID`` env var is used (see :func:`_submit_payload`).
+    ``user_email`` (from :func:`get_user_email`) is forwarded so the notebook namespaces its output
+    per user. Raises :class:`DatabricksUnavailable` if the workspace can't be reached,
+    :class:`DatabricksAuthError` on a rejected service token, or :class:`DatabricksConfigError` on
+    missing config.
     """
-    payload = _submit_payload(run_config, user_pat, cluster_id)
+    payload = _submit_payload(run_config, user_pat, cluster_id, user_email)
     with _build_client(_service_token()) as client:
         body = _request(client, "POST", _SUBMIT_PATH, json=payload)
     run_id = body.get("run_id")
@@ -426,3 +444,49 @@ def _require_pat(user_pat: str | None) -> str:
     if not user_pat or not user_pat.strip():
         raise DatabricksAuthError("a Databricks PAT is required (X-Databricks-Token header)")
     return user_pat.strip()
+
+
+# --------------------------------------------------------------------------- #
+# User identity — resolve the requesting user's email for output namespacing   #
+# --------------------------------------------------------------------------- #
+
+#: Characters allowed verbatim in a single output-folder segment; anything else (notably ``@`` and
+#: any path separators / whitespace) collapses to ``_`` so an email is safe as a UC-volume folder.
+_EMAIL_UNSAFE_RE = re.compile(r"[^A-Za-z0-9._-]+")
+
+
+def _sanitize_email_for_path(email: str) -> str:
+    """Make ``email`` safe as a single UC-volume folder segment.
+
+    Replaces every run of characters outside ``[A-Za-z0-9._-]`` (notably ``@`` and any path
+    separators) with a single ``_`` and trims leading/trailing separators. Deterministic, so the
+    value FastAPI passes to the notebook at submit and the value it re-resolves when fetching
+    results always agree (both build the same ``{user_email}/{job_id}`` prefix).
+    """
+    cleaned = _EMAIL_UNSAFE_RE.sub("_", (email or "").strip()).strip("._-")
+    return cleaned or "unknown_user"
+
+
+def get_user_email(user_pat: str) -> str:
+    """Resolve the Databricks user's email from their PAT via SCIM, for output namespacing.
+
+    Calls ``GET {DATABRICKS_HOST}/api/2.0/preview/scim/v2/Me`` with the user's PAT and reads
+    ``userName`` (the account email in Databricks), returning it sanitized for use as a folder
+    name (see :func:`_sanitize_email_for_path`).
+
+    On **any** failure — a missing/empty PAT, a rejected credential, an unreachable workspace, a
+    missing ``userName`` field, or a misconfigured host — returns ``"unknown_user"`` rather than
+    raising. Output namespacing must never block a run, so the fallback keeps the pipeline going
+    (the run simply lands under the shared ``unknown_user`` folder).
+    """
+    try:
+        pat = (user_pat or "").strip()
+        if not pat:
+            return "unknown_user"
+        with _build_client(pat) as client:
+            body = _request(client, "GET", _SCIM_ME_PATH)
+        user_name = body.get("userName") if isinstance(body, dict) else None
+        return _sanitize_email_for_path(str(user_name)) if user_name else "unknown_user"
+    except Exception:  # noqa: BLE001 — email resolution must never block a run
+        logger.warning("could not resolve user email from PAT; using 'unknown_user'")
+        return "unknown_user"

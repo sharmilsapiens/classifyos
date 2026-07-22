@@ -45,6 +45,7 @@ from ..databricks import (
     DatabricksConfigError,
     DatabricksError,
     execution_backend,
+    get_user_email,
     submit_run,
 )
 from ..deps import get_storage, get_user_pat
@@ -110,9 +111,13 @@ async def _submit_to_databricks(cfg: RunConfig, user_pat: str | None) -> Any:
     # notebook rebuilds via build_config (which would reject the unknown key), so the base_parameters
     # stay byte-identical to before this field existed and the deployed notebook needs no change.
     run_config = cfg.model_dump(by_alias=True, exclude={"cluster_id"})
+    # Resolve the requesting user's email (via SCIM, using their PAT) so the Job namespaces its
+    # output under {output_volume}/{user_email}/{job_id}/. Never blocks a run: get_user_email
+    # returns "unknown_user" on any failure. Threadpooled — it is a blocking REST call.
+    user_email = await run_in_threadpool(get_user_email, user_pat.strip())
     try:
         submitted = await run_in_threadpool(
-            submit_run, run_config, user_pat.strip(), cfg.cluster_id
+            submit_run, run_config, user_pat.strip(), cfg.cluster_id, user_email
         )
     except DatabricksAuthError as exc:
         return JSONResponse(status_code=401, content={"detail": str(exc)})

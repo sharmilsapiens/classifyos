@@ -74,12 +74,18 @@ def test_submit_returns_job_and_forwards_pat(api_client, dbx_env, monkeypatch) -
     seen = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
+        # FastAPI resolves the user's email (SCIM, with their PAT) before submitting, to namespace
+        # the Job's output. The SCIM call uses the USER PAT, never the service token.
+        if request.url.path == "/api/2.0/preview/scim/v2/Me":
+            assert request.headers["Authorization"] == "Bearer user-pat-xyz"
+            return httpx.Response(200, json={"userName": "user@example.com"})
         assert request.url.path == "/api/2.1/jobs/runs/submit"
         # Jobs API is authenticated with the SERVICE token, never the user PAT.
         assert request.headers["Authorization"] == "Bearer svc-token"
         body = json.loads(request.content)
         params = body["tasks"][0]["notebook_task"]["base_parameters"]
         seen["user_token"] = params["user_token"]
+        seen["user_email"] = params["user_email"]
         seen["run_config"] = json.loads(params["run_config"])
         assert body["tasks"][0]["libraries"] == [
             {"whl": "/Volumes/main/classifyos/libs/classifyos-1.0.0-py3-none-any.whl"}
@@ -103,6 +109,8 @@ def test_submit_returns_job_and_forwards_pat(api_client, dbx_env, monkeypatch) -
     assert seen["run_config"]["target"] == "will_lapse"
     # The PAT is never echoed back into the submitted run config.
     assert "user-pat-xyz" not in json.dumps(seen["run_config"])
+    # The resolved user email is forwarded, sanitized for use as an output folder segment.
+    assert seen["user_email"] == "user_example.com"
 
 
 def test_submit_cluster_id_overrides_env(api_client, dbx_env, monkeypatch) -> None:
@@ -116,6 +124,8 @@ def test_submit_cluster_id_overrides_env(api_client, dbx_env, monkeypatch) -> No
     seen = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/2.0/preview/scim/v2/Me":
+            return httpx.Response(200, json={"userName": "user@example.com"})
         body = json.loads(request.content)
         task = body["tasks"][0]
         seen["cluster"] = task["existing_cluster_id"]
@@ -138,6 +148,8 @@ def test_submit_falls_back_to_env_cluster(api_client, dbx_env, monkeypatch) -> N
     seen = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/2.0/preview/scim/v2/Me":
+            return httpx.Response(200, json={"userName": "user@example.com"})
         body = json.loads(request.content)
         seen["cluster"] = body["tasks"][0]["existing_cluster_id"]
         return httpx.Response(200, json={"run_id": 78})
@@ -196,6 +208,8 @@ def _submit(api_client, monkeypatch, states: list[dict]) -> str:
     calls = {"i": 0}
 
     def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/2.0/preview/scim/v2/Me":
+            return httpx.Response(200, json={"userName": "user@example.com"})
         if request.url.path.endswith("/jobs/runs/submit"):
             return httpx.Response(200, json={"run_id": 777})
         if request.url.path.endswith("/jobs/runs/get"):
@@ -265,7 +279,7 @@ def test_status_unknown_job_polls_databricks(api_client, dbx_env, monkeypatch) -
 def test_results_completed_returns_envelope(
     api_client, dbx_env, monkeypatch
 ) -> None:
-    """Once COMPLETED, /results fetches the per-job envelope from the UC output volume."""
+    """Once COMPLETED, /results fetches the per-USER, per-job envelope from the UC output volume."""
     job_id = _submit(
         api_client,
         monkeypatch,
@@ -278,15 +292,27 @@ def test_results_completed_returns_envelope(
         "error": None,
     }
     # In Databricks mode the endpoint calls fetch_uc_file (a bare httpx.get that bypasses
-    # _build_client). Patch it directly so no real network call is made.
+    # _build_client). Patch it directly so no real network call is made, and capture the path so we
+    # can assert it carries the {user_email}/{job_id} prefix the Job wrote under.
     monkeypatch.setenv("DBRICKS_OUTPUT_VOLUME", "/Volumes/aiml_rd/classifyos/output")
-    monkeypatch.setattr(
-        "api.routes.jobs.fetch_uc_file",
-        lambda path: json.dumps(envelope).encode(),
+    seen: dict[str, str] = {}
+
+    def _fake_fetch(path: str) -> bytes:
+        seen["path"] = path
+        return json.dumps(envelope).encode()
+
+    monkeypatch.setattr("api.routes.jobs.fetch_uc_file", _fake_fetch)
+    # The PAT lets /results resolve the same email (via the mocked SCIM in _submit's handler) the
+    # Job namespaced its output under, so the fetch path matches what the notebook wrote.
+    resp = api_client.get(
+        f"/api/v1/run/{job_id}/results", headers={"X-Databricks-Token": "user-pat"}
     )
-    resp = api_client.get(f"/api/v1/run/{job_id}/results")
     assert resp.status_code == 200, resp.text
     assert resp.json() == envelope
+    assert (
+        seen["path"]
+        == "/Volumes/aiml_rd/classifyos/output/user_example.com/777/api/run_response.json"
+    )
 
 
 def test_results_not_complete_is_409(api_client, dbx_env, monkeypatch) -> None:

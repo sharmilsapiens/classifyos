@@ -54,7 +54,10 @@ except ModuleNotFoundError:
 
 # MAGIC %md
 # MAGIC ## Cell 2 — read the Job parameters
-# MAGIC `run_config` (JSON) + `user_token` arrive as notebook `base_parameters` from the submit call.
+# MAGIC `run_config` (JSON) + `user_token` + `user_email` arrive as notebook `base_parameters` from
+# MAGIC the submit call. The output namespace `job_id` is read from the notebook's own Databricks run
+# MAGIC context (NOT a widget) so it always equals the id FastAPI polls with — the fix for the
+# MAGIC "results never reach the dashboard" path mismatch.
 
 # COMMAND ----------
 
@@ -62,9 +65,29 @@ import json
 
 dbutils.widgets.text("run_config", "", "RunConfig JSON")
 dbutils.widgets.text("user_token", "", "User Databricks PAT")
+dbutils.widgets.text("job_id", "", "Databricks run id (fallback; namespaces output)")
+dbutils.widgets.text("user_email", "", "User email (namespaces output)")
 
 run_config = json.loads(dbutils.widgets.get("run_config"))
 user_token = dbutils.widgets.get("user_token")
+
+# Namespace output by the notebook's OWN Databricks run id — the value FastAPI polls with and
+# fetches results under — so GET /run/{job_id}/results always finds the envelope. FastAPI does NOT
+# pass job_id as a base_parameter, so the widget is empty on a FastAPI-submitted run; reading the
+# run id from the notebook context is the fix. The widget stays as a fallback for standalone runs.
+try:
+    _ctx_run_id = str(
+        dbutils.notebook.entry_point
+        .getDbutils().notebook().getContext()
+        .currentRunId().get()
+    )
+except Exception:
+    _ctx_run_id = ""
+
+job_id = _ctx_run_id or dbutils.widgets.get("job_id").strip() or "local"
+# FastAPI resolves the user's email (SCIM, using their PAT) and forwards it here so each user's runs
+# live under their own folder; "unknown_user" is the fallback for standalone runs.
+user_email = dbutils.widgets.get("user_email").strip() or "unknown_user"
 
 # COMMAND ----------
 
@@ -114,6 +137,13 @@ from classifyos.config import build_config  # noqa: E402
 from classifyos.io.storage import get_default_storage  # noqa: E402
 from classifyos.runner import ModelRunner  # noqa: E402
 
+# Namespace ALL of this run's output under {output_volume}/{user_email}/{job_id}/ so runs are
+# isolated per user AND per run (concurrent runs never overwrite each other), and so the envelope
+# lands exactly where GET /run/{job_id}/results fetches it. Set BEFORE get_default_storage(), which
+# reads DBRICKS_OUTPUT_VOLUME at construction time.
+OUTPUT_BASE = f"{os.environ.get('DBRICKS_OUTPUT_VOLUME', '').rstrip('/')}/{user_email}/{job_id}"
+os.environ["DBRICKS_OUTPUT_VOLUME"] = OUTPUT_BASE
+
 _cfg = dict(run_config)
 engine_config = build_config(
     input_file=_cfg.pop("input_file"),
@@ -129,9 +159,9 @@ runner.run()
 
 # MAGIC %md
 # MAGIC ## Cell 5 — write the locked `/run` envelope to the output volume
-# MAGIC Reshape with the canonical `build_run_result` (identical to the local `/run` route) and write
-# MAGIC it to `api/run_response.json` on the OUTPUT volume — exactly the key
-# MAGIC `GET /api/v1/run/{job_id}/results` fetches through the StorageAdapter.
+# MAGIC Write it to `api/run_response.json` **relative to the namespaced output root** set in Cell 4,
+# MAGIC i.e. `{output_volume}/{user_email}/{job_id}/api/run_response.json` — exactly the path
+# MAGIC `GET /api/v1/run/{job_id}/results` rebuilds (same `{user_email}/{job_id}` prefix) and fetches.
 
 # COMMAND ----------
 
