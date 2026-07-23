@@ -17,7 +17,7 @@ you need. Live project status lives at the repo root: [`PROJECT_STATE.md`](../PR
 - [runbooks/API_RUNBOOK.md](runbooks/API_RUNBOOK.md) — operator's manual for the FastAPI layer.
 
 ## 📦 Deployment (AKS)
-- `deployment/deploy.md` — Azure Kubernetes Service deploy guide *(added together with the Docker/K8s files)*.
+- [deployment/deploy.md](deployment/deploy.md) — Azure Kubernetes Service deployment guide (the DevOps handoff: images, env vars, health probes, example manifests, and decisions for DevOps).
 
 ## ☁️ Databricks
 - [databricks/ClassifyOS_Databricks_Enhancement_Guide.md](databricks/ClassifyOS_Databricks_Enhancement_Guide.md) — storage & compute enhancement guide.

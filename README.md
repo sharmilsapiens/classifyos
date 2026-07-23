@@ -14,7 +14,7 @@ Quick links:
 - **New here?** → [docs/getting-started/FIRST_RUN.md](docs/getting-started/FIRST_RUN.md)
 - **Run the full system** → [docs/getting-started/RUN_FULL_SYSTEM.md](docs/getting-started/RUN_FULL_SYSTEM.md)
 - **Operate the engine / API** → [docs/runbooks/](docs/runbooks/)
-- **Deploy on AKS** → `docs/deployment/deploy.md` *(added with the deploy files)*
+- **Deploy on AKS** → [docs/deployment/deploy.md](docs/deployment/deploy.md)
 - **Live status** → [PROJECT_STATE.md](PROJECT_STATE.md)
 
 ## 🗂️ Repo layout
