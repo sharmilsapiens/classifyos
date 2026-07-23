@@ -118,21 +118,18 @@ os.environ["MLFLOW_REGISTRY_URI"] = "databricks-uc"
 if user_token:
     os.environ["DATABRICKS_TOKEN"] = user_token
 
-# Databricks managed MLflow requires the experiment to be an ABSOLUTE workspace path
-# (e.g. /Users/<email>/classifyos); a bare name like "classifyos" makes set_experiment() fail with
-# INVALID_PARAMETER_VALUE. If MLflow logging is enabled and the configured experiment is not
-# already absolute, nest it under the caller's workspace home (resolved via Spark), falling back to
-# /Shared. The engine already treats MLflow logging as best-effort (report-only) — this just lets it
-# actually succeed on the cluster instead of being swallowed as "MLflow logging failed".
+# Databricks managed MLflow requires the experiment to be an ABSOLUTE workspace path; a bare name
+# like "classifyos" fails set_experiment() with INVALID_PARAMETER_VALUE. If logging is enabled and
+# the configured experiment isn't already absolute, nest it under /Shared — which always exists and
+# is writable by the cluster identity. We deliberately do NOT use /Users/<current_user>: this
+# cluster runs as a service principal, so current_user() is e.g. "AIML_RD" and /Users/AIML_RD does
+# not exist (the earlier NOT_FOUND). /Shared avoids guessing an identity's home dir. Report-only:
+# a bad path only means "no MLflow record", never a failed run.
 _mlflow_cfg = run_config.get("mlflow")
 if isinstance(_mlflow_cfg, dict) and _mlflow_cfg.get("enabled"):
     _exp = str(_mlflow_cfg.get("experiment") or "classifyos").strip()
     if not _exp.startswith("/"):
-        try:
-            _me = spark.sql("SELECT current_user()").first()[0]
-            _mlflow_cfg["experiment"] = f"/Users/{_me}/{_exp}"
-        except Exception:
-            _mlflow_cfg["experiment"] = f"/Shared/{_exp}"
+        _mlflow_cfg["experiment"] = f"/Shared/{_exp}"
     print("MLflow experiment:", _mlflow_cfg["experiment"])
 
 # COMMAND ----------
