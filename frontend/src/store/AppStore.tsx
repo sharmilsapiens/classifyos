@@ -179,7 +179,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
       if (status === "COMPLETED") {
         stopPolling()
         try {
-          const envelope = await api.getRunResults(jobId)
+          // Forward the user's PAT so the server resolves the SAME {user_email} namespace the Job
+          // wrote under (else it falls back to unknown_user → 404 "not available yet").
+          const envelope = await api.getRunResults(jobId, stateRef.current.databricksPat.trim())
           setState((s) => ({
             ...s,
             running: false,

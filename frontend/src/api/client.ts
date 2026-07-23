@@ -202,9 +202,16 @@ export async function getRunStatus(jobId: string): Promise<JobStatusResponse> {
  * GET /run/{job_id}/results — fetch a COMPLETED Job's result envelope (validated through the same
  * parser as a local /run, so it drops straight into the result pages). A 409 (not complete yet)
  * surfaces as an ApiError — the store only calls this once status is COMPLETED.
+ *
+ * The user's PAT MUST be sent as `X-Databricks-Token`: the server re-resolves it (via SCIM) to the
+ * same `{user_email}` namespace the Job wrote its envelope under, so the fetch path matches. Without
+ * it the server falls back to `unknown_user` and the envelope is never found (a 404 that surfaces as
+ * "results envelope is not available yet").
  */
-export async function getRunResults(jobId: string): Promise<RunResponse> {
-  const res = await request(`${API_BASE}/run/${encodeURIComponent(jobId)}/results`)
+export async function getRunResults(jobId: string, pat: string): Promise<RunResponse> {
+  const res = await request(`${API_BASE}/run/${encodeURIComponent(jobId)}/results`, {
+    headers: { "X-Databricks-Token": pat },
+  })
   const body = await handleJson<unknown>(res)
   return parseRunResponse(body)
 }
