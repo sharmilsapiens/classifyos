@@ -98,7 +98,9 @@ user_email = dbutils.widgets.get("user_email").strip() or "unknown_user"
 # MAGIC ## Cell 3 — environment + import bootstrap
 # MAGIC Select `DatabricksVolumeStorage` (Step 1) and the managed MLflow tracking server (Step 3);
 # MAGIC forward the user's PAT so any token-based Unity Catalog access runs as the user. Then make
-# MAGIC the `api` package importable (this notebook runs from a Databricks Repo checkout).
+# MAGIC the `api` package importable. The bootstrap walks up from the notebook's own Workspace path
+# MAGIC (via dbutils) rather than `Path.cwd()` (which is `/databricks/driver`, not the repo) so
+# MAGIC `api.*` is reliably found when the notebook runs from a Databricks Repo checkout.
 
 # COMMAND ----------
 
@@ -116,13 +118,25 @@ if user_token:
     os.environ["DATABRICKS_TOKEN"] = user_token
 
 # Make the `api` package importable. In a Databricks Repo the repo files sit next to this
-# notebook; walk up from the working directory to find the repo's backend/ dir.
+# notebook; walk up from the working directory AND from the notebook's workspace path to find
+# the repo's backend/ dir. Path.cwd() on a cluster is /databricks/driver (not the repo), so
+# the notebook path from dbutils is the reliable anchor.
 if not any((Path(p) / "api" / "result_builder.py").exists() for p in sys.path):
-    here = Path.cwd()
-    for candidate in [here, *here.parents]:
-        backend_dir = candidate / "backend"
-        if (backend_dir / "api" / "result_builder.py").exists():
-            sys.path.insert(0, str(backend_dir))
+    _search_roots = [Path.cwd()]
+    try:
+        _nb_ws = dbutils.notebook.entry_point.getDbutils().notebook().getContext().notebookPath().get()
+        _search_roots.append(Path(_nb_ws).parent)
+    except Exception:
+        pass
+    _found = False
+    for _here in _search_roots:
+        for _candidate in [_here, *_here.parents]:
+            _backend = _candidate / "backend"
+            if (_backend / "api" / "result_builder.py").exists():
+                sys.path.insert(0, str(_backend))
+                _found = True
+                break
+        if _found:
             break
 
 # COMMAND ----------
