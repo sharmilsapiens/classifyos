@@ -162,38 +162,35 @@ runner.run()
 
 # MAGIC %md
 # MAGIC ## Cell 5 — write the locked `/run` envelope to the output volume
-# MAGIC Write it to `api/run_response.json` **relative to the namespaced output root** set in Cell 4,
-# MAGIC i.e. `{output_volume}/{user_email}/{job_id}/api/run_response.json` — exactly the path
-# MAGIC `GET /api/v1/run/{job_id}/results` rebuilds (same `{user_email}/{job_id}` prefix) and fetches.
+# MAGIC Builds the envelope via `api.result_builder.build_run_result` (the SAME reshaper the
+# MAGIC synchronous `/run` route uses) and writes it to `api/run_response.json` **relative to the
+# MAGIC namespaced output root** set in Cell 4, i.e.
+# MAGIC `{output_volume}/{user_email}/{job_id}/api/run_response.json` — exactly the path
+# MAGIC `GET /api/v1/run/{job_id}/results` rebuilds and fetches. The envelope shape is byte-identical
+# MAGIC to a local `/run` response (`{status, schema_version, result, error}`) so the dashboard drops
+# MAGIC it straight into the existing result pages without any reshaping on the FastAPI side.
 
 # COMMAND ----------
 
-import json, numpy as np, pandas as pd  # noqa: E402
+import json  # noqa: E402
+
+from api.result_builder import build_run_result
+from api.models import RunResponse
+from api.serialize import safe_jsonify
 
 RESULT_ENVELOPE_KEY = "api/run_response.json"
 
-def _serializable(obj):
-    if isinstance(obj, (np.integer,)): return int(obj)
-    if isinstance(obj, (np.floating,)): return float(obj)
-    if isinstance(obj, np.ndarray): return obj.tolist()
-    if isinstance(obj, pd.DataFrame): return obj.to_dict(orient="records")
-    return str(obj)
-
-# Write raw runner state — FastAPI's GET /run/{job_id}/results reshapes this
-envelope = {
-    "status": "ok",
-    "mlflow_run": getattr(runner, "mlflow_run_", None),
-    "metrics": _serializable(getattr(runner, "metrics_df_", pd.DataFrame())),
-    "best_model": getattr(runner, "best_model_name_", None),
-    "artifacts_written": True,
-}
+result = build_run_result(runner, storage)
+response = RunResponse(status="ok", result=safe_jsonify(result))
+envelope = response.model_dump(by_alias=True)
 
 out_path = storage.path_for(RESULT_ENVELOPE_KEY, output=True)
 os.makedirs(os.path.dirname(out_path), exist_ok=True)
 with open(out_path, "w", encoding="utf-8") as fh:
-    json.dump(envelope, fh, default=_serializable)
+    json.dump(envelope, fh)
 
 print("Wrote result envelope to", out_path)
-if hasattr(runner, "metrics_df_"):
+print("schema_version:", envelope.get("schema_version"))
+if hasattr(runner, "metrics_df_") and runner.metrics_df_ is not None:
     display(runner.metrics_df_.sort_values("f1_weighted", ascending=False))
 print("MLflow run:", getattr(runner, "mlflow_run_", None))
