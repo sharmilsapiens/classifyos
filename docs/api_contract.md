@@ -726,34 +726,53 @@ workspace → **503**. Pure proxies — no ML, no persistence, PAT never stored.
 
 ### `GET /api/v1/databricks/table-profile?catalog=&schema=&table=`
 
-Fetches the chosen Unity Catalog table's **schema** (via the get-a-table endpoint
-`GET /api/2.1/unity-catalog/tables/{catalog}.{schema}.{table}`, authenticated with the user's PAT)
-and reshapes its `columns` into the **same `InspectProfile` shape a CSV `/upload` returns** — so the
-dashboard reuses its existing column picker (target dropdown + feature selector) with **no manual
-column entry** and no branching. This rides the upload/profile side of the API (like `/upload` and
-`/input-sources/select`), NOT the locked `/run` envelope, so it carries **no `schema_version`** and
-is purely additive.
+Profiles the chosen Unity Catalog table and returns the **same `InspectProfile` shape a CSV
+`/upload` returns** — so the dashboard reuses its existing column picker, **Data Profile page**, and
+**Configuration feature picker** with **no manual column entry and no branching**. This rides the
+upload/profile side of the API (like `/upload` and `/input-sources/select`), NOT the locked `/run`
+envelope, so it carries **no `schema_version`** and is purely additive.
 
-The column groups are derived from each column's Unity Catalog `type_name` (verified against the
-Databricks SDK `ColumnTypeName` enum): `BYTE`/`SHORT`/`INT`/`LONG`/`FLOAT`/`DOUBLE`/`DECIMAL` →
-`numeric_cols`; `DATE`/`TIMESTAMP`/`TIMESTAMP_NTZ` → `datetime_cols`; `BOOLEAN` → `binary_cols`
-(and grouped categorical); everything else (`STRING`, `CHAR`, `BINARY`, `ARRAY`/`STRUCT`/`MAP`,
-`VARIANT`, …) → `categorical_cols`. Row-level statistics (`n_rows`, `n_missing`, `sample`,
-`class_distribution`) are **not available from schema-only metadata** — no data is read here — so
-`n_rows` is `0`, `n_missing` is `0` per column, and `sample` is `[]`; the real per-column stats are
-computed on the cluster when the run reads the Delta table.
+**Two data paths, ONE response shape:**
+
+- **Sampled (preferred).** When a SQL warehouse is configured (`DATABRICKS_SQL_WAREHOUSE_ID`, or the
+  `<id>` parsed from `DATABRICKS_HTTP_PATH`) and reachable, the endpoint reads a **bounded sample**
+  of the table's real rows via the SQL Statement Execution API (`POST /api/2.0/sql/statements`,
+  `SELECT * FROM catalog.schema.table` with `row_limit`, authenticated with the **caller's PAT**) and
+  runs the SAME `inspect_dataframe` profiling a CSV upload does. The response therefore carries the
+  **full profile** — real `n_rows`/`n_missing`/`sample`, data-driven column groups, **and** the
+  Data-Profile blocks (`column_profiles` + `correlation`). Row cap:
+  `CLASSIFYOS_DBRICKS_PROFILE_SAMPLE_ROWS` (default 10,000); `n_rows` is the number of rows
+  **profiled** (the sample), not necessarily the whole table. Display-only — reads only; the `/run`
+  still reads the FULL table on the cluster.
+- **Schema-only (fallback).** If no warehouse is configured, or the sample read fails for any reason
+  (unreachable, a huge/slow/unreadable table), the endpoint degrades to the Unity Catalog schema
+  alone (the get-a-table endpoint `GET /api/2.1/unity-catalog/tables/{catalog}.{schema}.{table}`):
+  `columns`/`dtypes` + type-derived groups, `n_rows` `0`, `n_missing` `0`, `sample` `[]`, and **no**
+  Data-Profile blocks. The picker is never blocked and no stats are fabricated.
+
+The column groups are derived from the **sampled values** (sampled path) or each column's Unity
+Catalog `type_name` (schema-only path, verified against the Databricks SDK `ColumnTypeName` enum):
+`BYTE`/`SHORT`/`INT`/`LONG`/`FLOAT`/`DOUBLE`/`DECIMAL` → `numeric_cols`;
+`DATE`/`TIMESTAMP`/`TIMESTAMP_NTZ` → `datetime_cols`; `BOOLEAN` → `binary_cols` (and grouped
+categorical); everything else (`STRING`, `CHAR`, `BINARY`, `ARRAY`/`STRUCT`/`MAP`, `VARIANT`, …) →
+`categorical_cols`.
 
 ```jsonc
+// sampled path (a SQL warehouse was reachable) — the full /upload InspectProfile over real UC data:
 {
   "columns": ["age", "region", "has_agent", "policy_start"],
-  "dtypes": { "age": "int", "region": "string", "has_agent": "boolean", "policy_start": "timestamp" },
+  "dtypes": { "age": "int64", "region": "object", "has_agent": "object", "policy_start": "object" },
   "numeric_cols": ["age"],
-  "categorical_cols": ["region", "has_agent"],  // BOOLEAN groups categorical too
-  "binary_cols": ["has_agent"],                 // BOOLEAN is the one schema-known 2-valued type
+  "categorical_cols": ["region", "has_agent"],  // a two-value column groups categorical too
+  "binary_cols": ["has_agent"],
   "datetime_cols": ["policy_start"],
-  "n_rows": 0,                                  // unavailable from schema-only metadata
-  "n_missing": { "age": 0, "region": 0, "has_agent": 0, "policy_start": 0 },
-  "sample": [],
+  "n_rows": 10000,                              // rows PROFILED (the capped sample), not the table total
+  "n_missing": { "age": 0, "region": 3, "has_agent": 0, "policy_start": 0 },
+  "sample": [ { "age": 34, "region": "north", "has_agent": "true", "policy_start": "2019-10-14…" } ],
+  "column_profiles": [ /* per-column stats/histograms/value-freqs — identical to /upload */ ],
+  "correlation": { "columns": ["age"], "matrix": [[1.0]], "truncated": false },
+  "profile_sampled": false,
+  "n_rows_profiled": 10000,
   "server_path": "db_snapshots/main_insurance_policy_lapse.parquet",  // echoed to /run as input_file
   "input_source": {                             // makes the run read the Delta table (§6.6 Step 4)
     "type": "delta",
@@ -766,12 +785,16 @@ computed on the cluster when the run reads the Delta table.
 }
 ```
 
-The frontend feeds this straight through the same `applyUpload` plumbing as an uploaded file, so the
-run is configured (target/features on Configure) and submitted as a Databricks Job with no hand-typed
-columns. Errors: **not** the `databricks` execution backend (the picker is only offered there) →
-**503**; a `catalog`/`schema`/`table` that is not a simple SQL identifier (they are interpolated into
-the UC REST path) → **422**; missing/rejected PAT → **401**; unreachable workspace, or a table whose
-metadata carries no columns → **503** (never a silent empty profile / fall-through to manual entry).
+If the sample can't be read the body is the **schema-only variant** instead (`n_rows` `0`, `sample`
+`[]`, no `column_profiles`/`correlation`), carrying the same `server_path` + `input_source`.
+
+The frontend feeds either variant straight through the same `applyUpload` plumbing as an uploaded
+file, so the run is configured (target/features on Configure) and submitted as a Databricks Job with
+no hand-typed columns. Errors: **not** the `databricks` execution backend (the picker is only offered
+there) → **503**; a `catalog`/`schema`/`table` that is not a simple SQL identifier (they are
+interpolated into the UC REST path / dotted table name) → **422**; missing/rejected PAT → **401**;
+unreachable workspace, or a table whose Unity Catalog metadata carries no columns → **503** (never a
+silent empty profile). A failed **sample** read is NOT an error — it silently degrades to schema-only.
 
 ## Output artifacts — `GET /api/v1/outputs/{name}` and `/outputs/{run_id}/{name}`
 
@@ -849,3 +872,13 @@ and return it in the same `InspectProfile` shape as `/upload` (+ a `delta` `inpu
 `server_path`), so the UC picker populates the column picker (target dropdown + feature selector) with
 no manual column entry. Mirrors the `/input-sources/select` pattern used for Postgres. See the
 `GET /api/v1/databricks/table-profile` section above._
+_2026-07-23 (additive, **no schema/version change** — rides the upload/profile side): `GET
+/api/v1/databricks/table-profile` now reads a **bounded sample** of the table's real rows (SQL
+Statement Execution API, as the caller's PAT, capped at `CLASSIFYOS_DBRICKS_PROFILE_SAMPLE_ROWS`,
+default 10,000) and runs the SAME `inspect_dataframe` profiling a CSV upload does — so the response
+carries the full Data-Profile blocks (`column_profiles` + `correlation`) and real per-column stats,
+populating the Data Profile page + the Configuration feature picker for a Databricks source exactly
+like a file/Postgres source. Needs `DATABRICKS_SQL_WAREHOUSE_ID` (or an `<id>` in
+`DATABRICKS_HTTP_PATH`); with no warehouse or on any read failure it **degrades to the previous
+schema-only profile** (never blocks the picker). Display-only (the `/run` still reads the full table
+on the cluster). See the `GET /api/v1/databricks/table-profile` section above._

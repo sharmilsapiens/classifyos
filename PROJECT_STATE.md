@@ -5,7 +5,42 @@
 > planning/overseer chat stays in sync with the local repo.
 
 **Last updated:** 2026-07-23
-**Updated by:** Claude Code (**NEW — Databricks Runs dashboard fixed end-to-end: read-path store routing (§6.1) + run-scoped artifact serving (§6.2). API + frontend ONLY — no engine/notebook/wheel change, so deploy = FastAPI `git pull`+uvicorn restart + a frontend rebuild, NO cluster restart. LOCAL backend byte-identical.**
+**Updated by:** Claude Code (**NEW — Databricks pre-run Data Profile + feature picker now populated from REAL data.**
+When a run's data comes from a Unity Catalog table (`databricks` backend), the pre-run **Data Profile** page and the
+**Configuration feature picker** were EMPTY: `GET /databricks/table-profile` returned schema-only metadata (columns/types),
+so `column_profiles`/`correlation`/real per-column stats were absent (root cause: `DataProfile.tsx` bails to the empty state
+when `column_profiles` is missing, and the picker's per-feature block reads the same blocks). **Fix — backend only.** The
+endpoint now reads a **bounded SAMPLE** of the table's *actual* rows via the **SQL Statement Execution API**
+(`POST /api/2.0/sql/statements`, `SELECT * FROM cat.sch.tbl` + `row_limit`, INLINE + JSON_ARRAY, authenticated with the
+caller's **PAT** — the same identity as the UC browser) and runs the **SAME** profiling a CSV upload does. `inspect_file`
+was refactored to a reusable `inspect_dataframe(df, …)` core (**behaviour-preserving** — file/Postgres byte-identical) that
+both the file read and the in-memory sample call; `fetch_table_sample` builds a pandas frame from the JSON rows (coercing
+the manifest-numeric columns via `pd.to_numeric`), and the route profiles it → returns the **full `InspectProfile`** with
+`column_profiles` + `correlation` + real stats. So a Databricks source is now as rich as file/Postgres with **NO frontend
+change** (the pages were already source-agnostic — 177 vitest still green, zero edits). **Why the SQL warehouse, not the
+training cluster:** the FastAPI runs *off-cluster* (no Spark), so the Delta materialize path can't read a sample there; a
+SQL warehouse is the natural HTTP-queryable endpoint and **reuses the existing `httpx` client seam** (no new dependency;
+CI-mockable exactly like every other Databricks call). **Bounded / non-blocking / graceful:** `row_limit` cap
+(`CLASSIFYOS_DBRICKS_PROFILE_SAMPLE_ROWS`, default 10000); `wait_timeout=30s` + `on_wait_timeout=CANCEL` (one call, no
+polling, slow query cancelled); **ANY** failure — no warehouse (`DATABRICKS_SQL_WAREHOUSE_ID`, or an `<id>` parsed from the
+existing `DATABRICKS_HTTP_PATH`), unreachable, huge/unreadable, non-SUCCEEDED — **degrades to the previous schema-only
+profile** so the picker is never blocked and no stats are fabricated. `n_rows` reflects the *sample* size. **Display-only,
+no leakage** — reads only, in-memory (no snapshot written at selection time), nothing fed back into training; the `/run`
+still reads the FULL table on the cluster (`materialize_delta_source`, unchanged). Files: `classifyos/io/inspect.py`
+(extract `inspect_dataframe`), `api/databricks.py` (`fetch_table_sample` + `_sql_warehouse_id` + `_profile_sample_rows` +
+shared `UC_NUMERIC_TYPES`/`UC_DATETIME_TYPES`), `api/routes/databricks.py` (`_sample_profile` + sample-first wiring),
+`backend/.env.example`. **Contract:** additive, rides the upload/profile side — **no `schema_version` bump** (stays 1.11);
+`docs/api_contract.md`, `docs/databricks_api_contract.md`, `databricks_how_it_works.md`, `docs/reference/data_profile.md`,
+`api_short_desc.md`, `frontend_short_desc.md` all updated. **Tests:** `test_api_databricks.py` +2 (sample path → full
+Data-Profile blocks over mocked rows, PAT + `row_limit` asserted; statement-fails → schema-only fallback, no 5xx) +
+`test_inspect.py` +3 (`inspect_dataframe` == `inspect_file`, in-memory profile, source label); all Databricks HTTP mocked
+(`httpx.MockTransport`) — CI never touches a live workspace. **Full backend suite 499 passed; frontend 177 vitest green.**
+Statement Execution API shape **hallucination-checked** vs Microsoft Learn + the Databricks Python SDK (state enum,
+INLINE/JSON_ARRAY `data_array`-of-strings, `row_limit`, `on_wait_timeout=CANCEL`, manifest `schema.columns`). Engine ML,
+notebook, and wheel UNTOUCHED. **No plan_tweak entry** — this delivers the documented "richer UC profiling" follow-up
+(row #48), not a deviation. Prompt: `prompts/api_phases/databricks_table_profile_sampled_data_profile.md`. NOT run on a
+live cluster/warehouse (mock-tested; manually verifiable once a warehouse is reachable).)
+**Prior update (2026-07-23 — Databricks Runs dashboard + run-scoped artifacts):** Claude Code (**NEW — Databricks Runs dashboard fixed end-to-end: read-path store routing (§6.1) + run-scoped artifact serving (§6.2). API + frontend ONLY — no engine/notebook/wheel change, so deploy = FastAPI `git pull`+uvicorn restart + a frontend rebuild, NO cluster restart. LOCAL backend byte-identical.**
 Two bugs that only bit the `databricks` execution backend, both in the FastAPI read/serve path (the runs
 execute + log on the cluster fine; the reader was wrong). **(1) §6.1 — Runs tab read the wrong MLflow
 store.** `api/mlflow_read.py` read whatever `MLFLOW_TRACKING_URI` the *FastAPI process* had — in the

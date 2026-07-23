@@ -9,6 +9,8 @@ tests assert that header reaches Unity Catalog. A missing PAT is a 401; an unrea
 
 from __future__ import annotations
 
+import json
+
 import httpx
 import pytest
 
@@ -229,10 +231,15 @@ def dbx_backend(monkeypatch: pytest.MonkeyPatch):
 
     ``execution_backend`` reads ``CLASSIFYOS_EXECUTION_BACKEND`` per call, so flipping it here (and
     letting monkeypatch restore conftest's pinned ``local`` afterwards) enables the endpoint for
-    the one test without rebuilding the shared app.
+    the one test without rebuilding the shared app. The SQL-warehouse vars are cleared so the
+    schema-only tests are deterministic regardless of the developer's real ``.env`` (a machine with
+    ``DATABRICKS_HTTP_PATH`` set would otherwise trigger a sample read); the sampling tests re-set
+    ``DATABRICKS_SQL_WAREHOUSE_ID`` explicitly.
     """
     monkeypatch.setenv("DATABRICKS_HOST", _MOCK_HOST)
     monkeypatch.setenv("CLASSIFYOS_EXECUTION_BACKEND", "databricks")
+    monkeypatch.delenv("DATABRICKS_SQL_WAREHOUSE_ID", raising=False)
+    monkeypatch.delenv("DATABRICKS_HTTP_PATH", raising=False)
 
 
 #: A representative Unity Catalog ``columns`` array covering every group the mapper buckets:
@@ -380,3 +387,129 @@ def test_table_profile_workspace_error_is_503(api_client, dbx_backend, monkeypat
     )
     assert resp.status_code == 503
     assert "unavailable" in resp.json()["detail"].lower()
+
+
+# --------------------------------------------------------------------------- #
+# GET /api/v1/databricks/table-profile — SAMPLE the real data (SQL warehouse)   #
+# --------------------------------------------------------------------------- #
+#
+# When a SQL warehouse is configured, table-profile reads a BOUNDED SAMPLE of the table's real rows
+# via the SQL Statement Execution API (as the caller's PAT) and runs the SAME profiling a CSV
+# /upload does — so the response carries the full Data-Profile blocks. All HTTP is mocked. If the
+# sample can't be read it degrades to the schema-only profile (never a 5xx, never a blocked picker).
+
+#: A JSON_ARRAY result manifest matching ``_TABLE_COLUMNS`` (every cell is a STRING, as the API returns).
+_SQL_MANIFEST_COLUMNS = [
+    {"name": "age", "type_name": "INT", "type_text": "int", "position": 0},
+    {"name": "annual_premium", "type_name": "DOUBLE", "type_text": "double", "position": 1},
+    {"name": "balance", "type_name": "DECIMAL", "type_text": "decimal(10,2)", "position": 2},
+    {"name": "region", "type_name": "STRING", "type_text": "string", "position": 3},
+    {"name": "has_agent", "type_name": "BOOLEAN", "type_text": "boolean", "position": 4},
+    {"name": "policy_start", "type_name": "TIMESTAMP", "type_text": "timestamp", "position": 5},
+    {"name": "dob", "type_name": "DATE", "type_text": "date", "position": 6},
+]
+
+
+def _sql_sample_rows(n: int = 200) -> list[list[str]]:
+    """``n`` sample rows as JSON_ARRAY string cells; values repeat so no column trips the id flag."""
+    regions = ["north", "south", "east", "west"]
+    return [
+        [
+            str(30 + (i % 25)),                 # age → 25 distinct
+            f"{1000 + (i % 40) * 10}.50",       # annual_premium → 40 distinct (numeric)
+            f"{200 + (i % 30) * 5}.00",         # balance → 30 distinct (DECIMAL numeric)
+            regions[i % 4],                     # region → 4 categories
+            "true" if i % 2 == 0 else "false",  # has_agent → 2 values (binary)
+            "2019-10-14T00:00:00.000Z",         # policy_start (parses as datetime)
+            f"19{60 + (i % 30):02d}-06-01",     # dob → 30 distinct dates
+        ]
+        for i in range(n)
+    ]
+
+
+def _sql_success_response() -> dict:
+    return {
+        "statement_id": "01ef-0000",
+        "status": {"state": "SUCCEEDED"},
+        "manifest": {
+            "format": "JSON_ARRAY",
+            "schema": {"column_count": 7, "columns": _SQL_MANIFEST_COLUMNS},
+            "total_row_count": 200,
+            "truncated": False,
+        },
+        "result": {"chunk_index": 0, "row_offset": 0, "row_count": 200, "data_array": _sql_sample_rows()},
+    }
+
+
+def test_table_profile_reads_sample_when_warehouse_configured(api_client, dbx_backend, monkeypatch) -> None:
+    """With a SQL warehouse set, the profile is computed over the table's REAL data (full blocks)."""
+    monkeypatch.setenv("DATABRICKS_SQL_WAREHOUSE_ID", "wh-123")
+    seen = {"sql": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/2.0/sql/statements":
+            seen["sql"] += 1
+            assert request.method == "POST"
+            # The SAMPLE read runs as the USER's PAT (like the UC browsers), NOT the service token.
+            assert request.headers["Authorization"] == "Bearer user-pat"
+            payload = json.loads(request.content)
+            assert payload["warehouse_id"] == "wh-123"
+            assert payload["row_limit"] >= 1  # bounded — a capped sample, never the whole table
+            assert "main.insurance.policy_lapse" in payload["statement"]
+            return httpx.Response(200, json=_sql_success_response())
+        # Otherwise the get-a-table schema call (still made — the authoritative fallback source).
+        assert request.url.path == "/api/2.1/unity-catalog/tables/main.insurance.policy_lapse"
+        return httpx.Response(200, json={"columns": _TABLE_COLUMNS})
+
+    _install_mock(monkeypatch, handler)
+    resp = api_client.get(
+        "/api/v1/databricks/table-profile",
+        params={"catalog": "main", "schema": "insurance", "table": "policy_lapse"},
+        headers={"X-Databricks-Token": "user-pat"},
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+
+    assert seen["sql"] == 1  # the SQL sample WAS read
+    # Full InspectProfile — the Data-Profile blocks a CSV /upload carries, now over real UC data.
+    assert body["n_rows"] == 200
+    assert "column_profiles" in body and len(body["column_profiles"]) == 7
+    assert body["correlation"] is not None  # ≥2 non-identifier numeric columns
+    assert len(body["sample"]) == 5
+    # Data-driven column groups (from the sampled VALUES, exactly like /upload) — numeric columns
+    # coerced from JSON_ARRAY strings via the manifest types; BOOLEAN reads as binary + categorical.
+    assert set(body["numeric_cols"]) == {"age", "annual_premium", "balance"}
+    assert body["binary_cols"] == ["has_agent"]
+    assert set(body["datetime_cols"]) == {"policy_start", "dob"}
+    # Still carries the delta input_source + snapshot server_path (the run reads the Delta table).
+    assert body["server_path"] == "db_snapshots/main_insurance_policy_lapse.parquet"
+    assert body["input_source"]["type"] == "delta"
+
+
+def test_table_profile_falls_back_to_schema_when_sample_fails(api_client, dbx_backend, monkeypatch) -> None:
+    """A warehouse is configured but the statement doesn't succeed → schema-only profile (no 5xx)."""
+    monkeypatch.setenv("DATABRICKS_SQL_WAREHOUSE_ID", "wh-123")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/2.0/sql/statements":
+            # Statement did not succeed (e.g. warehouse asleep / timed out → cancelled).
+            return httpx.Response(200, json={"statement_id": "x", "status": {"state": "FAILED"}})
+        return httpx.Response(200, json={"columns": _TABLE_COLUMNS})
+
+    _install_mock(monkeypatch, handler)
+    resp = api_client.get(
+        "/api/v1/databricks/table-profile",
+        params={"catalog": "main", "schema": "insurance", "table": "policy_lapse"},
+        headers={"X-Databricks-Token": "user-pat"},
+    )
+    # Degraded gracefully to the schema-only shape — picker still works, no fabricated stats, no 5xx.
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert "column_profiles" not in body
+    assert body["n_rows"] == 0
+    assert body["sample"] == []
+    assert body["columns"] == [
+        "age", "annual_premium", "balance", "region", "has_agent", "policy_start", "dob",
+    ]
+    assert body["server_path"] == "db_snapshots/main_insurance_policy_lapse.parquet"
+    assert body["input_source"]["type"] == "delta"

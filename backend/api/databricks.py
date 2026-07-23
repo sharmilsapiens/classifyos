@@ -32,9 +32,12 @@ import json
 import logging
 import os
 import re
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import httpx
+
+if TYPE_CHECKING:  # pandas is imported lazily inside fetch_table_sample; only the annotation needs it
+    import pandas as pd
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +51,19 @@ _TABLES_PATH = "/api/2.1/unity-catalog/tables"
 _CLUSTERS_PATH = "/api/2.0/clusters/list"
 #: SCIM 2.0 — "who am I" for the requesting user's PAT; ``userName`` is their account email.
 _SCIM_ME_PATH = "/api/2.0/preview/scim/v2/Me"
+#: SQL Statement Execution 2.0 — run a SELECT on a SQL warehouse and read rows back over REST. Used
+#: to profile a Unity Catalog table's ACTUAL data at selection time (a bounded sample); the training
+#: run still reads the FULL table on the cluster via Spark. Verified against Microsoft Learn / the
+#: Databricks SDK (INLINE + JSON_ARRAY → ``result.data_array`` of string cells; see fetch_table_sample).
+_SQL_STATEMENTS_PATH = "/api/2.0/sql/statements"
+
+#: Unity Catalog ``ColumnTypeName`` → the ``inspect_file`` column-group buckets (verified against the
+#: Databricks SDK ``ColumnTypeName`` enum / Microsoft Learn). Shared by the schema-only mapper
+#: (``routes/databricks._profile_from_columns``) and the SQL-sample numeric coercion
+#: (:func:`fetch_table_sample`), so the two never diverge. Any type outside these sets falls through
+#: to "categorical" (STRING, CHAR, BINARY, ARRAY/STRUCT/MAP, VARIANT, …) — the CSV inspector's default.
+UC_NUMERIC_TYPES = frozenset({"BYTE", "SHORT", "INT", "LONG", "FLOAT", "DOUBLE", "DECIMAL"})
+UC_DATETIME_TYPES = frozenset({"DATE", "TIMESTAMP", "TIMESTAMP_NTZ"})
 
 #: The four public job states the API surfaces (mapped from Databricks' RunState).
 JOB_STATUSES = ("PENDING", "RUNNING", "COMPLETED", "FAILED")
@@ -427,6 +443,117 @@ def get_table_columns(catalog: str, schema: str, table: str, user_pat: str) -> l
     if not isinstance(columns, list) or not columns:
         raise DatabricksUnavailable(f"Unity Catalog returned no columns for {full_name!r}")
     return [c for c in columns if isinstance(c, dict)]
+
+
+#: Default row cap for the table-profile SAMPLE read (display-only). Kept well under the SQL
+#: Statement Execution API's 25 MiB inline limit and the profiler's 50k internal-sampling threshold,
+#: so a table-profile query stays a fast, bounded read. Override: CLASSIFYOS_DBRICKS_PROFILE_SAMPLE_ROWS.
+_DEFAULT_PROFILE_SAMPLE_ROWS = 10_000
+
+
+def _sql_warehouse_id() -> str:
+    """Return the SQL warehouse id used to read a table sample for profiling.
+
+    Prefers ``DATABRICKS_SQL_WAREHOUSE_ID``; falls back to the last path segment of
+    ``DATABRICKS_HTTP_PATH`` (``/sql/1.0/warehouses/<id>``), which the deployment already sets for
+    the SQL connector — so profiling works with no new env on a workspace that already has one.
+    Raises :class:`DatabricksConfigError` when neither is set; the table-profile route catches that
+    and degrades to the schema-only profile (never blocks the picker).
+    """
+    warehouse_id = (os.environ.get("DATABRICKS_SQL_WAREHOUSE_ID") or "").strip()
+    if warehouse_id:
+        return warehouse_id
+    http_path = (os.environ.get("DATABRICKS_HTTP_PATH") or "").strip().rstrip("/")
+    if http_path:
+        segment = http_path.rsplit("/", 1)[-1]
+        if segment:
+            return segment
+    raise DatabricksConfigError(
+        "no SQL warehouse configured for table profiling; set DATABRICKS_SQL_WAREHOUSE_ID "
+        "(or DATABRICKS_HTTP_PATH=/sql/1.0/warehouses/<id>)"
+    )
+
+
+def _profile_sample_rows() -> int:
+    """Row cap for the table-profile sample read (env override, positive int, else the default)."""
+    raw = (os.environ.get("CLASSIFYOS_DBRICKS_PROFILE_SAMPLE_ROWS") or "").strip()
+    if not raw:
+        return _DEFAULT_PROFILE_SAMPLE_ROWS
+    try:
+        rows = int(raw)
+    except ValueError:
+        return _DEFAULT_PROFILE_SAMPLE_ROWS
+    return rows if rows > 0 else _DEFAULT_PROFILE_SAMPLE_ROWS
+
+
+def fetch_table_sample(
+    catalog: str, schema: str, table: str, user_pat: str, *, limit: int | None = None
+) -> "pd.DataFrame":
+    """Read up to ``limit`` rows of ``catalog.schema.table`` for DISPLAY-ONLY profiling.
+
+    Runs ``SELECT * FROM <catalog>.<schema>.<table>`` on the configured SQL warehouse via the
+    Databricks **SQL Statement Execution API** (``POST /api/2.0/sql/statements``, INLINE +
+    JSON_ARRAY), authenticated with the caller's ``user_pat`` — the same identity the Unity Catalog
+    browsers use, so the sample reflects exactly what that user is entitled to read. The read is
+    bounded by ``row_limit`` (default :data:`_DEFAULT_PROFILE_SAMPLE_ROWS`) so a huge table can never
+    dump more than a capped sample into the API process, and the request carries ``wait_timeout=30s``
+    + ``on_wait_timeout=CANCEL`` — one call, no polling, and a slow statement is cancelled rather than
+    left running.
+
+    Returns a pandas DataFrame with columns in the result's schema order; columns the manifest marks
+    numeric are coerced with ``pd.to_numeric`` (JSON_ARRAY returns every cell as a string), so the
+    engine's downstream type detection matches a CSV upload. Reads only — feeds nothing back into
+    training; the run still reads the FULL table on the cluster (``materialize_delta_source``).
+
+    Raises :class:`DatabricksConfigError` (no warehouse configured), :class:`DatabricksAuthError`
+    (missing/rejected PAT), or :class:`DatabricksUnavailable` (unreachable workspace, a non-SUCCEEDED
+    statement, or an empty result). The table-profile route catches ALL of these and falls back to
+    the schema-only profile, so a failure here never blocks the column picker.
+    """
+    import pandas as pd  # noqa: PLC0415 — local: keep pandas out of this module's import path
+
+    warehouse_id = _sql_warehouse_id()
+    row_limit = int(limit) if (limit and int(limit) > 0) else _profile_sample_rows()
+    full_name = f"{catalog}.{schema}.{table}"
+    # row_limit (a request field) bounds the read WITHOUT interpolating a LIMIT clause; the dotted
+    # identifier is validated to a simple SQL identifier by the route before this is ever called.
+    payload = {
+        "warehouse_id": warehouse_id,
+        "statement": f"SELECT * FROM {full_name}",
+        "row_limit": row_limit,
+        "wait_timeout": "30s",
+        "on_wait_timeout": "CANCEL",
+        "disposition": "INLINE",
+        "format": "JSON_ARRAY",
+    }
+    with _build_client(_require_pat(user_pat)) as client:
+        body = _request(client, "POST", _SQL_STATEMENTS_PATH, json=payload)
+
+    status = body.get("status") if isinstance(body, dict) else None
+    state = str(status.get("state") if isinstance(status, dict) else "").upper()
+    if state != "SUCCEEDED":
+        # PENDING/RUNNING (timed out → cancelled), FAILED, CANCELED, CLOSED — no inline result.
+        raise DatabricksUnavailable(
+            f"table sample query did not succeed for {full_name!r} (state={state or 'unknown'})"
+        )
+
+    manifest = body.get("manifest") or {}
+    columns_meta = (manifest.get("schema") or {}).get("columns") or []
+    names = [str(c["name"]) for c in columns_meta if isinstance(c, dict) and c.get("name")]
+    data_array = (body.get("result") or {}).get("data_array") or []
+    if not names or not data_array:
+        raise DatabricksUnavailable(f"table sample for {full_name!r} returned no rows")
+
+    df = pd.DataFrame(data_array, columns=names)
+    # JSON_ARRAY returns every cell as a string (or null). Coerce the columns the manifest marks
+    # numeric so downstream type detection matches a CSV upload (a numeric column of string values
+    # would otherwise read as categorical). Datetime/boolean/string are left for inspect's own
+    # detection (dates parse from their separators; a two-value column reads as binary).
+    for col in columns_meta:
+        name = col.get("name") if isinstance(col, dict) else None
+        if name in df.columns and str(col.get("type_name") or "").upper() in UC_NUMERIC_TYPES:
+            df[name] = pd.to_numeric(df[name], errors="coerce")
+    return df
 
 
 def fetch_uc_file(volume_path: str) -> bytes:

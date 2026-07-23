@@ -42,7 +42,9 @@ All set in `backend/.env` (gitignored). Template in `backend/.env.example`.
 | `CLASSIFYOS_EXECUTION_BACKEND` | `databricks` = submit Jobs; `local` = run in-process (default) | `databricks` |
 | `DATABRICKS_HOST` | Workspace URL — must include `https://` | `https://adb-8377180828718542.2.azuredatabricks.net` |
 | `DATABRICKS_TOKEN` | Service PAT — used by FastAPI to submit jobs and poll status. **Regenerate if exposed.** | `dapi...` |
-| `DATABRICKS_HTTP_PATH` | SQL warehouse path — used for Delta table queries | `/sql/1.0/warehouses/a533bb87aa12d132` |
+| `DATABRICKS_HTTP_PATH` | SQL warehouse path — its `<id>` is the fallback warehouse for the pre-run table-profile SAMPLE read (below) when `DATABRICKS_SQL_WAREHOUSE_ID` is unset | `/sql/1.0/warehouses/a533bb87aa12d132` |
+| `DATABRICKS_SQL_WAREHOUSE_ID` | SQL warehouse the pre-run table-profile SAMPLE runs on (`GET /databricks/table-profile` → `fetch_table_sample`); unset → parsed from `DATABRICKS_HTTP_PATH`, else the profile degrades to schema-only | `a533bb87aa12d132` |
+| `CLASSIFYOS_DBRICKS_PROFILE_SAMPLE_ROWS` | Row cap for the table-profile sample (default 10000) | `10000` |
 | `DATABRICKS_JOB_CLUSTER_ID` | Existing cluster the job runs on | `0421-071516-3h9grzl1` |
 | `DATABRICKS_JOB_NOTEBOOK_PATH` | Workspace path to the job runner notebook (no `.py` extension) | `/Workspace/Users/sharmil.basa@sapiens.com/classifyos/notebooks/classifyos_job_runner` |
 | `DATABRICKS_JOB_WHEEL_PATH` | UC volume path to the classifyos wheel | `/Volumes/aiml_rd/classifyos/libs/classifyos-1.0.0-py3-none-any.whl` |
@@ -97,10 +99,10 @@ prepends the prefix to `DBRICKS_OUTPUT_VOLUME` before the storage adapter is bui
 
 | File | What it does |
 |---|---|
-| `backend/api/databricks.py` | All Databricks REST calls: submit job, poll status, UC browser, `fetch_uc_file()` |
+| `backend/api/databricks.py` | All Databricks REST calls: submit job, poll status, UC browser, `fetch_uc_file()`, `fetch_table_sample()` (SQL-warehouse table sample for pre-run profiling) |
 | `backend/api/routes/run.py` | `POST /api/v1/run` — branches on `CLASSIFYOS_EXECUTION_BACKEND` |
 | `backend/api/routes/jobs.py` | `GET /run/{job_id}/status` + `/results` — polls Databricks directly (stateless; `job_id` == `run_id`) |
-| `backend/api/routes/databricks.py` | UC browser endpoints (`/catalogs`, `/schemas`, `/tables`, `/table-profile`) |
+| `backend/api/routes/databricks.py` | UC browser endpoints (`/catalogs`, `/schemas`, `/tables`) + `/table-profile` (reads a bounded SQL-warehouse sample → full Data Profile, else schema-only) |
 | `backend/classifyos/io/storage.py` | `DatabricksVolumeStorage` — POSIX paths to UC volumes |
 | `backend/classifyos/io/sql_source.py` | `materialize_delta_source()` — Delta table → pandas snapshot |
 | `backend/classifyos/envelope/` | The `/run` envelope reshaper (`build_run_result` + `build_run_envelope`) and its pydantic response models — shipped **in the engine wheel** so the notebook builds a byte-identical envelope without a repo checkout. `api.result_builder`/`serialize`/`artifacts`/`models` re-export these |

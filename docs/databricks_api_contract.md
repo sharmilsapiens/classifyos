@@ -29,7 +29,7 @@ and they are **never crossed**:
 | Credential | Source | Used by | Why |
 |---|---|---|---|
 | **Service token** | `DATABRICKS_TOKEN` env var (`_service_token()`) | `submit_run`, `get_run_status`, `list_clusters`, `fetch_uc_file` | The **service identity** submits the Job, polls it, picks the cluster it runs on, and reads the result envelope the Job wrote to the output volume. |
-| **User PAT** | `X-Databricks-Token` request header (`get_user_pat` → `_require_pat`) | `list_catalogs`, `list_schemas`, `list_tables`, `get_table_columns` | The **Unity Catalog data browser** must show exactly what the requesting user is entitled to — not the service identity's view. The PAT is passed per request and **never persisted**. |
+| **User PAT** | `X-Databricks-Token` request header (`get_user_pat` → `_require_pat`) | `list_catalogs`, `list_schemas`, `list_tables`, `get_table_columns`, `fetch_table_sample` | The **Unity Catalog data browser** and the pre-run **table-profile sample** must show exactly what the requesting user is entitled to — not the service identity's view. The PAT is passed per request and **never persisted**. |
 
 Both are sent as a bearer credential on the `Authorization: Bearer <token>` header, built in the one
 seam `_build_client(token)` (`fetch_uc_file` builds its own request the same way with the service
@@ -226,8 +226,54 @@ dict verified against the Databricks SDK (`name`, `type_name`, `type_text`, `nul
 > `catalog`/`schema`/`table` are validated as simple SQL identifiers in
 > `routes/databricks.py::table_profile_endpoint` (`_SQL_IDENTIFIER_RE`) **before** interpolation
 > into the REST path → a bad identifier is a `422`, never a reshaped URL. The `type_name` values
-> are mapped to the `inspect_file` column groups in that route (`_UC_NUMERIC_TYPES` /
-> `_UC_DATETIME_TYPES`, `BOOLEAN` → binary); see `docs/api_contract.md` → `/databricks/table-profile`.
+> are mapped to the `inspect_file` column groups (`api.databricks.UC_NUMERIC_TYPES` /
+> `UC_DATETIME_TYPES`, `BOOLEAN` → binary); see `docs/api_contract.md` → `/databricks/table-profile`.
+
+---
+
+## 4b. SQL Statement Execution API (2.0) — pre-run table-profile SAMPLE
+
+Uses the **user PAT** (same identity as the UC browser). `fetch_table_sample(catalog, schema, table,
+user_pat, *, limit)` reads a **bounded sample** of a Unity Catalog table's real rows so the pre-run
+Data Profile page + Configuration feature picker populate exactly like a CSV upload (see
+`docs/api_contract.md` → `/databricks/table-profile`, the "sampled" path). Display-only — the `/run`
+still reads the FULL table on the cluster via Spark; this is a separate, read-only convenience.
+
+### `POST /api/2.0/sql/statements` — execute a SELECT on a SQL warehouse
+
+Request body built by `fetch_table_sample`:
+
+```jsonc
+{
+  "warehouse_id": "<DATABRICKS_SQL_WAREHOUSE_ID, or the id parsed from DATABRICKS_HTTP_PATH>",
+  "statement": "SELECT * FROM <catalog>.<schema>.<table>",  // identifiers validated by the route first
+  "row_limit": 10000,          // CLASSIFYOS_DBRICKS_PROFILE_SAMPLE_ROWS (default 10000) — the sample cap
+  "wait_timeout": "30s",       // run synchronously up to 30s …
+  "on_wait_timeout": "CANCEL", // … then cancel (one call, no polling, no dangling statement)
+  "disposition": "INLINE",     // results inline in the response body (≤ 25 MiB)
+  "format": "JSON_ARRAY"       // result.data_array = rows of STRING cells
+}
+```
+
+**Response** (read defensively): `status.state` must be `SUCCEEDED` (any other state — `PENDING`
+after a cancel, `FAILED`, `CANCELED`, `CLOSED` — raises `DatabricksUnavailable`). Rows come from
+`result.data_array` (each cell a string, or `null`); column names + types from
+`manifest.schema.columns[].{name, type_name}`. `fetch_table_sample` builds a pandas DataFrame,
+coerces the columns whose `type_name` is in `UC_NUMERIC_TYPES` with `pd.to_numeric` (JSON_ARRAY
+returns every cell as a string), and hands the frame to `inspect_dataframe`.
+
+**Warehouse id resolution** (`_sql_warehouse_id`): `DATABRICKS_SQL_WAREHOUSE_ID` if set, else the
+last path segment of `DATABRICKS_HTTP_PATH` (`/sql/1.0/warehouses/<id>`), else `DatabricksConfigError`.
+**Bounded + non-blocking:** `row_limit` caps the read; `wait_timeout=30s` + `on_wait_timeout=CANCEL`
+means one call, no polling, and a slow query is cancelled. **Any** failure here (config, auth,
+unreachable, non-SUCCEEDED, empty) is caught by `routes/databricks._sample_profile` → the endpoint
+degrades to the schema-only profile, so this never blocks the column picker.
+
+Verified against Microsoft Learn (the SQL Statement Execution tutorial) + the Databricks Python SDK:
+`StatementState` ∈ {PENDING, RUNNING, SUCCEEDED, FAILED, CANCELED, CLOSED}; `on_wait_timeout` ∈
+{CONTINUE, CANCEL}; `disposition` ∈ {INLINE, EXTERNAL_LINKS}; `format` ∈ {JSON_ARRAY, ARROW_STREAM,
+CSV}; INLINE JSON_ARRAY returns `result.data_array` (array-of-arrays of string cells) and the
+manifest carries `schema.columns[].{name, type_name, type_text, position}`.
 
 ---
 
@@ -289,6 +335,7 @@ call touches.
 | `GET /api/2.1/unity-catalog/schemas` | `USE CATALOG` on the catalog + `USE SCHEMA` (or `BROWSE`) on the schemas to be listed. |
 | `GET /api/2.1/unity-catalog/tables` | `USE CATALOG` + `USE SCHEMA` + `SELECT` (or `BROWSE`) on the tables to be listed. |
 | `GET /api/2.1/unity-catalog/tables/{full_name}` (column metadata) | `USE CATALOG` + `USE SCHEMA` + `SELECT` (or `BROWSE`) on that table. |
+| `POST /api/2.0/sql/statements` (pre-run table-profile SAMPLE) | `CAN USE` on the SQL warehouse + `USE CATALOG` + `USE SCHEMA` + `SELECT` on the sampled table. **Optional** — without a warehouse (or these grants) the pre-run profile just degrades to schema-only; nothing else is affected. |
 | Cluster-side Delta read at run time (the Job, as the user) | `USE CATALOG` + `USE SCHEMA` + **`SELECT`** on the source Delta table, and `WRITE VOLUME` on `aiml_rd.classifyos.output` (+ `READ VOLUME` on `…input`/`…libs` as the notebook uses them). |
 
 `USE CATALOG` / `USE SCHEMA` are the traversal privileges — without them the parent object is not
@@ -300,9 +347,9 @@ even visible, so a list returns nothing. `BROWSE` grants metadata visibility wit
 ## 7. Env vars that control this interface
 
 Only the vars that affect the **FastAPI → Databricks REST** calls in `databricks.py` / `jobs.py`.
-(Cluster-side vars — `DATABRICKS_HTTP_PATH`, `DBRICKS_INPUT_VOLUME`, `CLASSIFYOS_STORAGE_BACKEND`,
-`MLFLOW_*` — configure the Job's own runtime, not this client; see `docs/databricks_how_it_works.md`
-§2.)
+(Cluster-side vars — `DBRICKS_INPUT_VOLUME`, `CLASSIFYOS_STORAGE_BACKEND`, `MLFLOW_*` — configure the
+Job's own runtime, not this client; see `docs/databricks_how_it_works.md` §2. `DATABRICKS_HTTP_PATH`
+is *also* read by this client now — as the fallback SQL-warehouse id for the table-profile sample.)
 
 | Env var | Which call(s) it affects | If unset |
 |---|---|---|
@@ -314,6 +361,9 @@ Only the vars that affect the **FastAPI → Databricks REST** calls in `databric
 | `DATABRICKS_JOB_WHEEL_PATH` | The `wheel_path` base_parameter **and** the `libraries: [{whl}]` entry. | Empty string: no `libraries` attached and `wheel_path=""` — the notebook must fall back to installing the wheel itself (cell 1). |
 | `DATABRICKS_JOB_TIMEOUT_SECONDS` | `timeout_seconds` (the Job's wall-clock cap) in the submit payload. | Defaults to `3600` (also on a non-integer value). |
 | `DBRICKS_OUTPUT_VOLUME` | Base of the `fetch_uc_file` path built by `/results` (`+ /api/{job_id}/run_response.json`). | **500** from `/run/{job_id}/results` ("DBRICKS_OUTPUT_VOLUME is not set") — status polling still works; only result fetch is blocked. |
+| `DATABRICKS_SQL_WAREHOUSE_ID` | The SQL warehouse `fetch_table_sample` runs the pre-run table-profile SAMPLE on (`POST /api/2.0/sql/statements`, `_sql_warehouse_id`). | Falls back to the `<id>` parsed from `DATABRICKS_HTTP_PATH`; if neither resolves, the profile degrades to schema-only (no error). |
+| `DATABRICKS_HTTP_PATH` | Fallback source of the SQL warehouse id (`/sql/1.0/warehouses/<id>`) for the table-profile sample when `DATABRICKS_SQL_WAREHOUSE_ID` is unset. | table-profile sampling unavailable → schema-only profile. |
+| `CLASSIFYOS_DBRICKS_PROFILE_SAMPLE_ROWS` | `row_limit` cap for the table-profile sample read (`_profile_sample_rows`). | Defaults to `10000` (also on a non-positive / non-integer value). |
 
 ---
 
@@ -329,6 +379,7 @@ Every Databricks endpoint path in this doc, checked against `backend/api/databri
 | `/api/2.1/unity-catalog/schemas` | ✅ verbatim | `_SCHEMAS_PATH` (line 44) |
 | `/api/2.1/unity-catalog/tables` | ✅ verbatim | `_TABLES_PATH` (line 45) |
 | `/api/2.0/clusters/list` | ✅ verbatim | `_CLUSTERS_PATH` (line 47) |
+| `/api/2.0/sql/statements` | ✅ verbatim | `_SQL_STATEMENTS_PATH` (used by `fetch_table_sample`) |
 | `/api/2.0/fs/files{volume_path}` | ✅ verbatim | `fetch_uc_file` URL (line 406) |
 | `/api/2.1/unity-catalog/tables/{full_name}` | ✅ verbatim | appears in the `get_table_columns` docstring (line 377); the runtime path is also composed at line 389 (`f"{_TABLES_PATH}/{full_name}"`). |
 

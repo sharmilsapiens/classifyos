@@ -73,6 +73,10 @@ def inspect_file(
 ) -> dict[str, Any]:
     """Profile a dataset's structure without committing to a run config.
 
+    Reads the dataset via the ``StorageAdapter`` (never a raw open) and delegates the profiling to
+    :func:`inspect_dataframe`, so a file upload and an in-memory frame (e.g. a Databricks Unity
+    Catalog table sample read over the SQL warehouse) run the *identical* profiling logic.
+
     Args:
         path: Logical key of the dataset, resolved by ``storage``.
         storage: Storage adapter used for all I/O.
@@ -85,6 +89,41 @@ def inspect_file(
             frame this function already loaded, so there is never a second read.
 
     Returns:
+        See :func:`inspect_dataframe`.
+
+    Raises:
+        ValueError: If ``target`` is given but not present in the file.
+    """
+    df = _read_dataframe(path, storage)
+    return inspect_dataframe(df, target=target, profile=profile, source=path)
+
+
+def inspect_dataframe(
+    df: pd.DataFrame,
+    *,
+    target: str | None = None,
+    profile: bool = False,
+    source: str = "dataset",
+) -> dict[str, Any]:
+    """Profile an already-loaded DataFrame's structure (the shared core of :func:`inspect_file`).
+
+    Split out from :func:`inspect_file` so the SAME profiling runs whether the frame came from a
+    file read (a CSV/Excel/Parquet upload, or a materialized Postgres/Delta snapshot) or from an
+    in-memory sample (a Unity Catalog table read over the SQL warehouse at selection time — see
+    ``api.databricks.fetch_table_sample``). It reads nothing and fits nothing — pure, display-only
+    profiling — so there is no leakage surface.
+
+    Args:
+        df: The dataset to profile (already loaded).
+        target: Optional target column; when given, the class distribution and a
+            suggested problem type are included.
+        profile: When True, also attach per-column exploratory statistics
+            (``column_profiles``) and a numeric ``correlation`` matrix for the
+            browser's Data Profile view (via ``analysis.profile.profile_dataframe``).
+        source: A human-readable label for ``df``'s origin, used ONLY in the
+            "target not found" error message (a file path, or a ``catalog.schema.table``).
+
+    Returns:
         A dict with keys: ``columns``, ``dtypes``, ``numeric_cols``,
         ``categorical_cols``, ``binary_cols``, ``datetime_cols``, ``n_rows``,
         ``n_missing``, ``sample`` (first 5 rows, NaN→None). When ``target`` is
@@ -93,10 +132,8 @@ def inspect_file(
         ``profile_sampled`` and ``n_rows_profiled``.
 
     Raises:
-        ValueError: If ``target`` is given but not present in the file.
+        ValueError: If ``target`` is given but not present in ``df``.
     """
-    df = _read_dataframe(path, storage)
-
     columns = list(df.columns)
     dtypes = {col: str(dtype) for col, dtype in df.dtypes.items()}
 
@@ -137,7 +174,7 @@ def inspect_file(
 
     if target is not None:
         if target not in df.columns:
-            raise ValueError(f"target column {target!r} not found in {path!r}")
+            raise ValueError(f"target column {target!r} not found in {source!r}")
         counts = df[target].value_counts(dropna=True)
         # Cast keys to native types so the dict is JSON-friendly.
         result["class_distribution"] = {

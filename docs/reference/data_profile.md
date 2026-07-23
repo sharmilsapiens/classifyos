@@ -2,10 +2,11 @@
 
 Concise reference for how the Data Profile (EDA on upload) works end to end.
 
-- **Engine (type detection):** `backend/classifyos/io/inspect.py`
+- **Engine (type detection):** `backend/classifyos/io/inspect.py` (`inspect_file` reads the frame, then delegates to `inspect_dataframe` — the shared profiling core)
 - **Engine (per-column metrics):** `backend/classifyos/analysis/profile.py`
 - **Frontend (rendering):** `frontend/src/pages/DataProfile.tsx`
 - Attached to the `/upload` response (NOT the locked `/run` contract), so changes here need **no `schema_version` bump**. Read-only, fits nothing → **no leakage surface**.
+- **Same profile, three data sources.** A CSV `/upload`, a Postgres `/input-sources/select` (materializes then profiles), and a Databricks `/databricks/table-profile` all return the identical `InspectProfile` (same `column_profiles`/`correlation`), so the Data Profile page + the Configure feature picker render identically with **no frontend branching**. The Databricks path profiles a **bounded sample** of the table's real rows read over the SQL warehouse (`fetch_table_sample`, capped at `CLASSIFYOS_DBRICKS_PROFILE_SAMPLE_ROWS`, default 10000) — so its `n_rows` is the *sample* size; if no warehouse is reachable it degrades to a schema-only profile (no blocks). Display-only — the run still reads the full table on the cluster.
 
 ---
 

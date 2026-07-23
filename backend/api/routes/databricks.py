@@ -6,10 +6,12 @@ picker and then profile the chosen table:
 * ``GET /api/v1/databricks/catalogs``
 * ``GET /api/v1/databricks/schemas?catalog=main``
 * ``GET /api/v1/databricks/tables?catalog=main&schema=insurance``
-* ``GET /api/v1/databricks/table-profile?catalog=&schema=&table=`` — fetch the chosen table's
-  Unity Catalog schema and return it in the **same ``InspectProfile`` shape a CSV ``/upload``
-  produces**, so the frontend reuses its existing column-picker (target dropdown + feature
-  selector) with no manual column entry and no branching.
+* ``GET /api/v1/databricks/table-profile?catalog=&schema=&table=`` — profile the chosen table and
+  return the **same ``InspectProfile`` shape a CSV ``/upload`` produces**. When a SQL warehouse is
+  reachable it reads a bounded sample of the table's REAL data and runs the SAME profiling (so the
+  Data-Profile blocks + per-feature stats populate); otherwise it degrades to the Unity Catalog
+  schema alone. Either way the frontend reuses its column-picker / Data Profile / Configure views
+  with no manual column entry and no branching.
 
 Each is authenticated with the **user's PAT** (``X-Databricks-Token`` header), which is passed
 straight through to Unity Catalog and **never stored** — so browsing shows exactly what that user
@@ -19,6 +21,7 @@ proxies — no ML, no persistence.
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from fastapi import APIRouter, Depends, Query
@@ -29,12 +32,18 @@ from fastapi.responses import JSONResponse
 # validates them — never a divergent, hand-rolled check. (Precedent: routes/input_sources imports
 # the engine's private ``_validate_input_source``.)
 from classifyos.config import _SQL_IDENTIFIER_RE
+# The SAME profiling core the CSV /upload + Postgres /input-sources/select flows use — so a Unity
+# Catalog table sample produces a byte-identical InspectProfile with the Data-Profile blocks.
+from classifyos.io.inspect import inspect_dataframe
 
 from ..databricks import (
+    UC_DATETIME_TYPES,
+    UC_NUMERIC_TYPES,
     DatabricksAuthError,
     DatabricksConfigError,
     DatabricksError,
     execution_backend,
+    fetch_table_sample,
     get_table_columns,
     list_catalogs,
     list_clusters,
@@ -47,12 +56,7 @@ from ..serialize import safe_jsonify
 
 router = APIRouter(tags=["databricks"])
 
-#: Unity Catalog ``ColumnTypeName`` → the ``inspect_file`` column-group buckets. Verified against the
-#: Databricks SDK ``ColumnTypeName`` enum (databricks-sdk-py ``catalog.py`` / Microsoft Learn). Any
-#: type outside the numeric/datetime/boolean sets falls through to "categorical" (STRING, CHAR,
-#: BINARY, ARRAY/STRUCT/MAP, VARIANT, …) — the same conservative default the CSV inspector uses.
-_UC_NUMERIC_TYPES = frozenset({"BYTE", "SHORT", "INT", "LONG", "FLOAT", "DOUBLE", "DECIMAL"})
-_UC_DATETIME_TYPES = frozenset({"DATE", "TIMESTAMP", "TIMESTAMP_NTZ"})
+logger = logging.getLogger(__name__)
 
 #: Delta snapshots the run materializes land under this input-root subfolder (mirrors
 #: input_sources.DB_SNAPSHOT_PREFIX) so they never clobber uploads or the committed sample CSVs.
@@ -90,10 +94,12 @@ def _require_databricks_backend() -> JSONResponse | None:
 def _profile_from_columns(columns: list[dict[str, Any]]) -> dict[str, Any]:
     """Reshape a Unity Catalog ``columns`` array into the ``inspect_file`` profile shape.
 
-    Maps each ``ColumnInfo`` to the ``columns``/``dtypes``/column-group keys the CSV ``/upload``
-    profile carries, deriving the numeric/categorical/binary/datetime buckets from ``type_name``
-    (see :data:`_UC_NUMERIC_TYPES` / :data:`_UC_DATETIME_TYPES`). ``BOOLEAN`` is the only type known
-    to be two-valued from the schema alone, so it is marked ``binary`` (and grouped categorical).
+    The **schema-only fallback** used when the SQL-warehouse sample can't be read
+    (see :func:`_sample_profile`). Maps each ``ColumnInfo`` to the ``columns``/``dtypes``/column-group
+    keys the CSV ``/upload`` profile carries, deriving the numeric/categorical/binary/datetime buckets
+    from ``type_name`` (see :data:`api.databricks.UC_NUMERIC_TYPES` / ``UC_DATETIME_TYPES``).
+    ``BOOLEAN`` is the only type known to be two-valued from the schema alone, so it is marked
+    ``binary`` (and grouped categorical).
 
     Row-level statistics (``n_rows``, ``n_missing``, ``sample``, ``class_distribution``) are NOT
     available from schema-only metadata — no data is read here — so ``n_rows`` is ``0``,
@@ -121,9 +127,9 @@ def _profile_from_columns(columns: list[dict[str, Any]]) -> dict[str, Any]:
         names.append(name)
         n_missing[name] = 0  # unknown from schema-only metadata (see docstring)
 
-        if type_name in _UC_DATETIME_TYPES:
+        if type_name in UC_DATETIME_TYPES:
             datetime_cols.append(name)
-        elif type_name in _UC_NUMERIC_TYPES:
+        elif type_name in UC_NUMERIC_TYPES:
             numeric_cols.append(name)
         elif type_name == "BOOLEAN":
             binary_cols.append(name)
@@ -152,6 +158,36 @@ def _snapshot_key(catalog: str, schema: str, table: str) -> str:
     ``input_source.catalog``/``schema``/``table`` identifiers at run time.
     """
     return f"{DB_SNAPSHOT_PREFIX}/{catalog}_{schema}_{table}.parquet"
+
+
+def _sample_profile(
+    catalog: str, schema: str, table: str, user_pat: str
+) -> dict[str, Any] | None:
+    """Profile a bounded sample of the table's REAL data, or ``None`` if it can't be read.
+
+    Reads up to a capped number of rows via the SQL Statement Execution API
+    (:func:`api.databricks.fetch_table_sample`) and runs the SAME ``inspect_dataframe`` profiling the
+    CSV ``/upload`` and Postgres ``/input-sources/select`` flows use — so the result carries the full
+    Data-Profile blocks (``column_profiles`` + ``correlation``) and real per-column stats, exactly
+    like a file upload.
+
+    Best-effort: ANY failure — no SQL warehouse configured, an unreachable workspace, a
+    non-SUCCEEDED / empty statement, or a profiling error — returns ``None`` so the caller falls back
+    to the schema-only profile. The column picker is therefore never blocked on the SQL read.
+    Read-only and display-only: it feeds nothing back into training (the run still reads the FULL
+    table on the cluster via ``materialize_delta_source``) — no leakage surface.
+    """
+    full_name = f"{catalog}.{schema}.{table}"
+    try:
+        df = fetch_table_sample(catalog, schema, table, user_pat)
+        return inspect_dataframe(df, profile=True, source=full_name)
+    except Exception as exc:  # noqa: BLE001 — profiling is best-effort; never block the picker
+        logger.info(
+            "table-profile: sampling %s unavailable (%s); using the schema-only profile",
+            full_name,
+            exc,
+        )
+        return None
 
 
 @router.get("/databricks/catalogs", response_model=CatalogsResponse)
@@ -217,19 +253,34 @@ def table_profile_endpoint(
     table: str = Query(..., min_length=1),
     user_pat: str | None = Depends(get_user_pat),
 ) -> Any:
-    """Profile a Unity Catalog table's schema → the same ``InspectProfile`` shape as ``/upload``.
+    """Profile a Unity Catalog table → the same ``InspectProfile`` shape as ``/upload``.
 
-    After the UC picker selects ``catalog.schema.table``, this fetches that table's column
-    metadata from Unity Catalog (``get-a-table``, authenticated with the caller's PAT) and reshapes
-    it into the CSV-``/upload`` profile shape — ``columns``, ``dtypes``, the
-    numeric/categorical/binary/datetime column groups — so the frontend reuses its existing
-    column-picker (target dropdown + feature selector) verbatim, with **no manual column entry**.
+    After the UC picker selects ``catalog.schema.table``, this returns the same ``InspectProfile``
+    the CSV ``/upload`` and Postgres ``/input-sources/select`` flows do, so the frontend reuses its
+    existing column-picker (target dropdown + feature selector) AND its Data Profile / Configure
+    per-feature views verbatim — with **no manual column entry and no frontend branching**.
+
+    Two data paths, one shape:
+
+    * **Sampled (preferred).** When a SQL warehouse is configured
+      (``DATABRICKS_SQL_WAREHOUSE_ID`` / ``DATABRICKS_HTTP_PATH``) and reachable, it reads a BOUNDED
+      SAMPLE of the table's real rows (:func:`_sample_profile` → the SQL Statement Execution API,
+      authenticated with the caller's PAT) and runs the SAME profiling a file upload does — so the
+      response carries the full ``InspectProfile`` INCLUDING the Data-Profile blocks
+      (``column_profiles`` + ``correlation``) and real per-column stats.
+    * **Schema-only (fallback).** If the sample can't be read (no warehouse, unreachable, a
+      huge/unreadable table), it degrades to the Unity Catalog schema alone (``get-a-table``):
+      ``columns``/``dtypes`` + type-derived groups, ``n_rows`` ``0``, ``sample`` ``[]``, no
+      Data-Profile blocks (see :func:`_profile_from_columns`). The picker is never blocked and no
+      stats are fabricated.
+
+    The sample is display-only — reads nothing back into training; the run still reads the FULL
+    table on the cluster (``materialize_delta_source``).
 
     The response also carries ``server_path`` (a ``.parquet`` snapshot key) and a ``delta``
     ``input_source`` block, exactly like ``/input-sources/select`` does for Postgres, so the
     frontend's existing ``applyUpload`` plumbing sets the run up to read the Delta table on the
-    cluster. Row-level stats (``n_rows``/``n_missing``/``sample``/``class_distribution``) are not
-    available from schema-only metadata and are omitted/zeroed (see :func:`_profile_from_columns`).
+    cluster.
 
     Gating & errors:
 
@@ -255,7 +306,13 @@ def table_profile_endpoint(
     except DatabricksError as exc:
         return _auth_or_unavailable(exc)
 
-    profile = _profile_from_columns(columns)
+    # Prefer a profile over the table's ACTUAL data (a bounded sample read via the SQL warehouse) so
+    # the response carries the FULL InspectProfile — the Data-Profile blocks + real per-column stats,
+    # exactly like a CSV /upload or a Postgres /input-sources/select. When the sample can't be read
+    # it degrades to the schema-only profile — the picker is never blocked and no stats are fabricated.
+    profile = _sample_profile(catalog, schema, table, user_pat or "")
+    if profile is None:
+        profile = _profile_from_columns(columns)
     # server_path is echoed back to /run as input_file (the snapshot destination); input_source is
     # the delta block that makes the run read the Unity Catalog table on the cluster (§6.6 Step 4).
     profile["server_path"] = _snapshot_key(catalog, schema, table)

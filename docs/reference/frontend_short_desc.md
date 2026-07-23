@@ -575,6 +575,15 @@ data types — so you never type a column name by hand.
   schema fetch → `applyUpload`, the error path, and that the shared column picker (columns, types,
   target dropdown, binary badge) populates from a UC profile. Existing file/database upload flows are
   untouched. **162 vitest green · tsc clean.**
+- **Follow-up (2026-07-23) — the Data Profile page + feature picker now populate too.** Originally a
+  Databricks table gave only its schema, so the **Data Profile** page and the **Configuration
+  feature picker** (density curves, avg/IQR/variance, category chips) stayed empty for a UC source.
+  A **backend-only** change now has `/databricks/table-profile` read a bounded sample of the table's
+  real rows and return the full `InspectProfile` (with `column_profiles` + `correlation`) — so those
+  screens light up for a Databricks source **exactly like a file/Postgres source, with no frontend
+  change at all** (the pages were already source-agnostic — they just needed the blocks). If no SQL
+  warehouse is reachable it degrades to the schema-only view (as before). Rows shown reflect the
+  sample; the run still trains on the full table. **No frontend code change — 177 vitest still green.**
 
 ## Runs — per-user, from Databricks (2026-07-23)
 **In one line:** The Runs tab now shows *your own* past runs pulled from Databricks' MLflow (not the

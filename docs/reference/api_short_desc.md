@@ -311,6 +311,34 @@ working exactly as before, because the whole thing is switched on by one setting
   Databricks SDK `ColumnTypeName` enum. Every Databricks call is mocked in the tests. `docs/api_contract.md`
   updated (endpoint table + a dedicated section + footer note).
 
+## Databricks table-profile now reads a real-data SAMPLE (additive; no version bump) — 2026-07-23
+- **The gap it closes.** The 2026-07-14 table-profile above returned the table's **schema only** — so a
+  Databricks source populated the column picker but left the **Data Profile page** and the
+  **Configuration feature picker** empty (no histograms/stats/correlation, no per-feature density/chips),
+  unlike a CSV upload or a Postgres source.
+- **What it adds.** When a SQL warehouse is configured, `GET /databricks/table-profile` now reads a
+  **bounded sample** of the table's *actual* rows via the **SQL Statement Execution API**
+  (`POST /api/2.0/sql/statements`, `SELECT * … row_limit`, authenticated with the caller's **PAT** — the
+  same identity as the UC browser) and runs the **SAME** profiling a CSV upload does (`inspect_file` was
+  refactored to a reusable `inspect_dataframe` core). So the response carries the **full `InspectProfile`
+  including the Data-Profile blocks** (`column_profiles` + `correlation`) and real per-column stats — the
+  Databricks source is now as rich as file/Postgres, with **no frontend change**.
+- **Cleanest option, and why.** The FastAPI runs *off-cluster* (no Spark), so the existing Delta
+  materialize path can't read the sample there; a SQL warehouse is the natural HTTP-queryable endpoint.
+  **Reuses the existing `httpx` client seam** (no new dependency; mocked in CI exactly like the other
+  Databricks calls) rather than the `databricks-sql-connector` or the legacy Command Execution API.
+- **Bounded, non-blocking, honest.** `row_limit` (`CLASSIFYOS_DBRICKS_PROFILE_SAMPLE_ROWS`, default
+  10000) caps the read; `wait_timeout=30s` + `on_wait_timeout=CANCEL` = one call, no polling, a slow
+  query is cancelled. **Any** failure (no warehouse — `DATABRICKS_SQL_WAREHOUSE_ID` or an `<id>` parsed
+  from `DATABRICKS_HTTP_PATH` — unreachable, huge/unreadable, non-SUCCEEDED) **degrades to the previous
+  schema-only profile**, so the picker is never blocked and no stats are fabricated. `n_rows` reflects
+  the *sample* size. Display-only — the `/run` still reads the FULL table on the cluster (unchanged).
+- **Safe + tested.** Reads only, in-memory (no snapshot written at selection time), no leakage. Statement
+  Execution API shape **hallucination-checked** vs Microsoft Learn + the Databricks Python SDK (state enum,
+  INLINE/JSON_ARRAY `data_array`-of-strings, `row_limit`, `on_wait_timeout`). New tests: the sample path
+  (full blocks over mocked rows, PAT + `row_limit` asserted) + the graceful fallback (statement fails →
+  schema-only, no 5xx); all Databricks HTTP mocked. File/Postgres flows byte-identical (full suite green).
+
 ## Databricks Runs read-path store + run-scoped artifact serving (2026-07-23, additive; no version bump)
 Two fixes so the dashboard's **Runs** tab and a run's **artifact files** work end-to-end when the
 server runs the `databricks` execution backend. **API + frontend only — no engine/notebook/wheel
