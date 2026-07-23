@@ -7,8 +7,12 @@
 # changes; the engine was already a proper importable package.
 #
 # Scope: packages ONLY the `classifyos` engine (see [tool.setuptools.packages.find]
-# below). The FastAPI `api` layer is deliberately NOT packaged — the engine stays
-# web-free, so fastapi/uvicorn/pydantic are not runtime dependencies of the wheel.
+# below). The FastAPI `api` layer is deliberately NOT packaged, so the engine carries no
+# WEB SERVER dependency (fastapi/uvicorn are not runtime deps of the wheel).
+# `pydantic` IS a runtime dep, though: `classifyos.envelope` defines the locked /run response
+# models inside the engine so the Databricks Job notebook can build a byte-identical envelope
+# from the installed wheel alone (no `backend/` checkout). pydantic is a data-validation
+# library, not a web framework, and was already present transitively via mlflow.
 #
 #   cd backend/
 #   pip install build
@@ -27,9 +31,10 @@ requires-python = ">=3.11"
 # Engine runtime dependencies. Version ranges are kept IDENTICAL to the "ML engine"
 # section of backend/requirements.txt (single source of truth for what the engine needs
 # at runtime). shap/optuna/mlflow/openai/psycopg2-binary are opt-in + lazily imported, but
-# they are engine capabilities so they ship with the wheel like the rest. The API-only deps
-# (fastapi, uvicorn, pydantic, python-multipart, python-dotenv) and the test deps are NOT
-# listed here — they are not needed to run the engine on a cluster.
+# they are engine capabilities so they ship with the wheel like the rest. `pydantic` ships too
+# (it backs the `classifyos.envelope` response models — see the scope note above). The web-SERVER
+# deps (fastapi, uvicorn, python-multipart, python-dotenv) and the test deps are NOT listed here —
+# they are not needed to run the engine on a cluster.
 dependencies = [
     "numpy>=1.26,<3",
     "pandas>=2.1,<3",
@@ -47,6 +52,7 @@ dependencies = [
     "joblib>=1.3",
     "openpyxl>=3.1",
     "pyarrow>=15.0",
+    "pydantic>=2.6,<3",
 ]
 
 [tool.setuptools.packages.find]

@@ -103,7 +103,8 @@ prepends the prefix to `DBRICKS_OUTPUT_VOLUME` before the storage adapter is bui
 | `backend/api/routes/databricks.py` | UC browser endpoints (`/catalogs`, `/schemas`, `/tables`, `/table-profile`) |
 | `backend/classifyos/io/storage.py` | `DatabricksVolumeStorage` — POSIX paths to UC volumes |
 | `backend/classifyos/io/sql_source.py` | `materialize_delta_source()` — Delta table → pandas snapshot |
-| `notebooks/classifyos_job_runner.py` | The notebook Databricks executes as a Job |
+| `backend/classifyos/envelope/` | The `/run` envelope reshaper (`build_run_result` + `build_run_envelope`) and its pydantic response models — shipped **in the engine wheel** so the notebook builds a byte-identical envelope without a repo checkout. `api.result_builder`/`serialize`/`artifacts`/`models` re-export these |
+| `notebooks/classifyos_job_runner.py` | The notebook Databricks executes as a Job (imports the envelope from `classifyos.envelope` — wheel only, no `backend/` needed) |
 
 ---
 
@@ -137,13 +138,13 @@ prepends the prefix to `DBRICKS_OUTPUT_VOLUME` before the storage adapter is bui
 |---|---|
 | 1 | Checks if `classifyos` is importable (wheel installed via task library). Only runs `pip install` if not importable — reads path from `wheel_path` widget, never hardcoded. |
 | 2 | Reads `run_config` (JSON), `user_token`, and `user_email` from `base_parameters` widgets. Reads `job_id` from the notebook's OWN run context (`dbutils…currentRunId()`, the **task** run id), falling back to the `job_id` widget then `"local"`. FastAPI's `/results` bridges its outer run id to this task run id via `get_task_run_id` (§3), so the two namespaces agree. |
-| 3 | Sets env vars: `CLASSIFYOS_STORAGE_BACKEND=databricks`, UC volume paths, MLflow URIs. Sets `DATABRICKS_TOKEN` to user's PAT so UC reads run as the user. Normalizes the MLflow experiment to an absolute workspace path (Databricks rejects a bare name — §10). Adds the repo's `backend/` to `sys.path` so the `api` package (NOT in the wheel) is importable — resolving it from the notebook's Workspace path with the **`/Workspace`** driver-mount prefix prepended (which `notebookPath()` omits), and failing loud with diagnostics if `backend/` isn't found. |
+| 3 | Sets env vars: `CLASSIFYOS_STORAGE_BACKEND=databricks`, UC volume paths, MLflow URIs. Sets `DATABRICKS_TOKEN` to user's PAT so UC reads run as the user. Normalizes the MLflow experiment to an absolute workspace path (Databricks rejects a bare name — §10). **No import bootstrap** — the envelope reshaper ships in the wheel (`classifyos.envelope`), so no repo `backend/` on `sys.path` is needed. |
 | 4 | Prepends `{user_email}/{job_id}` to `DBRICKS_OUTPUT_VOLUME` (so ALL artifacts land in the per-user, per-run namespace), then `build_config(input_file, target, feature_cols, **rest)` → `ModelRunner.run()`. |
-| 5 | Writes the `/run` envelope to `api/run_response.json` relative to the namespaced output root — i.e. `{output_volume}/{user_email}/{job_id}/api/run_response.json`, exactly what `GET /run/{job_id}/results` fetches. |
+| 5 | Builds the locked `/run` envelope via `classifyos.envelope.build_run_envelope(runner, storage)` (the SAME reshaper + `RunResponse` the local route uses, from the wheel) and writes it to `api/run_response.json` relative to the namespaced output root — i.e. `{output_volume}/{user_email}/{job_id}/api/run_response.json`, exactly what `GET /run/{job_id}/results` fetches. |
 
 **Important:** The wheel is installed as a **task library** by FastAPI before the notebook runs. The notebook does NOT need a `%pip install` magic command. Cell 1 only falls back to pip if the wheel wasn't installed (standalone run).
 
-**Why the notebook needs a Repo checkout (the `api` package).** Cell 5 reshapes the run into the locked envelope with `api.result_builder.build_run_result` — the SAME reshaper the local `/run` route uses. That `api` package is **deliberately not in the engine wheel** (the wheel is the web-dependency-free ML engine; `api` is the web layer). `result_builder` / `models` / `serialize` / `artifacts` import only `classifyos` + `pydantic` (no FastAPI), so the cluster CAN import them — but only if the repo's `backend/` is on `sys.path`. That is why the notebook must run from a **Workspace Git-folder checkout** of the repo, and why Cell 3 must correctly locate `backend/` (see the `/Workspace`-prefix gotcha in §10). If you would rather not depend on a repo checkout, the alternative is to package these four web-dependency-free modules into the wheel — a follow-up, not done today.
+**The notebook needs only the wheel — no repo checkout.** Cell 5 builds the locked envelope with `classifyos.envelope.build_run_envelope` — the SAME `build_run_result` + `RunResponse` the local `/run` route uses, now shipped INSIDE the engine wheel (`classifyos.envelope`, since 2026-07-23). The FastAPI layer's `api.result_builder` / `api.serialize` / `api.artifacts` / `api.models` re-export those names, so there is still exactly ONE implementation and the local + Databricks envelopes stay byte-identical. This is why the notebook can run from a **plain Workspace notebook import** and no longer needs a Git-folder checkout of `backend/` (earlier cuts imported `api.*` from a checkout — that dependency is gone). Rebuild + re-upload the wheel whenever the envelope changes (§9).
 
 ---
 
@@ -189,8 +190,9 @@ itself (a rejected id → `503`, a finished-but-failed run → `FAILED`) rather 
 2. **No manually installed libraries** — wheel is installed per-job via task library
 3. **Volumes**: `aiml_rd.classifyos.{libs, input, output}` must exist in Unity Catalog
 4. **Wheel**: `classifyos-1.0.0-py3-none-any.whl` uploaded to `aiml_rd/classifyos/libs/`
-5. **Notebook**: imported into Databricks Workspace at `DATABRICKS_JOB_NOTEBOOK_PATH`
-   OR cloned via Databricks Repos from `https://github.com/sharmilsapiens/classifyos`
+5. **Notebook**: imported into the Databricks Workspace at `DATABRICKS_JOB_NOTEBOOK_PATH` — a
+   **plain notebook import is enough** (the envelope ships in the wheel, so a Git-folder checkout of
+   `backend/` is no longer required; a Repos checkout still works if you prefer to pull via Git)
 
 ---
 
@@ -218,7 +220,8 @@ No cluster restart needed — wheel installs fresh per job.
 | `DATABRICKS_JOB_NOTEBOOK_PATH is not set` | Missing env var | Add to `backend/.env` |
 | `DATABRICKS_JOB_CLUSTER_ID is not set` | Missing env var | Add cluster ID from Databricks Compute UI |
 | `%pip install /Volumes/main/...` | Stale Workspace notebook | Delete + re-import notebook from repo |
-| `No module named 'api'` (Cell 5) | Cell 3 failed to add the repo's `backend/` to `sys.path` — usually because `notebookPath()` returns a path WITHOUT the `/Workspace` driver-mount prefix, so the search looked in a dir that doesn't exist on disk (and failed silently) | Pull the current notebook — Cell 3 now prepends `/Workspace`, tries cwd + notebook dir, and **fails loud with `cwd`/`notebookPath`/`roots_tried` diagnostics** instead of failing silently. Confirm the repo is checked out as a Workspace Git folder so `backend/api/result_builder.py` sits alongside the notebook |
+| `No module named 'api'` (Cell 5) | An **old** notebook that still imports `api.*` from a repo checkout (pre-2026-07-23 design), run without `backend/` on `sys.path` | **Resolved by design** — the current notebook imports the envelope from `classifyos.envelope` in the wheel, not `api.*`. Pull the current notebook and re-upload the current wheel |
+| `No module named 'classifyos.envelope'` (Cell 5) | The cluster has an **old wheel** that predates the envelope move | Rebuild + re-upload the wheel (§9) — `classifyos.envelope` ships in `classifyos-1.0.0-py3-none-any.whl` since 2026-07-23 |
 | `INVALID_PARAMETER_VALUE: Got an invalid experiment name 'classifyos'` (Cell 4) | Databricks managed MLflow needs an **absolute** experiment path (`/Users/<email>/…`), not a bare name | **Non-fatal** — logging is best-effort, so the run still completes (you'll see `MLflow logging failed; the training run is unaffected`). Fixed by pulling the current notebook: Cell 3 rewrites the experiment to `/Users/<current_user>/classifyos` when logging is enabled |
 | `build_config() missing 2 required positional arguments` | Passing dict directly | Unpack: `build_config(input_file=..., target=..., feature_cols=..., **rest)` |
 | `'input_source.type' must be one of ['file', 'postgres']` | Old wheel without delta support | Rebuild wheel and re-upload |
@@ -228,9 +231,10 @@ No cluster restart needed — wheel installs fresh per job.
 
 ---
 
-## 11. Databricks Repos setup (recommended)
+## 11. Databricks Repos setup (optional)
 
-Allows the notebook to import `api.*` from `backend/`, giving the full result envelope.
+**No longer required for the `/run` envelope** — that now ships in the wheel (§6). A Repos/Git-folder
+checkout is still handy if you prefer to pull notebook updates via Git rather than re-importing:
 
 1. Databricks UI → **Repos** → **Add repo**
 2. URL: `https://github.com/sharmilsapiens/classifyos`
@@ -244,10 +248,11 @@ Allows the notebook to import `api.*` from `backend/`, giving the full result en
 
 ## 12. What is NOT done yet
 
-> **Done since an earlier draft:** Cell 5 now writes the FULL `build_run_result` envelope (the same
-> reshaper the local `/run` route uses), not a raw runner-state dict — so a Databricks run's results
-> render in the dashboard identically to a local run, provided the `api` package imports (§6) and
-> the fetch path matches (§7).
+> **Done since an earlier draft:** (1) Cell 5 writes the FULL envelope (same reshaper as the local
+> `/run` route), so a Databricks run renders in the dashboard identically to a local run; (2) that
+> reshaper + its pydantic response models were moved INTO the engine wheel (`classifyos.envelope`,
+> 2026-07-23), so the notebook builds the envelope from the wheel alone — **no repo checkout of
+> `backend/` is required** and the `No module named 'api'` failure mode is gone (§6, §11).
 
 - MLflow run history visible in UI (Phase D — deferred)
 - Model registry / serving (Phase C — deferred)

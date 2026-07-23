@@ -710,6 +710,34 @@ last engine-side pieces before wiring ClassifyOS into Databricks jobs.
   Delta runs through the web API and the FastAPI→Databricks-Jobs orchestration (Step 6), and Model
   Serving (Phase C).
 
+## Databricks envelope moved into the engine wheel — notebook needs no repo checkout (✅ Done, 2026-07-23)
+**In one line:** Moved the code that shapes a run's results into the final dashboard response INTO
+the engine's installable package, so the Databricks job notebook can build that response from the
+installed library alone — no copy of the web-app source needed on the cluster.
+- **The problem it fixes:** the cluster notebook used to import the response-builder from the web
+  (`api`) layer, which isn't part of the engine wheel — so it only worked if the whole repo was
+  checked out next to the notebook on the cluster. On a real run that failed (`No module named
+  'api'`) because the Databricks Git folder was a partial checkout without the `backend/` folder.
+- **What moved:** a new `classifyos.envelope` sub-package inside the engine now holds the result
+  reshaper, the JSON-safety helper, the artifact lister, and the response models (the "locked
+  `/run` schema"), plus a one-call `build_run_envelope(runner, storage)` that returns the whole
+  `{status, schema_version, result, error}` response. The web layer re-exports every one of these
+  from its old locations, so **nothing in the API or its tests changed** — there is still exactly
+  one definition of each (the web layer's `RunResponse` literally *is* the engine's now).
+- **The notebook is simpler + self-contained:** Cell 5 calls `classifyos.envelope.build_run_envelope`
+  from the wheel; the old "find the repo's `backend/` and add it to the path" bootstrap (and its
+  `/Workspace`-prefix hunting) is gone, so the notebook can run from a plain notebook import.
+- **The one tradeoff:** the engine wheel now lists **pydantic** as a dependency (it backs the
+  response models). It's a data-validation library, not a web framework — the web *server* deps
+  (FastAPI/uvicorn) stay out — and it was already installed alongside the engine via MLflow. A plain
+  engine/CLI run never imports the envelope, so pydantic is only used when actually building a
+  response. Owner-approved deviation (plan_tweak #50).
+- **Byte-identical, and needs a wheel rebuild.** The Databricks response is guaranteed identical to
+  a local run (both go through the same `RunResponse`). The wheel must be rebuilt + re-uploaded so
+  the cluster gets `classifyos.envelope`. Also fixed this session: the notebook's MLflow experiment
+  name (now an absolute workspace path Databricks accepts) and a doc correction to the result-path
+  matching. 75 API tests + full backend suite green; local runs unchanged.
+
 ---
 
 ## How to read this project

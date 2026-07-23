@@ -95,21 +95,19 @@ user_email = dbutils.widgets.get("user_email").strip() or "unknown_user"
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## Cell 3 — environment + import bootstrap
+# MAGIC ## Cell 3 — environment setup
 # MAGIC Select `DatabricksVolumeStorage` (Step 1) and the managed MLflow tracking server (Step 3);
 # MAGIC forward the user's PAT so any token-based Unity Catalog access runs as the user. Normalize
-# MAGIC the MLflow experiment to an absolute workspace path (Databricks rejects a bare name). Then
-# MAGIC make the `api` package importable (it is NOT in the wheel — it lives in the repo's
-# MAGIC `backend/`). The bootstrap adds the repo's `backend/` to `sys.path`, resolving it from the
-# MAGIC notebook's own Workspace path with the **`/Workspace`** driver-mount prefix prepended (which
-# MAGIC `notebookPath()` omits), and **fails loud with diagnostics** if `backend/` can't be found —
-# MAGIC so a bad Repo/Git-folder setup surfaces here, not as a cryptic `ModuleNotFoundError` in Cell 5.
+# MAGIC the MLflow experiment to an absolute workspace path (Databricks rejects a bare name).
+# MAGIC
+# MAGIC **No import bootstrap needed.** The envelope reshaper now ships INSIDE the engine wheel
+# MAGIC (`classifyos.envelope`), so Cell 5 imports it from the installed package — this notebook no
+# MAGIC longer needs the repo's `backend/` on `sys.path`, and can run from a plain notebook import
+# MAGIC (a Git-folder checkout is no longer required for the `/run` envelope).
 
 # COMMAND ----------
 
 import os
-import sys
-from pathlib import Path
 
 os.environ["CLASSIFYOS_STORAGE_BACKEND"] = "databricks"
 os.environ.setdefault("DBRICKS_INPUT_VOLUME", "/Volumes/aiml_rd/classifyos/input")
@@ -137,48 +135,15 @@ if isinstance(_mlflow_cfg, dict) and _mlflow_cfg.get("enabled"):
             _mlflow_cfg["experiment"] = f"/Shared/{_exp}"
     print("MLflow experiment:", _mlflow_cfg["experiment"])
 
-# Make the `api` package importable. It is NOT in the engine wheel — it lives in the repo's
-# backend/ dir — so this notebook must run from a Workspace/Git-folder checkout of the repo.
-# GOTCHA: Databricks mounts workspace files on the driver under /Workspace/<path>, but
-# notebookPath() returns the LOGICAL path WITHOUT that prefix, so we must add /Workspace to reach
-# the files on disk. Try (in order) paths already on sys.path, the cwd, the mounted notebook dir,
-# then the raw notebook dir — walking each upward looking for backend/api/result_builder.py.
-def _ensure_api_importable():
-    if any((Path(p) / "api" / "result_builder.py").exists() for p in sys.path):
-        return "already on sys.path"
-    try:
-        _nb = (
-            dbutils.notebook.entry_point.getDbutils().notebook()
-            .getContext().notebookPath().get() or ""
-        ).rstrip("/")
-    except Exception:
-        _nb = ""
-    roots = [Path.cwd()]
-    if _nb:
-        _mounted = _nb if _nb.startswith("/Workspace/") else "/Workspace" + _nb
-        roots += [Path(_mounted).parent, Path(_nb).parent]
-    for _root in roots:
-        for _candidate in [_root, *_root.parents]:
-            if (_candidate / "backend" / "api" / "result_builder.py").exists():
-                sys.path.insert(0, str(_candidate / "backend"))
-                return str(_candidate / "backend")
-    # Fail loud HERE with diagnostics — far clearer than a ModuleNotFoundError three cells later.
-    raise RuntimeError(
-        "Could not locate the repo's backend/ dir, so the `api` package is not importable. "
-        "This notebook must run from a Workspace Git-folder checkout of the repo, so that "
-        "backend/api/result_builder.py exists alongside it. Diagnostics: "
-        f"cwd={Path.cwd()}, notebookPath={_nb!r}, roots_tried={[str(r) for r in roots]}."
-    )
-
-print("api package importable from:", _ensure_api_importable())
-
 # COMMAND ----------
 
 # MAGIC %md
 # MAGIC ## Cell 4 — build the engine config and run the pipeline
-# MAGIC `RunConfig(**run_config).to_engine_config()` is the SAME validation + translation the
-# MAGIC synchronous `/run` route applies, so a Databricks run is configured identically to a local
-# MAGIC one. A `delta` input source materializes the Unity Catalog table to a Parquet snapshot on the
+# MAGIC `build_config(...)` runs the SAME validation the synchronous `/run` route applies (the route
+# MAGIC reaches it via `RunConfig.to_engine_config`; the submit already dumped the request `by_alias`,
+# MAGIC so a `delta` input source's `schema` key arrives in the shape `build_config` expects). The
+# MAGIC request model `RunConfig` stays in the web layer — the notebook needs only the engine wheel.
+# MAGIC A `delta` input source materializes the Unity Catalog table to a Parquet snapshot on the
 # MAGIC input volume before training (Step 4); leakage discipline unchanged.
 
 # COMMAND ----------
@@ -209,11 +174,11 @@ runner.run()
 
 # MAGIC %md
 # MAGIC ## Cell 5 — write the locked `/run` envelope to the output volume
-# MAGIC Builds the envelope via `api.result_builder.build_run_result` (the SAME reshaper the
-# MAGIC synchronous `/run` route uses) and writes it to `api/run_response.json` **relative to the
-# MAGIC namespaced output root** set in Cell 4, i.e.
-# MAGIC `{output_volume}/{user_email}/{job_id}/api/run_response.json` — exactly the path
-# MAGIC `GET /api/v1/run/{job_id}/results` rebuilds and fetches. The envelope shape is byte-identical
+# MAGIC Builds the envelope via `classifyos.envelope.build_run_envelope` (the SAME reshaper +
+# MAGIC `RunResponse` the synchronous `/run` route uses, now shipped INSIDE the engine wheel) and
+# MAGIC writes it to `api/run_response.json` **relative to the namespaced output root** set in Cell 4,
+# MAGIC i.e. `{output_volume}/{user_email}/{job_id}/api/run_response.json` — exactly the path
+# MAGIC `GET /api/v1/run/{job_id}/results` rebuilds and fetches. The envelope is byte-identical
 # MAGIC to a local `/run` response (`{status, schema_version, result, error}`) so the dashboard drops
 # MAGIC it straight into the existing result pages without any reshaping on the FastAPI side.
 
@@ -221,15 +186,13 @@ runner.run()
 
 import json  # noqa: E402
 
-from api.result_builder import build_run_result
-from api.models import RunResponse
-from api.serialize import safe_jsonify
+from classifyos.envelope import build_run_envelope  # noqa: E402
 
 RESULT_ENVELOPE_KEY = "api/run_response.json"
 
-result = build_run_result(runner, storage)
-response = RunResponse(status="ok", result=safe_jsonify(result))
-envelope = response.model_dump(by_alias=True)
+# Single call → the full {status, schema_version, result, error} envelope, byte-identical to a
+# local /run response (build_run_result + RunResponse.model_dump(by_alias=True), all in the wheel).
+envelope = build_run_envelope(runner, storage)
 
 out_path = storage.path_for(RESULT_ENVELOPE_KEY, output=True)
 os.makedirs(os.path.dirname(out_path), exist_ok=True)
