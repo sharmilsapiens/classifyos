@@ -97,10 +97,13 @@ user_email = dbutils.widgets.get("user_email").strip() or "unknown_user"
 # MAGIC %md
 # MAGIC ## Cell 3 — environment + import bootstrap
 # MAGIC Select `DatabricksVolumeStorage` (Step 1) and the managed MLflow tracking server (Step 3);
-# MAGIC forward the user's PAT so any token-based Unity Catalog access runs as the user. Then make
-# MAGIC the `api` package importable. The bootstrap walks up from the notebook's own Workspace path
-# MAGIC (via dbutils) rather than `Path.cwd()` (which is `/databricks/driver`, not the repo) so
-# MAGIC `api.*` is reliably found when the notebook runs from a Databricks Repo checkout.
+# MAGIC forward the user's PAT so any token-based Unity Catalog access runs as the user. Normalize
+# MAGIC the MLflow experiment to an absolute workspace path (Databricks rejects a bare name). Then
+# MAGIC make the `api` package importable (it is NOT in the wheel — it lives in the repo's
+# MAGIC `backend/`). The bootstrap adds the repo's `backend/` to `sys.path`, resolving it from the
+# MAGIC notebook's own Workspace path with the **`/Workspace`** driver-mount prefix prepended (which
+# MAGIC `notebookPath()` omits), and **fails loud with diagnostics** if `backend/` can't be found —
+# MAGIC so a bad Repo/Git-folder setup surfaces here, not as a cryptic `ModuleNotFoundError` in Cell 5.
 
 # COMMAND ----------
 
@@ -117,27 +120,57 @@ os.environ["MLFLOW_REGISTRY_URI"] = "databricks-uc"
 if user_token:
     os.environ["DATABRICKS_TOKEN"] = user_token
 
-# Make the `api` package importable. In a Databricks Repo the repo files sit next to this
-# notebook; walk up from the working directory AND from the notebook's workspace path to find
-# the repo's backend/ dir. Path.cwd() on a cluster is /databricks/driver (not the repo), so
-# the notebook path from dbutils is the reliable anchor.
-if not any((Path(p) / "api" / "result_builder.py").exists() for p in sys.path):
-    _search_roots = [Path.cwd()]
+# Databricks managed MLflow requires the experiment to be an ABSOLUTE workspace path
+# (e.g. /Users/<email>/classifyos); a bare name like "classifyos" makes set_experiment() fail with
+# INVALID_PARAMETER_VALUE. If MLflow logging is enabled and the configured experiment is not
+# already absolute, nest it under the caller's workspace home (resolved via Spark), falling back to
+# /Shared. The engine already treats MLflow logging as best-effort (report-only) — this just lets it
+# actually succeed on the cluster instead of being swallowed as "MLflow logging failed".
+_mlflow_cfg = run_config.get("mlflow")
+if isinstance(_mlflow_cfg, dict) and _mlflow_cfg.get("enabled"):
+    _exp = str(_mlflow_cfg.get("experiment") or "classifyos").strip()
+    if not _exp.startswith("/"):
+        try:
+            _me = spark.sql("SELECT current_user()").first()[0]
+            _mlflow_cfg["experiment"] = f"/Users/{_me}/{_exp}"
+        except Exception:
+            _mlflow_cfg["experiment"] = f"/Shared/{_exp}"
+    print("MLflow experiment:", _mlflow_cfg["experiment"])
+
+# Make the `api` package importable. It is NOT in the engine wheel — it lives in the repo's
+# backend/ dir — so this notebook must run from a Workspace/Git-folder checkout of the repo.
+# GOTCHA: Databricks mounts workspace files on the driver under /Workspace/<path>, but
+# notebookPath() returns the LOGICAL path WITHOUT that prefix, so we must add /Workspace to reach
+# the files on disk. Try (in order) paths already on sys.path, the cwd, the mounted notebook dir,
+# then the raw notebook dir — walking each upward looking for backend/api/result_builder.py.
+def _ensure_api_importable():
+    if any((Path(p) / "api" / "result_builder.py").exists() for p in sys.path):
+        return "already on sys.path"
     try:
-        _nb_ws = dbutils.notebook.entry_point.getDbutils().notebook().getContext().notebookPath().get()
-        _search_roots.append(Path(_nb_ws).parent)
+        _nb = (
+            dbutils.notebook.entry_point.getDbutils().notebook()
+            .getContext().notebookPath().get() or ""
+        ).rstrip("/")
     except Exception:
-        pass
-    _found = False
-    for _here in _search_roots:
-        for _candidate in [_here, *_here.parents]:
-            _backend = _candidate / "backend"
-            if (_backend / "api" / "result_builder.py").exists():
-                sys.path.insert(0, str(_backend))
-                _found = True
-                break
-        if _found:
-            break
+        _nb = ""
+    roots = [Path.cwd()]
+    if _nb:
+        _mounted = _nb if _nb.startswith("/Workspace/") else "/Workspace" + _nb
+        roots += [Path(_mounted).parent, Path(_nb).parent]
+    for _root in roots:
+        for _candidate in [_root, *_root.parents]:
+            if (_candidate / "backend" / "api" / "result_builder.py").exists():
+                sys.path.insert(0, str(_candidate / "backend"))
+                return str(_candidate / "backend")
+    # Fail loud HERE with diagnostics — far clearer than a ModuleNotFoundError three cells later.
+    raise RuntimeError(
+        "Could not locate the repo's backend/ dir, so the `api` package is not importable. "
+        "This notebook must run from a Workspace Git-folder checkout of the repo, so that "
+        "backend/api/result_builder.py exists alongside it. Diagnostics: "
+        f"cwd={Path.cwd()}, notebookPath={_nb!r}, roots_tried={[str(r) for r in roots]}."
+    )
+
+print("api package importable from:", _ensure_api_importable())
 
 # COMMAND ----------
 

@@ -3,7 +3,7 @@
 > **Purpose:** practical reference for any Claude session working on the Databricks
 > execution path. Read this alongside `docs/databricks_integration.md` (the design/roadmap
 > doc) and `docs/enabling_parallelization.md` (scale/perf planning).
-> **Last updated:** 2026-07-21
+> **Last updated:** 2026-07-23
 
 ---
 
@@ -83,8 +83,12 @@ prepends the prefix to `DBRICKS_OUTPUT_VOLUME` before the storage adapter is bui
 - `{user_email}` — FastAPI resolves the requesting user's email from their PAT via SCIM
   (`get_user_email`, §5) and passes it to the notebook as the `user_email` base_parameter;
   `unknown_user` is the fallback if resolution fails (never blocks a run).
-- `{job_id}` — the notebook's OWN Databricks run id, read from the notebook context (NOT a widget),
-  which equals the id FastAPI polls/fetches with. This is what makes `GET /run/{job_id}/results`
+- `{job_id}` — the notebook's OWN Databricks **task** run id, read from its run context
+  (`currentRunId()`, NOT a widget). Note this is the *task* run id, which for a `SUBMIT_RUN` job
+  differs from the *outer* run id FastAPI receives from the submit and polls with. So
+  `GET /run/{job_id}/results` does NOT fetch under the raw `job_id`: it first bridges outer → task
+  via `get_task_run_id(job_id)` (one extra `jobs/runs/get`, reading `tasks[0].run_id`) and fetches
+  under that task run id — the same value the notebook namespaced with. This is what makes the fetch
   land on the exact path the Job wrote.
 
 ---
@@ -132,12 +136,14 @@ prepends the prefix to `DBRICKS_OUTPUT_VOLUME` before the storage adapter is bui
 | Cell | What it does |
 |---|---|
 | 1 | Checks if `classifyos` is importable (wheel installed via task library). Only runs `pip install` if not importable — reads path from `wheel_path` widget, never hardcoded. |
-| 2 | Reads `run_config` (JSON), `user_token`, and `user_email` from `base_parameters` widgets. Reads `job_id` from the notebook's OWN run context (`dbutils…currentRunId()`), falling back to the `job_id` widget then `"local"` — so the output namespace always matches the id FastAPI polls with. |
-| 3 | Sets env vars: `CLASSIFYOS_STORAGE_BACKEND=databricks`, UC volume paths, MLflow URIs. Sets `DATABRICKS_TOKEN` to user's PAT so UC reads run as the user. Adds `backend/` to `sys.path` if running from a Databricks Repo. |
+| 2 | Reads `run_config` (JSON), `user_token`, and `user_email` from `base_parameters` widgets. Reads `job_id` from the notebook's OWN run context (`dbutils…currentRunId()`, the **task** run id), falling back to the `job_id` widget then `"local"`. FastAPI's `/results` bridges its outer run id to this task run id via `get_task_run_id` (§3), so the two namespaces agree. |
+| 3 | Sets env vars: `CLASSIFYOS_STORAGE_BACKEND=databricks`, UC volume paths, MLflow URIs. Sets `DATABRICKS_TOKEN` to user's PAT so UC reads run as the user. Normalizes the MLflow experiment to an absolute workspace path (Databricks rejects a bare name — §10). Adds the repo's `backend/` to `sys.path` so the `api` package (NOT in the wheel) is importable — resolving it from the notebook's Workspace path with the **`/Workspace`** driver-mount prefix prepended (which `notebookPath()` omits), and failing loud with diagnostics if `backend/` isn't found. |
 | 4 | Prepends `{user_email}/{job_id}` to `DBRICKS_OUTPUT_VOLUME` (so ALL artifacts land in the per-user, per-run namespace), then `build_config(input_file, target, feature_cols, **rest)` → `ModelRunner.run()`. |
 | 5 | Writes the `/run` envelope to `api/run_response.json` relative to the namespaced output root — i.e. `{output_volume}/{user_email}/{job_id}/api/run_response.json`, exactly what `GET /run/{job_id}/results` fetches. |
 
 **Important:** The wheel is installed as a **task library** by FastAPI before the notebook runs. The notebook does NOT need a `%pip install` magic command. Cell 1 only falls back to pip if the wheel wasn't installed (standalone run).
+
+**Why the notebook needs a Repo checkout (the `api` package).** Cell 5 reshapes the run into the locked envelope with `api.result_builder.build_run_result` — the SAME reshaper the local `/run` route uses. That `api` package is **deliberately not in the engine wheel** (the wheel is the web-dependency-free ML engine; `api` is the web layer). `result_builder` / `models` / `serialize` / `artifacts` import only `classifyos` + `pydantic` (no FastAPI), so the cluster CAN import them — but only if the repo's `backend/` is on `sys.path`. That is why the notebook must run from a **Workspace Git-folder checkout** of the repo, and why Cell 3 must correctly locate `backend/` (see the `/Workspace`-prefix gotcha in §10). If you would rather not depend on a repo checkout, the alternative is to package these four web-dependency-free modules into the wheel — a follow-up, not done today.
 
 ---
 
@@ -145,25 +151,35 @@ prepends the prefix to `DBRICKS_OUTPUT_VOLUME` before the storage adapter is bui
 
 `GET /api/v1/run/{job_id}/results`:
 
-1. Polls Databricks for current job state (`job_id` == Databricks `run_id`, so this is a direct
-   `jobs/runs/get` call — there is **no intermediate store**; the same poll backs `/status`)
+1. Polls Databricks for current job state (`job_id` == the outer Databricks `run_id`, so this is a
+   direct `jobs/runs/get` call — there is **no intermediate store**; the same poll backs `/status`)
 2. Resolves the caller's email from the `X-Databricks-Token` PAT (`get_user_email`, same as at
    submit) to rebuild the `{user_email}` prefix; a missing PAT → `unknown_user`
-3. If `COMPLETED`: calls
-   `fetch_uc_file(DBRICKS_OUTPUT_VOLUME + "/{user_email}/{job_id}/api/run_response.json")`
-4. `fetch_uc_file` hits `GET {DATABRICKS_HOST}/api/2.0/fs/files{volume_path}` with service token
-5. Returns the JSON envelope to the frontend
+3. Bridges the outer `job_id` to the **task** run id the notebook namespaced with:
+   `get_task_run_id(job_id)` (one extra `jobs/runs/get`, reading `tasks[0].run_id`; falls back to
+   `job_id` if the payload carries no tasks)
+4. If `COMPLETED`: calls
+   `fetch_uc_file(DBRICKS_OUTPUT_VOLUME + "/{user_email}/{task_run_id}/api/run_response.json")`
+5. `fetch_uc_file` hits `GET {DATABRICKS_HOST}/api/2.0/fs/files{volume_path}` with the service token
+6. Returns the JSON envelope to the frontend
 
 Because there is no cached job state, a transient Databricks outage on either endpoint is an honest
 `503` (never a fabricated last-known status), and an unrecognised `job_id` is decided by Databricks
 itself (a rejected id → `503`, a finished-but-failed run → `FAILED`) rather than a local `404`.
 
-> **The path must match on both sides.** The notebook writes under `{user_email}/{job_id}` (email
-> from the `user_email` base_parameter FastAPI resolved at submit; `job_id` from its own run
-> context), and `/results` rebuilds the same prefix (email from the caller's PAT; `job_id` from the
-> URL). Because `get_user_email` is deterministic and both calls hit the same SCIM identity, the two
-> paths agree. (This resolves the earlier "results never reach the dashboard" mismatch, where the
-> notebook namespaced by an empty `job_id` widget → `"local"` while FastAPI fetched by `run_id`.)
+> **The path must match on both sides**, and it hinges on two values agreeing:
+> * `{user_email}` — the notebook writes under the `user_email` base_parameter FastAPI resolved
+>   (from the user's PAT via SCIM) at submit; `/results` re-resolves it from the caller's PAT. Both
+>   use the deterministic `get_user_email`, so as long as the same identity/PAT is used at submit and
+>   fetch, they agree (a failure at either end → `unknown_user`, which only matches if BOTH ended up
+>   there).
+> * the run id — the notebook writes under its own **task** run id (`currentRunId()`); `/results`
+>   derives the same task run id from the outer `job_id` via `get_task_run_id`. This assumes
+>   `currentRunId()` inside the notebook equals `tasks[0].run_id` from `jobs/runs/get` — true for the
+>   single-task `SUBMIT_RUN` job used here — so the two paths line up.
+>
+> (This resolves the earlier "results never reach the dashboard" mismatch, where the notebook
+> namespaced by an empty `job_id` widget → `"local"` while FastAPI fetched by `run_id`.)
 
 ---
 
@@ -202,7 +218,8 @@ No cluster restart needed — wheel installs fresh per job.
 | `DATABRICKS_JOB_NOTEBOOK_PATH is not set` | Missing env var | Add to `backend/.env` |
 | `DATABRICKS_JOB_CLUSTER_ID is not set` | Missing env var | Add cluster ID from Databricks Compute UI |
 | `%pip install /Volumes/main/...` | Stale Workspace notebook | Delete + re-import notebook from repo |
-| `No module named 'api'` | Notebook not running from Databricks Repo | Set up Repos OR use self-contained notebook (Option B) |
+| `No module named 'api'` (Cell 5) | Cell 3 failed to add the repo's `backend/` to `sys.path` — usually because `notebookPath()` returns a path WITHOUT the `/Workspace` driver-mount prefix, so the search looked in a dir that doesn't exist on disk (and failed silently) | Pull the current notebook — Cell 3 now prepends `/Workspace`, tries cwd + notebook dir, and **fails loud with `cwd`/`notebookPath`/`roots_tried` diagnostics** instead of failing silently. Confirm the repo is checked out as a Workspace Git folder so `backend/api/result_builder.py` sits alongside the notebook |
+| `INVALID_PARAMETER_VALUE: Got an invalid experiment name 'classifyos'` (Cell 4) | Databricks managed MLflow needs an **absolute** experiment path (`/Users/<email>/…`), not a bare name | **Non-fatal** — logging is best-effort, so the run still completes (you'll see `MLflow logging failed; the training run is unaffected`). Fixed by pulling the current notebook: Cell 3 rewrites the experiment to `/Users/<current_user>/classifyos` when logging is enabled |
 | `build_config() missing 2 required positional arguments` | Passing dict directly | Unpack: `build_config(input_file=..., target=..., feature_cols=..., **rest)` |
 | `'input_source.type' must be one of ['file', 'postgres']` | Old wheel without delta support | Rebuild wheel and re-upload |
 | `results envelope is not available yet` | Notebook wrote under a different `{user_email}/{job_id}` prefix than `/results` fetched | Ensure the deployed notebook is current (reads `job_id` from its run context + the `user_email` base_parameter — §6), the caller sends `X-Databricks-Token`, and both resolve the SAME SCIM identity (see §7) |
@@ -227,8 +244,11 @@ Allows the notebook to import `api.*` from `backend/`, giving the full result en
 
 ## 12. What is NOT done yet
 
-- Full result envelope from Databricks path (Cell 5 still writes a raw runner-state dict, not the
-  `build_run_result` envelope, so charts don't fully render yet)
+> **Done since an earlier draft:** Cell 5 now writes the FULL `build_run_result` envelope (the same
+> reshaper the local `/run` route uses), not a raw runner-state dict — so a Databricks run's results
+> render in the dashboard identically to a local run, provided the `api` package imports (§6) and
+> the fetch path matches (§7).
+
 - MLflow run history visible in UI (Phase D — deferred)
 - Model registry / serving (Phase C — deferred)
 - Per-user Unity Catalog permissions on the `{user_email}/` output folders (the folder-level
