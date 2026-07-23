@@ -157,12 +157,12 @@ Product Recommendation (multilabel).
 
 - One section/phase per session where possible. Generate → unit test on real CSV → integrate.
 - **Doc updates are enforced via the phase prompts, not a hook.** At the end of EVERY session
-  that changes engine code, update PROJECT_STATE.md and backend_short_desc.md; update
-  plan_tweak.md only if a real deviation/assumption occurred (do not invent entries).
+  that changes engine code, update PROJECT_STATE.md and docs/reference/backend_short_desc.md;
+  update plan_tweak.md only if a real deviation/assumption occurred (do not invent entries).
 - PROJECT_STATE.md is the live status (what was completed, decisions, known issues, next
   steps); it is synced to the planning Claude Project after each update.
-- `backend_short_desc.md` holds the plain-language one-line phase summaries for the engine.
-  (Future: `api_short_desc.md` and `frontend_short_desc.md` when those surfaces are built;
+- `docs/reference/backend_short_desc.md` holds the plain-language one-line phase summaries for
+  the engine. (`docs/reference/api_short_desc.md` and `docs/reference/frontend_short_desc.md`
   each will open with a shared short "About ClassifyOS" header, then its own surface-specific
   summaries.)
 - If a library API call is uncertain, verify against the installed version (hallucination
