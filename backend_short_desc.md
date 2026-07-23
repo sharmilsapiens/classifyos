@@ -738,6 +738,18 @@ installed library alone — no copy of the web-app source needed on the cluster.
   name (now an absolute workspace path Databricks accepts) and a doc correction to the result-path
   matching. 75 API tests + full backend suite green; local runs unchanged.
 
+## Runs history recorded per-user (engine bit) (✅ Done, 2026-07-23)
+**In one line:** A small engine addition so the dashboard's Runs tab can show each user only *their*
+Databricks runs: every logged run is stamped with who ran it, plus a reloadable copy of its result.
+- New `snapshot_envelope(run_id, envelope, user_email)` in the engine's MLflow module is now the ONE
+  place that attaches a run's rendered result (for byte-identical reload) and tags it with two labels:
+  a "reloadable" marker and the **owner's email**. The web layer's old snapshot helper just calls it.
+- The Databricks job stamps each run with the runner's email; the API then filters the Runs list to
+  the caller and refuses to open someone else's run (the filtering/auth lives in the API — see
+  `api_short_desc.md`; the engine change is just the helper + the shared tag names).
+- Report-only and additive: if MLflow logging is off/fails nothing happens, and a local run is
+  unchanged. No new dependency, no schema change.
+
 ---
 
 ## How to read this project

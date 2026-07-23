@@ -22,6 +22,7 @@ import { useApp } from "@/store/AppStore"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Card, CardContent } from "@/components/ui/card"
+import { Input } from "@/components/ui/input"
 import {
   EmptyState,
   ErrorState,
@@ -31,7 +32,7 @@ import {
 } from "@/components/common/States"
 import { fmtMetric } from "@/lib/format"
 
-type Phase = "loading" | "ready" | "error"
+type Phase = "loading" | "ready" | "error" | "needsPat"
 
 /** MLflow epoch/ISO → a readable local timestamp; em-dash when missing/invalid. */
 function fmtWhen(iso: string | null): string {
@@ -49,10 +50,12 @@ function statusVariant(status: string): "success" | "destructive" | "secondary" 
 }
 
 export default function Runs() {
-  const { applyReloadedRun } = useApp()
+  const { applyReloadedRun, executionBackend, databricksPat, setDatabricksPat } = useApp()
   const navigate = useNavigate()
+  const isDatabricks = executionBackend === "databricks"
 
   const [phase, setPhase] = useState<Phase>("loading")
+  const [patInput, setPatInput] = useState("")
   const [runs, setRuns] = useState<RunSummary[]>([])
   const [trackingUri, setTrackingUri] = useState<string>("")
   const [listError, setListError] = useState<string>("")
@@ -60,18 +63,30 @@ export default function Runs() {
   const [loadingId, setLoadingId] = useState<string | null>(null)
 
   const fetchRuns = useCallback(async () => {
+    // Databricks backend scopes Runs to the caller, so it needs their PAT. If we know we're on
+    // Databricks and don't have one yet (fresh session, no submit), prompt rather than a doomed fetch.
+    if (isDatabricks && !databricksPat.trim()) {
+      setPhase("needsPat")
+      return
+    }
     setPhase("loading")
     setLoadError("")
     try {
-      const res = await api.listRuns()
+      const res = await api.listRuns(databricksPat)
       setRuns(res.runs)
       setTrackingUri(res.tracking_uri)
       setPhase("ready")
     } catch (err) {
+      // 401 (Databricks) = PAT missing/expired → prompt for it, don't show a hard error. The server
+      // only 401s the Runs endpoints in the Databricks backend, so this never triggers locally.
+      if (err instanceof ApiError && err.status === 401) {
+        setPhase("needsPat")
+        return
+      }
       setListError(err instanceof ApiError ? err.message : "Could not load past runs.")
       setPhase("error")
     }
-  }, [])
+  }, [isDatabricks, databricksPat])
 
   useEffect(() => {
     void fetchRuns()
@@ -82,7 +97,7 @@ export default function Runs() {
       setLoadingId(runId)
       setLoadError("")
       try {
-        const envelope = await api.loadRun(runId)
+        const envelope = await api.loadRun(runId, databricksPat)
         applyReloadedRun(envelope)
         navigate("/") // Overview — every result page now reads the reloaded run.
       } catch (err) {
@@ -93,7 +108,7 @@ export default function Runs() {
         setLoadingId(null)
       }
     },
-    [applyReloadedRun, navigate],
+    [applyReloadedRun, navigate, databricksPat],
   )
 
   const refreshBtn = (
@@ -124,6 +139,39 @@ export default function Runs() {
         <div className="mb-4 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
           {loadError}
         </div>
+      )}
+
+      {phase === "needsPat" && (
+        <Card>
+          <CardContent className="space-y-3 p-6">
+            <div className="flex items-center gap-2">
+              <Database className="h-4 w-4 shrink-0" aria-hidden />
+              <h3 className="font-medium">Connect to Databricks</h3>
+            </div>
+            <p className="text-sm text-muted-foreground">
+              Runs are scoped to you. Paste your Databricks personal access token to view your runs —
+              it's held in memory for this session only and never stored.
+            </p>
+            <form
+              className="flex gap-2"
+              onSubmit={(e) => {
+                e.preventDefault()
+                setDatabricksPat(patInput.trim()) // triggers a re-fetch via fetchRuns' deps
+              }}
+            >
+              <Input
+                type="password"
+                value={patInput}
+                onChange={(e) => setPatInput(e.target.value)}
+                placeholder="dapi…"
+                aria-label="Databricks personal access token"
+              />
+              <Button type="submit" disabled={!patInput.trim()}>
+                Connect
+              </Button>
+            </form>
+          </CardContent>
+        </Card>
       )}
 
       {phase === "loading" && <LoadingState message="Loading past runs…" />}

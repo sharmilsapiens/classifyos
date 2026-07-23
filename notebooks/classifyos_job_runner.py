@@ -201,3 +201,15 @@ print("schema_version:", envelope.get("schema_version"))
 if hasattr(runner, "metrics_df_") and runner.metrics_df_ is not None:
     display(runner.metrics_df_.sort_values("f1_weighted", ascending=False))
 print("MLflow run:", getattr(runner, "mlflow_run_", None))
+
+# Register this run in the per-user Runs view: attach the SAME envelope as an MLflow artifact and
+# tag it with the owner (user_email) + the reloadable marker, via the engine's single-source helper
+# (classifyos.mlflow_logging.snapshot_envelope). Report-only: if MLflow logging was off/failed,
+# runner.mlflow_run_ is None and we skip. The tag value is the SAME sanitized email FastAPI resolves
+# on GET /runs, so the dashboard filters this run to its owner and can reload it byte-identically.
+_mlflow_run = getattr(runner, "mlflow_run_", None)
+if _mlflow_run and _mlflow_run.get("run_id"):
+    from classifyos.mlflow_logging import snapshot_envelope  # noqa: E402
+
+    snapshot_envelope(_mlflow_run["run_id"], envelope, user_email=user_email)
+    print("Registered MLflow run for per-user Runs:", _mlflow_run["run_id"], "owner:", user_email)

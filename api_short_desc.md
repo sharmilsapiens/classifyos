@@ -191,6 +191,14 @@ additively (`schema_version` now reports `"1.1"`).
   helper that imports `mlflow` lazily, turns an unreachable store into a clean **503** and an unknown
   run into a **404** — never a 500. Verified live end-to-end against a real local Postgres.
   `docs/api_contract.md` updated (header note, endpoint table, a dedicated endpoints section, footer).
+- **Per-user + Databricks-sourced (2026-07-23).** In the `databricks` execution backend the Runs view
+  is scoped to the CALLER and read from Databricks-managed MLflow: `/runs` filters by a
+  `classifyos.user_email` tag (the Job logs it; the caller's email is resolved on read from the
+  `X-Databricks-Token` PAT via SCIM), and `/runs/{id}` 404s another user's run. The **service token**
+  authenticates the MLflow read; the PAT only resolves identity — thread-safe, no per-request
+  credential swap. A missing/expired PAT → **401** (the UI prompts). The **local** backend is
+  unchanged (lists everything, no PAT). No `/run` contract change; runs are filtered by the STABLE
+  email tag, so PAT rotation never loses history.
 
 ## Postgres input source — draw a run's data from a database (request-side; no version bump) — 2026-07-08
 - **What it adds.** A run can now optionally pull its data from a SQL database instead of an

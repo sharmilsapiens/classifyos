@@ -252,11 +252,41 @@ checkout is still handy if you prefer to pull notebook updates via Git rather th
 > `/run` route), so a Databricks run renders in the dashboard identically to a local run; (2) that
 > reshaper + its pydantic response models were moved INTO the engine wheel (`classifyos.envelope`,
 > 2026-07-23), so the notebook builds the envelope from the wheel alone — **no repo checkout of
-> `backend/` is required** and the `No module named 'api'` failure mode is gone (§6, §11).
+> `backend/` is required** and the `No module named 'api'` failure mode is gone (§6, §11); (3) the
+> dashboard's **Runs** tab now lists/reloads runs from Databricks-managed MLflow, **scoped per user**
+> (§13).
 
-- MLflow run history visible in UI (Phase D — deferred)
+- Broader MLflow experiment browsing in the UI beyond the per-user Runs list (Phase D — deferred)
 - Model registry / serving (Phase C — deferred)
 - Per-user Unity Catalog permissions on the `{user_email}/` output folders (the folder-level
   namespacing is now in place — see §3 — but no per-user grants are applied yet)
 - Broader concurrent-user job isolation beyond output paths (enabling_parallelization.md item 11)
 - PAT secret-scope handoff (PAT currently visible in Databricks run parameters)
+
+---
+
+## 13. Runs history — per-user, from Databricks MLflow
+
+The dashboard's **Runs** tab (`GET /api/v1/runs` + `/runs/{run_id}`) reads past runs from MLflow. In
+the **databricks** backend it is scoped to the CALLER and sourced from the workspace's managed MLflow.
+
+**Owner tag on write.** The Job notebook (Cell 5) calls
+`classifyos.mlflow_logging.snapshot_envelope(run_id, envelope, user_email)` — logging the `/run`
+envelope as an MLflow artifact (so the run is *reloadable*) and setting two tags:
+`classifyos.result_artifact` (reloadable marker) and `classifyos.user_email` (owner). `user_email` is
+the SAME sanitized email FastAPI resolved at submit (`get_user_email`).
+
+**Filter on read.** `GET /runs` resolves the caller's email from their `X-Databricks-Token` PAT (SCIM,
+the same `get_user_email` as `/results`) and `list_runs` adds a server-side tag filter
+`` tags.`classifyos.user_email` = '<email>' ``. `GET /runs/{id}` additionally 404s a run owned by
+someone else. A missing/expired PAT is a **401** (the UI prompts for a fresh token).
+
+**Why thread-safe.** The **service token** authenticates the MLflow read (constant, process-level);
+the PAT is used only to resolve identity per request. There is NO per-request credential/env swap
+(which would be a multi-user race). Scoping is by the STABLE email tag, so PAT rotation never loses a
+user's history. Isolation is app-enforced (a filter) — sufficient for display, not a Databricks ACL.
+
+**Env (FastAPI process) for the Databricks Runs read:** `MLFLOW_TRACKING_URI=databricks` +
+`DATABRICKS_HOST` + `DATABRICKS_TOKEN` (service); the service identity needs READ on the
+`/Shared/classifyos` experiment. In the **local** backend none of this applies — `/runs` lists every
+run from the local store, exactly as before (no PAT).

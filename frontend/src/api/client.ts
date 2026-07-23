@@ -278,18 +278,27 @@ export async function getTableProfile(
   return handleJson<InspectProfile>(res)
 }
 
-/** GET /runs — list past MLflow-logged runs (most-recent first). Consumed by: Runs. */
-export async function listRuns(): Promise<RunsListResponse> {
-  const res = await request(`${API_BASE}/runs`)
+/** GET /runs — list past MLflow-logged runs (most-recent first). Consumed by: Runs.
+ *
+ * Databricks backend: pass the caller's PAT (`X-Databricks-Token`) so the server scopes the list to
+ * their OWN runs (filtered by the `classifyos.user_email` tag — see `routes/runs.py`). Local backend:
+ * omit it — every run is listed. The header is sent only when a PAT is provided. */
+export async function listRuns(pat?: string): Promise<RunsListResponse> {
+  const init = pat ? { headers: { "X-Databricks-Token": pat } } : undefined
+  const res = await request(`${API_BASE}/runs`, init)
   return handleJson<RunsListResponse>(res)
 }
 
 /**
  * GET /runs/{run_id} — reload one past run. Returns the SAME locked /run envelope the run was
  * rendered with, validated through the same parser, so it drops straight into the result pages.
+ *
+ * Databricks backend: pass the PAT so the server authorizes the reload to the run's owner (a run
+ * owned by another user is a 404). Local backend: omit it.
  */
-export async function loadRun(runId: string): Promise<RunResponse> {
-  const res = await request(`${API_BASE}/runs/${encodeURIComponent(runId)}`)
+export async function loadRun(runId: string, pat?: string): Promise<RunResponse> {
+  const init = pat ? { headers: { "X-Databricks-Token": pat } } : undefined
+  const res = await request(`${API_BASE}/runs/${encodeURIComponent(runId)}`, init)
   const body = await handleJson<unknown>(res)
   return parseRunResponse(body)
 }

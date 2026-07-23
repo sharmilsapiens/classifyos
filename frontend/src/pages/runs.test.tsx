@@ -14,9 +14,11 @@ import type { ReactElement } from "react"
 
 import type { RunResponse, RunsListResponse } from "@/api/types"
 
-// ── Store mock — the page only needs applyReloadedRun. ─────────────────────────
+// ── Store mock — configurable per test (backend + PAT drive the per-user Runs flow). ──
 const applyReloadedRun = vi.fn()
-vi.mock("@/store/AppStore", () => ({ useApp: () => ({ applyReloadedRun }) }))
+const setDatabricksPat = vi.fn()
+let mockStore: Record<string, unknown>
+vi.mock("@/store/AppStore", () => ({ useApp: () => mockStore }))
 
 // ── Router mock — capture navigate() while keeping the real MemoryRouter. ──────
 const navigate = vi.fn()
@@ -69,7 +71,10 @@ beforeEach(() => {
   listRunsMock.mockReset()
   loadRunMock.mockReset()
   applyReloadedRun.mockReset()
+  setDatabricksPat.mockReset()
   navigate.mockReset()
+  // Default: local backend (no PAT gate) — the existing tests exercise this path.
+  mockStore = { applyReloadedRun, setDatabricksPat, executionBackend: "local", databricksPat: "" }
 })
 afterEach(() => vi.clearAllMocks())
 
@@ -128,5 +133,25 @@ describe("Runs — reload", () => {
     renderPage(<Runs />)
     const loadBtn = await screen.findByRole("button", { name: /^Load$/i })
     expect(loadBtn).toBeDisabled()
+  })
+})
+
+describe("Runs — Databricks per-user", () => {
+  it("prompts for the PAT (no fetch) when on Databricks without a token", async () => {
+    mockStore.executionBackend = "databricks"
+    mockStore.databricksPat = ""
+    renderPage(<Runs />)
+    expect(await screen.findByText(/Connect to Databricks/i)).toBeInTheDocument()
+    expect(listRunsMock).not.toHaveBeenCalled()
+  })
+
+  it("stores the entered PAT (trimmed) on Connect — which drives the scoped fetch", async () => {
+    mockStore.executionBackend = "databricks"
+    mockStore.databricksPat = ""
+    renderPage(<Runs />)
+    const input = await screen.findByLabelText(/personal access token/i)
+    fireEvent.change(input, { target: { value: "  dapi-xyz  " } })
+    fireEvent.click(screen.getByRole("button", { name: /^Connect$/i }))
+    expect(setDatabricksPat).toHaveBeenCalledWith("dapi-xyz")
   })
 })

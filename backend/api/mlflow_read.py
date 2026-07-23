@@ -29,19 +29,21 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import tempfile
 from datetime import datetime, timezone
 from typing import Any
 
-logger = logging.getLogger(__name__)
+# Snapshot artifact path/tag + the per-user owner tag live in the engine (single source) so the
+# Databricks Job notebook can WRITE them from the wheel while this READ side filters/reloads by the
+# SAME values — they can never drift. Cheap module import; mlflow itself stays lazily imported.
+from classifyos.mlflow_logging import (
+    SNAPSHOT_DIR,
+    SNAPSHOT_PATH,
+    SNAPSHOT_TAG,
+    USER_EMAIL_TAG,
+)
 
-#: Where the API persists its rendered ``/run`` envelope inside a run's artifacts, and the tag it
-#: sets so :func:`list_runs` can report ``reloadable`` without listing artifacts per run.
-SNAPSHOT_DIR = "api"
-SNAPSHOT_NAME = "run_response.json"
-SNAPSHOT_PATH = f"{SNAPSHOT_DIR}/{SNAPSHOT_NAME}"
-SNAPSHOT_TAG = "classifyos.result_artifact"
+logger = logging.getLogger(__name__)
 
 #: Cap on how many past runs :func:`list_runs` returns (most-recent first) — a safety bound so a
 #: very large store can never return an unbounded list to the dashboard.
@@ -117,11 +119,13 @@ def _summarize(run: Any, exp_names: dict[str, str]) -> dict[str, Any]:
     }
 
 
-def list_runs(max_results: int = DEFAULT_MAX_RUNS) -> dict[str, Any]:
+def list_runs(max_results: int = DEFAULT_MAX_RUNS, user_email: str | None = None) -> dict[str, Any]:
     """List past runs across the active experiments, most-recent first.
 
-    Returns ``{"tracking_uri": str, "runs": [RunSummary-dict, ...]}``. Raises
-    :class:`MlflowUnavailable` if the store cannot be reached/queried.
+    When ``user_email`` is given (the per-user Runs view — Databricks backend), only runs tagged
+    with that owner are returned, via a server-side tag filter. When ``None`` (local backend) every
+    run is listed exactly as before. Returns ``{"tracking_uri": str, "runs": [RunSummary-dict, ...]}``.
+    Raises :class:`MlflowUnavailable` if the store cannot be reached/queried.
     """
     try:
         import mlflow  # noqa: PLC0415 — lazy by design
@@ -133,8 +137,14 @@ def list_runs(max_results: int = DEFAULT_MAX_RUNS) -> dict[str, Any]:
         exp_names = {e.experiment_id: e.name for e in experiments}
         if not exp_names:
             return {"tracking_uri": tracking_uri, "runs": []}
+        # Per-user filter (Databricks): backtick-quote the dotted tag key (verified against the
+        # installed MLflow search grammar). The email is SCIM-sanitized to [A-Za-z0-9._-], so it
+        # cannot break out of the quoted literal. The SERVICE token authenticates the search; the
+        # email only scopes WHICH runs — so this stays thread-safe (no per-request credential swap).
+        filter_string = f"tags.`{USER_EMAIL_TAG}` = '{user_email}'" if user_email else ""
         runs = client.search_runs(
             experiment_ids=list(exp_names),
+            filter_string=filter_string,
             run_view_type=ViewType.ACTIVE_ONLY,
             order_by=["attributes.start_time DESC"],
             max_results=max_results,
@@ -148,12 +158,16 @@ def list_runs(max_results: int = DEFAULT_MAX_RUNS) -> dict[str, Any]:
         raise MlflowUnavailable(str(exc)) from exc
 
 
-def load_run(run_id: str) -> dict[str, Any] | None:
+def load_run(run_id: str, user_email: str | None = None) -> dict[str, Any] | None:
     """Return the persisted ``/run`` envelope for ``run_id``, or ``None`` if it has no snapshot.
 
     Downloads the ``api/run_response.json`` artifact the API attached on ``/run`` and returns it
     verbatim, so the dashboard reloads a past run byte-identically. Raises :class:`RunNotFound`
     if the run id is unknown, or :class:`MlflowUnavailable` if the store cannot be reached.
+
+    When ``user_email`` is given (per-user Runs — Databricks backend), a run tagged with a DIFFERENT
+    owner is treated as :class:`RunNotFound`, so a guessed run id can't leak another user's results.
+    An untagged run (legacy / local) carries no owner and is not restricted.
     """
     from mlflow.exceptions import MlflowException  # noqa: PLC0415
 
@@ -161,13 +175,20 @@ def load_run(run_id: str) -> dict[str, Any] | None:
     # 1. Confirm the run exists. Only a genuine "does not exist" is a 404 — a store that is down
     #    also raises here, and that must stay a 503 (not be mistaken for a missing run).
     try:
-        client.get_run(run_id)
+        run = client.get_run(run_id)
     except MlflowException as exc:
         if getattr(exc, "error_code", "") == "RESOURCE_DOES_NOT_EXIST":
             raise RunNotFound(run_id) from exc
         raise MlflowUnavailable(str(exc)) from exc
     except Exception as exc:  # noqa: BLE001 — store unreachable, bad id shape, etc.
         raise MlflowUnavailable(str(exc)) from exc
+
+    # 1b. Ownership (per-user Runs): another user's run is "not found" for this caller, so a guessed
+    #     run id can't leak results. No owner tag (legacy/local) → unrestricted.
+    if user_email:
+        owner = run.data.tags.get(USER_EMAIL_TAG)
+        if owner and owner != user_email:
+            raise RunNotFound(run_id)
 
     # 2. Only download when the snapshot artifact is actually present (cheap listing first).
     try:
@@ -190,22 +211,11 @@ def load_run(run_id: str) -> dict[str, Any] | None:
 def snapshot_result(run_id: str, envelope: dict[str, Any]) -> bool:
     """Persist the rendered ``/run`` envelope as a run artifact + marker tag. Report-only.
 
-    Writes ``envelope`` (a JSON-safe ``RunResponse`` dict) to ``api/run_response.json`` on the
-    run and sets the :data:`SNAPSHOT_TAG` so the run reports ``reloadable``. Returns ``True`` on
-    success. NEVER raises — a failure here only means the run cannot be reloaded; the ``/run``
-    response is unaffected.
+    Thin wrapper over the engine's :func:`classifyos.mlflow_logging.snapshot_envelope` (the single
+    source, also used by the Databricks Job notebook so it can write from the wheel). The local
+    ``/run`` route logs no owner tag — per-user Runs is a Databricks-backend concern — so
+    ``user_email`` is omitted here. NEVER raises; the ``/run`` response is unaffected.
     """
-    try:
-        client = _client()
-        with tempfile.TemporaryDirectory() as tmp:
-            path = os.path.join(tmp, SNAPSHOT_NAME)
-            with open(path, "w", encoding="utf-8") as fh:
-                json.dump(envelope, fh)
-            client.log_artifact(run_id, path, artifact_path=SNAPSHOT_DIR)
-        client.set_tag(run_id, SNAPSHOT_TAG, SNAPSHOT_PATH)
-        return True
-    except Exception:  # noqa: BLE001 — report-only; reload just stays unavailable for this run
-        logger.exception(
-            "MLflow: failed to snapshot the /run envelope for %s; reload will be unavailable", run_id
-        )
-        return False
+    from classifyos.mlflow_logging import snapshot_envelope  # noqa: PLC0415 — lazy
+
+    return snapshot_envelope(run_id, envelope)

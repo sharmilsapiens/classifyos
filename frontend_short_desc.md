@@ -576,6 +576,16 @@ data types — so you never type a column name by hand.
   target dropdown, binary badge) populates from a UC profile. Existing file/database upload flows are
   untouched. **162 vitest green · tsc clean.**
 
+## Runs — per-user, from Databricks (2026-07-23)
+**In one line:** The Runs tab now shows *your own* past runs pulled from Databricks' MLflow (not the
+local database), and asks for your Databricks token the first time if it doesn't already have one.
+- On the Databricks backend, the Runs list and "reload" send your personal access token so the server
+  shows only the runs *you* ran (filtered by your email, which the training job records on each run);
+  a run belonging to someone else can't be opened.
+- If you haven't entered a token yet this session, the page shows a small **"Connect to Databricks"**
+  prompt instead of an empty list; the token is held in memory only, never stored.
+- On the local backend nothing changes — every run is listed and no token is needed.
+
 ---
 
 ## How to read this project

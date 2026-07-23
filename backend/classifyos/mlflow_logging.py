@@ -57,6 +57,16 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
+#: Where the API/notebook persist the rendered ``/run`` envelope inside a run's artifacts, the tag
+#: that marks a run reloadable, and the tag recording WHO ran it (for the per-user Runs view).
+#: Shared single source: ``api.mlflow_read`` imports these, and the Databricks Job notebook writes
+#: them via :func:`snapshot_envelope`, so the write side and the read/filter side can never drift.
+SNAPSHOT_DIR = "api"
+SNAPSHOT_NAME = "run_response.json"
+SNAPSHOT_PATH = f"{SNAPSHOT_DIR}/{SNAPSHOT_NAME}"
+SNAPSHOT_TAG = "classifyos.result_artifact"
+USER_EMAIL_TAG = "classifyos.user_email"
+
 #: Headline HELD-OUT TEST metrics logged per successful model (a subset of the metrics row the
 #: runner computes — the same scalars the API scoreboard shows).
 _HEADLINE_METRIC_KEYS = (
@@ -314,3 +324,46 @@ def log_run(
     except Exception:  # noqa: BLE001 — the whole logging layer is report-only
         logger.exception("MLflow logging failed; the training run is unaffected")
         return None
+
+
+def snapshot_envelope(
+    run_id: str, envelope: dict[str, Any], user_email: str | None = None
+) -> bool:
+    """Persist a rendered ``/run`` envelope as a run artifact + marker tags. Report-only.
+
+    Writes ``envelope`` (a JSON-safe ``RunResponse`` dict) to ``api/run_response.json`` on the
+    MLflow run, sets :data:`SNAPSHOT_TAG` (so the run reports ``reloadable``), and — when
+    ``user_email`` is given — sets :data:`USER_EMAIL_TAG` so the per-user Runs view can filter by
+    owner. Returns ``True`` on success. NEVER raises: a failure only means the run cannot be
+    reloaded / attributed; it never affects a training run or the ``/run`` response.
+
+    This is the SINGLE source for both callers: the synchronous ``/run`` route (local backend, via
+    ``api.mlflow_read.snapshot_result``) and the Databricks Job notebook, which has only the engine
+    wheel. [RISK] leakage — pure post-training write plumbing; reads nothing back into fit/transform.
+    """
+    mlflow = _load_mlflow()
+    if mlflow is None:
+        return False
+    try:
+        import json  # noqa: PLC0415 — lazy, only when a snapshot is actually written
+        import tempfile  # noqa: PLC0415
+
+        from mlflow.tracking import MlflowClient  # noqa: PLC0415 — lazy by design
+
+        _maybe_allow_file_store()
+        client = MlflowClient()
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, SNAPSHOT_NAME)
+            with open(path, "w", encoding="utf-8") as fh:
+                json.dump(envelope, fh)
+            client.log_artifact(run_id, path, artifact_path=SNAPSHOT_DIR)
+        client.set_tag(run_id, SNAPSHOT_TAG, SNAPSHOT_PATH)
+        if user_email:
+            client.set_tag(run_id, USER_EMAIL_TAG, user_email)
+        return True
+    except Exception:  # noqa: BLE001 — report-only; reload/attribution just stays unavailable
+        logger.exception(
+            "MLflow: failed to snapshot the /run envelope for %s; reload will be unavailable",
+            run_id,
+        )
+        return False
