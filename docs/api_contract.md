@@ -141,7 +141,8 @@
 | `GET`  | `/api/v1/runs/{run_id}` | **(1.10)** Reload ONE past run → the same locked `/run` envelope it was rendered with (byte-identical). `404` if the run is unknown or has no persisted snapshot; `503` if the tracking store is unreachable. |
 | `POST` | `/api/v1/explain` | On-demand single-row SHAP — **documented stub** (stateless; would need model persistence). Per-row SHAP is instead produced during a run: set `explainability.enabled` on `/run` and read `result.explanations` (schema 1.6). |
 | `GET`  | `/api/v1/outputs` | List output artifacts → `[{name, suffix, size_bytes}]`. |
-| `GET`  | `/api/v1/outputs/{name}` | Stream one artifact (CSV/PNG) — traversal-guarded by the StorageAdapter. |
+| `GET`  | `/api/v1/outputs/{name}` | Stream one artifact (CSV/PNG) from the local `OUTPUT_DIR` — traversal-guarded by the StorageAdapter. Where **local** runs write. |
+| `GET`  | `/api/v1/outputs/{run_id}/{name}` | **(additive, no `schema_version`)** Stream one **run-scoped** artifact (CSV/PNG). **databricks** backend → downloads `classifyos/{name}` from that run's MLflow run (service token, `tracking_uri="databricks"`), since a Databricks run's artifacts live in MLflow, not the API's `OUTPUT_DIR`. **local** backend → serves `name` from `OUTPUT_DIR` exactly like `/outputs/{name}` (`run_id` ignored). `404` missing run/artifact, `503` store unreachable, `400` bad name. See below. |
 
 ## `POST /api/v1/upload`
 
@@ -610,7 +611,11 @@ server restart. They are purely additive: the `/run` envelope is unchanged.
 ### `GET /api/v1/runs` — list past runs
 
 Lists runs across the active MLflow experiments, most-recent first (capped, newest first). Each row
-is derived from the run's MLflow metadata only (no artifact download).
+is derived from the run's MLflow metadata only (no artifact download). In the **databricks** backend
+the search is **scoped to the ClassifyOS experiment** (`/Shared/classifyos`, override via
+`CLASSIFYOS_MLFLOW_EXPERIMENT`): a workspace can hold hundreds of unrelated experiments and Databricks
+caps `search_runs` at 100 `experiment_ids`, and only the ClassifyOS experiment can hold a matching run.
+The **local** backend searches every experiment, as before.
 
 ```jsonc
 {
@@ -767,6 +772,39 @@ columns. Errors: **not** the `databricks` execution backend (the picker is only 
 **503**; a `catalog`/`schema`/`table` that is not a simple SQL identifier (they are interpolated into
 the UC REST path) → **422**; missing/rejected PAT → **401**; unreachable workspace, or a table whose
 metadata carries no columns → **503** (never a silent empty profile / fall-through to manual entry).
+
+## Output artifacts — `GET /api/v1/outputs/{name}` and `/outputs/{run_id}/{name}`
+
+The `/outputs` family streams a run's artifact **files** (the plot PNGs and downloadable CSVs);
+these are never base64-inlined into the `/run` envelope, so the dashboard fetches each on demand.
+Two flavours exist, and the frontend picks between them from the run's `result.mlflow` pointer:
+
+- **`GET /outputs/{name}`** — serves the file from the FastAPI's local `OUTPUT_DIR` (traversal-guarded
+  by the StorageAdapter). This is where **local** runs write, so a local run uses this flat URL,
+  **byte-identical to before**.
+- **`GET /outputs/{run_id}/{name}`** *(additive; carries **no `schema_version`**, like the rest of the
+  `/outputs` family)* — a **run-scoped** fetch. In the **databricks** execution backend a run's
+  artifacts do **not** land in the API's `OUTPUT_DIR` — they live in that run's **managed-MLflow** run
+  (grouped under `classifyos/`) and on the UC output volume — so the flat `/outputs/{name}` would 404
+  them. This endpoint downloads `classifyos/{name}` from MLflow run `run_id`
+  (`mlflow.artifacts.download_artifacts(run_id, artifact_path="classifyos/{name}", tracking_uri="databricks")`,
+  authenticated with the **service token**, per-call — no process-global `set_tracking_uri`) and streams
+  it. It works for both a fresh run and one reloaded from the Runs tab (both carry the same
+  `result.mlflow.run_id`). In the **local** backend it resolves `name` against `OUTPUT_DIR` exactly like
+  `/outputs/{name}` (`run_id` ignored), so it is harmless if hit. Errors: `404` unknown run / absent
+  artifact, `503` unreachable store, `400` a `name` that isn't a bare filename. The databricks response
+  is marked `Cache-Control: private, max-age=31536000, immutable` — a run's artifacts are write-once per
+  `run_id`+`name`, so the browser caches them (instant re-navigation) and the frontend prefetches a run's
+  plot PNGs on load for lag-free tabs. The flat `/outputs/{name}` stays **uncached** (its fixed filenames
+  are mutable — a new local run overwrites them).
+
+  **How the frontend chooses.** It builds the run-scoped URL only when the run is Databricks-backed —
+  i.e. `result.mlflow.run_id` is present **and** `result.mlflow.tracking_uri` starts with `"databricks"`
+  — otherwise it uses the flat `/outputs/{name}`. So a local run's artifact requests are unchanged.
+  **[RISK] isolation.** An `<img>`/`<a>` request cannot carry the user's PAT, so the run-scoped fetch is
+  guarded only by the **unguessable 32-hex MLflow run id** + the service token (app-level isolation),
+  not a per-user ACL. This is display-tier access, consistent with the per-user Runs list (which *is*
+  PAT-scoped); see `docs/databricks_wisdom.md` §6.2.
 
 ---
 

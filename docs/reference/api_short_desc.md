@@ -45,8 +45,15 @@ shape was **locked** (frozen) so the frontend can be built against a stable cont
   requests and there's no model store yet, so it returns a clearly-structured "not available
   until v2.0" response shaped so the real feature can drop in later.
 - **`GET /outputs`** — lists the result files a run produced (name, type, size).
-- **`GET /outputs/{name}`** — downloads one result file (a CSV or a chart PNG). The charts are
-  fetched here on demand, never stuffed into the `/run` response.
+- **`GET /outputs/{name}`** — downloads one result file (a CSV or a chart PNG) from the server's local
+  output folder — where **local** runs write. The charts are fetched here on demand, never stuffed
+  into the `/run` response.
+- **`GET /outputs/{run_id}/{name}`** *(run-scoped; additive)* — the same, but for a run whose files
+  live somewhere other than the server's local folder. In the **Databricks** mode a run's plots/CSVs
+  are written on the cluster and logged to Databricks' MLflow, **not** the web server's disk — so this
+  downloads the file from that run's MLflow record (by run id, using the service token) and streams it
+  back. It's what makes a Databricks run's images and CSV links work in the dashboard (fresh *and*
+  reloaded from the Runs page). In local mode it just serves from the output folder like `/outputs/{name}`.
 - **`GET /runs`** *(1.10)* — lists past runs recorded in MLflow (most-recent first) as lightweight
   summary rows: when it ran, target, problem type, the algorithms, the best F1, status, and whether
   it can be reloaded. This is what the dashboard's **Runs** view shows.
@@ -303,6 +310,39 @@ working exactly as before, because the whole thing is switched on by one setting
   columnless table → **503**. Column-type → group mapping is **hallucination-checked** against the
   Databricks SDK `ColumnTypeName` enum. Every Databricks call is mocked in the tests. `docs/api_contract.md`
   updated (endpoint table + a dedicated section + footer note).
+
+## Databricks Runs read-path store + run-scoped artifact serving (2026-07-23, additive; no version bump)
+Two fixes so the dashboard's **Runs** tab and a run's **artifact files** work end-to-end when the
+server runs the `databricks` execution backend. **API + frontend only — no engine/notebook/wheel
+change** (deploys with a FastAPI restart + a frontend rebuild; no cluster restart). The **local**
+backend is byte-identical.
+- **Runs read the right MLflow store (§6.1).** The Runs read-path (`api/mlflow_read.py`) used to read
+  whatever `MLFLOW_TRACKING_URI` the *FastAPI process* had — in a Databricks deployment that's often a
+  leftover local Postgres, so the Runs tab listed nothing and reported "Tracking store:
+  postgresql://…localhost". Now, when the backend is `databricks`, the read-path targets the
+  workspace's **managed MLflow** by passing `tracking_uri="databricks"` **per call** to
+  `MlflowClient(...)` and `download_artifacts(...)` (mlflow 3.14 accepts both) — **no process-global
+  `set_tracking_uri`, so it stays thread-safe** under the shared server — and reports the store as
+  `"databricks"`. The **service token** authenticates the read; the PAT still only scopes *which* runs.
+  It also **scopes the search to the ClassifyOS experiment** (`/Shared/classifyos`; override
+  `CLASSIFYOS_MLFLOW_EXPERIMENT`) so a workspace with hundreds of experiments doesn't exceed Databricks'
+  100-`experiment_ids` `search_runs` cap. Local backend unchanged (reads/reports its env store, searches all).
+- **A Databricks run's artifacts display (§6.2).** A run's PNGs/CSVs live in its MLflow run (under
+  `classifyos/`) + the UC volume — **not** the API's local output folder — so the flat `/outputs/{name}`
+  404'd them (broken images, dead CSV links). New **run-scoped** `GET /outputs/{run_id}/{name}` downloads
+  `classifyos/{name}` from the MLflow run (service token, `tracking_uri="databricks"`) and streams it;
+  the frontend builds that URL from `result.mlflow.run_id` **only for Databricks-backed runs** (its
+  `tracking_uri` starts with `"databricks"`), so local runs keep the flat URL. Works for a fresh run and
+  a run reloaded from the Runs tab. **[RISK]** an `<img>`/`<a>` can't send the PAT, so isolation is the
+  unguessable 32-hex run id + service token (app-level), not a per-user ACL. The response is marked
+  **immutable** (run artifacts are write-once), so the browser caches it and the frontend prefetches a
+  run's plot PNGs on load — instant, lag-free result tabs (the flat `/outputs/{name}` stays uncached).
+- **Tested, CI-safe.** MLflow/Databricks fully mocked (a stubbed `load_artifact` / `MlflowClient` /
+  `download_artifacts`, the backend flipped with `monkeypatch.setenv`) so CI never touches a live
+  workspace; one end-to-end test does a real mlflow-logged `/run` and reads an artifact back from a real
+  (temp `file:`) store to prove the `classifyos/{name}` path matches what the engine writes. Backend
+  490+ tests green; frontend 175 vitest green. Hallucination-checked against mlflow 3.14.0. `docs/api_contract.md`,
+  `docs/databricks_how_it_works.md`, `docs/databricks_wisdom.md` updated.
 
 ---
 

@@ -586,6 +586,40 @@ local database), and asks for your Databricks token the first time if it doesn't
   prompt instead of an empty list; the token is held in memory only, never stored.
 - On the local backend nothing changes — every run is listed and no token is needed.
 
+## Databricks runs — plots & CSVs now display (2026-07-23)
+**In one line:** For a run trained on Databricks, the dashboard's chart **PNGs and CSV download links**
+now actually load — previously the interactive charts worked but the downloadable plot images were
+broken and the CSV links 404'd. A local run is completely unchanged.
+- **Why they were broken.** A Databricks run's artifact files (the matplotlib plots, the full
+  predictions CSV) are written on the cluster and logged to Databricks' MLflow — **not** to the web
+  server's local output folder, which is the only place the old artifact URL (`/outputs/{name}`) looked.
+  So every `<img>` and download link pointed at a file the server didn't have.
+- **The fix (frontend side).** The artifact-URL helper (`outputUrl`) now takes an optional run id and,
+  when given one, builds a **run-scoped** URL (`/outputs/{run_id}/{name}`) that the server serves from
+  that run's MLflow record. A small helper (`runScopedArtifactId`) decides when to use it: **only for a
+  Databricks-backed run** — one whose `result.mlflow.tracking_uri` is `"databricks"` — otherwise it
+  keeps the flat URL, so **local runs are byte-identical**. Every place that shows an artifact — the
+  `PngArtifact` component (plots 2–6 across Overview/Curves/Feature Impact/Interactions) and the CSV
+  download links on Predictions + the Overview artifact list — was threaded with the run's id, taken
+  from `result.mlflow.run_id` (present on both a fresh run and one reloaded from the Runs tab).
+- **Also: the Runs tab reads the right store.** In Databricks mode the Runs list now reports its store
+  as `"databricks"` (backend fix), instead of the misleading local `postgresql://…localhost` it used to
+  show — so the "Tracking store" caption is finally honest.
+- **Instant tabs (caching + prefetch).** Those run-scoped images were still fetched **on demand** the
+  first time you opened each tab — a fresh MLflow download each visit, i.e. a visible flicker/lag mid-demo.
+  Now (1) the server marks a Databricks run's artifacts **immutable**, so the browser caches them hard
+  (re-opening a tab is instant); and (2) the moment a run **loads** — a fresh Databricks run finishing OR a
+  reload from the Runs tab — the app **prefetches all of that run's plot PNGs in the background** (via
+  `new Image()`), so the whole set is warm in the browser cache *before* you click any tab. Net effect: every
+  result tab paints its plot instantly, no waiting. Local runs are untouched (their images already come from
+  the local server). "Store the images on the frontend" = the browser's own cache — nothing bespoke to manage.
+- **Safe + tested.** `outputUrl` gained an optional second argument (existing callers unchanged);
+  `PngArtifact` gained an optional `runId` prop (absent → flat URL → old behaviour). New unit tests
+  cover `outputUrl` (flat vs run-scoped, encoding), `runScopedArtifactId` (Databricks vs local vs
+  no-MLflow), `PngArtifact`'s run-scoped `<img src>`, and the on-load prefetch (warms a Databricks run's
+  PNGs, skips a local run). **177 vitest green · tsc clean.** Frontend + API only — no engine/notebook/wheel
+  change.
+
 ---
 
 ## How to read this project

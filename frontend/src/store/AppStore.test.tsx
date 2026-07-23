@@ -286,3 +286,75 @@ describe("runPipeline (databricks backend — submit + poll)", () => {
     expect(screen.getByTestId("runError").textContent.length).toBeGreaterThan(0)
   })
 })
+
+// ── Databricks artifact prefetch (demo smoothness) ─────────────────────────────
+// On loading a Databricks-backed run, the store warms the browser cache with the run's plot PNGs
+// (new Image().src → the run-scoped /outputs/{run_id}/{name} URL) so result tabs render instantly.
+// Local runs and non-PNG artifacts are skipped.
+
+/** Reload an arbitrary envelope into the store (drives prefetchRunArtifacts). */
+function ReloadProbe({ envelope }: { envelope: unknown }) {
+  const { applyReloadedRun } = useApp()
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  return <button onClick={() => applyReloadedRun(envelope as any)}>reload</button>
+}
+
+function makeEnvelope(trackingUri: string | null) {
+  return {
+    status: "ok",
+    schema_version: "1.11",
+    result: {
+      ...OK_ENVELOPE.result,
+      artifacts: [
+        { name: "plot2_roc_pr_curves.png", suffix: ".png", size_bytes: 10 },
+        { name: "metrics_comparison.csv", suffix: ".csv", size_bytes: 10 },
+      ],
+      mlflow: trackingUri
+        ? { run_id: "R1", experiment_id: "1", tracking_uri: trackingUri, models: {} }
+        : null,
+    },
+    error: null,
+  }
+}
+
+describe("prefetchRunArtifacts (on run load)", () => {
+  function stubImage(): string[] {
+    const srcs: string[] = []
+    class FakeImage {
+      set src(v: string) {
+        srcs.push(v)
+      }
+    }
+    vi.stubGlobal("Image", FakeImage as unknown as typeof Image)
+    // Silence the mount-time /health probe.
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new TypeError("Failed to fetch")))
+    return srcs
+  }
+
+  it("warms the cache for a Databricks run's plot PNGs (run-scoped URLs), not its CSVs", async () => {
+    const srcs = stubImage()
+    render(
+      <AppProvider>
+        <ReloadProbe envelope={makeEnvelope("databricks")} />
+      </AppProvider>,
+    )
+    await act(async () => {
+      fireEvent.click(screen.getByText("reload"))
+    })
+    expect(srcs).toContain("/api/v1/outputs/R1/plot2_roc_pr_curves.png")
+    expect(srcs.some((s) => s.includes("metrics_comparison.csv"))).toBe(false)
+  })
+
+  it("does NOT prefetch a local run (its artifacts aren't run-scoped/cacheable)", async () => {
+    const srcs = stubImage()
+    render(
+      <AppProvider>
+        <ReloadProbe envelope={makeEnvelope("postgresql://classifyos@localhost:5432/mlflow")} />
+      </AppProvider>,
+    )
+    await act(async () => {
+      fireEvent.click(screen.getByText("reload"))
+    })
+    expect(srcs).toEqual([])
+  })
+})

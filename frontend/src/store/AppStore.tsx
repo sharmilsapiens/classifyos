@@ -88,6 +88,28 @@ const INITIAL: AppState = {
 
 const AppContext = createContext<(AppState & AppActions) | null>(null)
 
+/**
+ * Warm the browser cache with a Databricks run's plot PNGs so the result tabs render them
+ * INSTANTLY — no per-tab, on-demand download from MLflow (which looks bad mid-demo). Called when a
+ * run is loaded (a fresh Databricks completion or a reload from the Runs tab), so everything is warm
+ * before the user opens a tab. Fire-and-forget: it never blocks or surfaces an error. LOCAL runs are
+ * skipped (their artifacts are served from OUTPUT_DIR, not run-scoped/immutable, so there's nothing
+ * to warm — `runScopedArtifactId` returns undefined). Uses `new Image()` so the prefetch issues the
+ * SAME (no-cors image) request the `<img>` tags do, sharing one cache entry with the immutable
+ * `/outputs/{run_id}/{name}` response — reliable same- OR cross-origin.
+ */
+function prefetchRunArtifacts(envelope: RunResponse | null): void {
+  const result = envelope?.result
+  const runId = api.runScopedArtifactId(result?.mlflow)
+  if (!result || !runId) return
+  for (const artifact of result.artifacts) {
+    if (artifact.name.toLowerCase().endsWith(".png")) {
+      const img = new Image()
+      img.src = api.outputUrl(artifact.name, runId)
+    }
+  }
+}
+
 export function AppProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState<AppState>(INITIAL)
 
@@ -188,6 +210,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
             result: envelope,
             runError: envelope.status === "error" ? envelope.error : null,
           }))
+          // Warm the browser cache with this run's plot PNGs so the result tabs render instantly.
+          prefetchRunArtifacts(envelope)
         } catch (err) {
           setState((s) => ({
             ...s,
@@ -298,6 +322,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
         runError: envelope.status === "error" ? envelope.error : null,
         runFieldErrors: [],
       }))
+      // Warm the browser cache with this run's plot PNGs so the result tabs render instantly.
+      prefetchRunArtifacts(envelope)
     },
     [stopPolling],
   )

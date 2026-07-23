@@ -22,4 +22,18 @@ describe("PngArtifact", () => {
     expect(screen.queryByAltText("calibration")).toBeNull()
     expect(screen.getByText(/not generated for this run/i)).toBeInTheDocument()
   })
+
+  it("builds a RUN-SCOPED src when runId is set (a Databricks run's PNG comes from MLflow)", () => {
+    render(
+      <PngArtifact
+        name="plot4_feature_impact.png"
+        alt="feature impact"
+        artifacts={artifacts}
+        runId="abc123def456"
+      />,
+    )
+    const img = screen.getByAltText("feature impact") as HTMLImageElement
+    // outputUrl(name, runId) → /api/v1/outputs/{runId}/{name}
+    expect(img.getAttribute("src")).toBe("/api/v1/outputs/abc123def456/plot4_feature_impact.png")
+  })
 })

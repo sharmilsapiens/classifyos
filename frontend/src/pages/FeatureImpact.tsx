@@ -26,6 +26,7 @@ import {
 import { AlertTriangle } from "lucide-react"
 
 import type { FeatureImpactRow, FeatureImportanceRow, PermutationImportanceRow } from "@/api/types"
+import { runScopedArtifactId } from "@/api/client"
 import { useApp } from "@/store/AppStore"
 import { fmtMetric } from "@/lib/format"
 import { ResultGate } from "@/components/results/ResultGate"
@@ -56,6 +57,7 @@ export default function FeatureImpact() {
           artifacts={run.artifacts}
           importance={run.feature_importance ?? null}
           permutation={run.permutation_importance ?? null}
+          runId={runScopedArtifactId(run.mlflow)}
         />
       )}
     </ResultGate>
@@ -67,11 +69,13 @@ function FeatureImpactBody({
   artifacts,
   importance,
   permutation,
+  runId,
 }: {
   rows: FeatureImpactRow[]
   artifacts: import("@/api/types").ArtifactEntry[]
   importance: Record<string, FeatureImportanceRow[]> | null
   permutation: Record<string, PermutationImportanceRow[]> | null
+  runId?: string
 }) {
   const [metric, setMetric] = useState<MetricKey>("composite_score")
   // The permutation-importance scoring metric the run was configured with (the form persists
@@ -184,6 +188,7 @@ function FeatureImpactBody({
               alt="Feature impact: composite scores and per-metric comparison"
               artifacts={artifacts}
               caption="Composite barh + grouped normalized metrics"
+              runId={runId}
             />
           </CardContent>
         </Card>
@@ -237,7 +242,7 @@ function FeatureImpactBody({
 
       {/* Post-training (native, per-model) importance — a MODEL property, distinct from
           the raw pre-training screen above. */}
-      <PostTrainingImportance importance={importance} artifacts={artifacts} />
+      <PostTrainingImportance importance={importance} artifacts={artifacts} runId={runId} />
 
       {/* Permutation importance — the model-agnostic counterpart, covering EVERY model
           (incl. SVM / NaiveBayes which have no native importance). */}
@@ -253,9 +258,11 @@ const NO_NATIVE_IMPORTANCE = "SVM and Naive Bayes expose no native importance, s
 function PostTrainingImportance({
   importance,
   artifacts,
+  runId,
 }: {
   importance: Record<string, FeatureImportanceRow[]> | null
   artifacts: import("@/api/types").ArtifactEntry[]
+  runId?: string
 }) {
   const models = useMemo(
     () => Object.keys(importance ?? {}).filter((m) => (importance?.[m]?.length ?? 0) > 0),
@@ -339,6 +346,7 @@ function PostTrainingImportance({
                 alt="Per-model feature importance"
                 artifacts={artifacts}
                 caption="Top features per model that exposes importances"
+                runId={runId}
               />
             </div>
             {models.length > 0 && (

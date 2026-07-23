@@ -33,7 +33,7 @@ import {
 
 import { POLL_INTERVAL_MS, useApp } from "@/store/AppStore"
 import type { MlflowInfo, ModelMetrics } from "@/api/types"
-import { outputUrl } from "@/api/client"
+import { outputUrl, runScopedArtifactId } from "@/api/client"
 import { fmtBytes, fmtInt, fmtMetric } from "@/lib/format"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
@@ -373,7 +373,7 @@ export default function Overview() {
           {run.artifacts.map((a) => (
             <a
               key={a.name}
-              href={outputUrl(a.name)}
+              href={outputUrl(a.name, runScopedArtifactId(run.mlflow))}
               target="_blank"
               rel="noreferrer"
               className={buttonVariants({ variant: "outline", size: "sm" })}

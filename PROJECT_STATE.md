@@ -4,8 +4,73 @@
 > A copy is uploaded to the ClassifyOS Claude Project knowledge after each update so the
 > planning/overseer chat stays in sync with the local repo.
 
-**Last updated:** 2026-07-21
-**Updated by:** Claude Code (**NEW — Databricks job state made STATELESS: removed the Postgres job store.**
+**Last updated:** 2026-07-23
+**Updated by:** Claude Code (**NEW — Databricks Runs dashboard fixed end-to-end: read-path store routing (§6.1) + run-scoped artifact serving (§6.2). API + frontend ONLY — no engine/notebook/wheel change, so deploy = FastAPI `git pull`+uvicorn restart + a frontend rebuild, NO cluster restart. LOCAL backend byte-identical.**
+Two bugs that only bit the `databricks` execution backend, both in the FastAPI read/serve path (the runs
+execute + log on the cluster fine; the reader was wrong). **(1) §6.1 — Runs tab read the wrong MLflow
+store.** `api/mlflow_read.py` read whatever `MLFLOW_TRACKING_URI` the *FastAPI process* had — in the
+deployment a leftover local dev Postgres — so `/runs` listed nothing and the dashboard showed "Tracking
+store: postgresql://…localhost". Added `_tracking_uri()` → returns `"databricks"` when
+`execution_backend()=="databricks"`, else `None`. `_client()` now builds
+`MlflowClient(tracking_uri="databricks")`; `list_runs` reports `"databricks"`; `load_run` passes
+`tracking_uri=_tracking_uri()` to `download_artifacts` — all **per-call** (mlflow 3.14 accepts it on both
+`MlflowClient(...)` and `download_artifacts(...)`), **no process-global `set_tracking_uri`** → thread-safe
+under the shared server. The **service token** authenticates; the PAT still only scopes *which* runs. **(2)
+§6.2 — a Databricks run's PNGs/CSVs didn't display** (broken `<img>`, 404 CSV links; interactive
+JSON-driven charts were fine). Those artifact files live in the run's MLflow run (under `classifyos/`) +
+the UC volume, NOT the FastAPI's local `OUTPUT_DIR` that flat `/outputs/{name}` serves. Added
+`mlflow_read.load_artifact(run_id, name)` (downloads `classifyos/{name}` via
+`download_artifacts(run_id, artifact_path=…, tracking_uri="databricks")`) + a new run-scoped route
+`GET /api/v1/outputs/{run_id}/{name}` (`routes/outputs.py`): databricks → stream from MLflow; local →
+serve `OUTPUT_DIR` by name (`run_id` ignored, byte-identical); a bare-filename guard rejects traversal
+(400); missing → 404, store down → 503. **Frontend:** `outputUrl(name, runId?)` builds
+`/outputs/{runId}/{name}` when given an id; `runScopedArtifactId(mlflow)` returns `result.mlflow.run_id`
+**only when** `mlflow.tracking_uri` starts with `"databricks"` (so local runs keep the flat URL —
+byte-identical); `PngArtifact` gained a `runId` prop; threaded through Overview (artifact list), Curves
+(plot2/plot5), FeatureImpact (plot3/plot4), Interactions (plot6), Predictions (CSV links). Works for a
+fresh run AND one reloaded from the Runs tab (both carry `result.mlflow`). **[RISK]** an `<img>`/`<a>`
+can't carry the PAT, so run-scoped artifacts are guarded by the unguessable 32-hex MLflow run id + service
+token (app-level), not a per-user ACL — documented. **Contract:** additive; `/outputs/{run_id}/{name}`
+carries no `schema_version` like the rest of the `/outputs` family, so **no version bump** (stays 1.11).
+**Tests:** all MLflow/Databricks mocked (stubbed `load_artifact`/`MlflowClient`/`download_artifacts`,
+backend flipped via `monkeypatch.setenv`) so CI never touches a live workspace; PLUS one real end-to-end —
+a genuine mlflow-logged `/run` writes artifacts under `classifyos/` and `load_artifact` reads a PNG/CSV
+back byte-for-byte from a real (temp `file:`) store, proving the subdir matches what `log_run` writes.
+**Backend: +16 new tests (test_api_outputs.py +10 → 15/15; test_api_runs.py +6 → 16/16); full backend suite 494 passed. Frontend 177 vitest green; `tsc -b` clean.**
+**Follow-up (same session, demo smoothness — artifact caching + prefetch):** a Databricks run's plot PNGs
+were fetched on-demand per tab (a fresh MLflow download each time → visible lag / flicker in a demo). Two
+additive changes, still API + frontend only: **(1)** the databricks run-scoped `/outputs/{run_id}/{name}`
+response now carries `Cache-Control: private, max-age=31536000, immutable` — a run's MLflow artifacts are
+write-once per `run_id`+`name`, so the browser caches them hard (instant re-navigation; the local
+`/outputs/{name}` stays UNcached because its fixed filenames are mutable/overwritten). **(2)** on run load —
+a fresh Databricks completion (`pollOnce` COMPLETED) OR a reload from the Runs tab (`applyReloadedRun`) — the
+store fire-and-forget **prefetches every plot PNG** via `new Image().src = outputUrl(name, run_id)`, so the
+whole set is warm in the browser cache before the user opens any tab. `new Image()` shares the exact (no-cors
+image) cache entry the `<img>` tags use, reliable same- OR cross-origin. LOCAL runs are skipped
+(`runScopedArtifactId` → undefined). "Stored somewhere frontend" = the browser's own HTTP/image cache — no
+bespoke store to build. +2 frontend tests (prefetches a databricks run's PNGs not CSVs; skips a local run) +
+a cache-header assertion. Frontend 175 → 177 green.
+**Follow-up (same session, live-Databricks fix):** with the §6.1 read now correctly hitting Databricks-managed
+MLflow, the Runs tab failed live with `INVALID_PARAMETER_VALUE: Too many experiment_ids specified in SearchRuns
+request. Maximum … 100. Found 185` — `list_runs` passed ALL 185 workspace experiment ids and Databricks caps
+`search_runs` at 100. Fixed by SCOPING the databricks read to the ClassifyOS experiment: `mlflow_read` gained
+`_is_classifyos_experiment(name)` (basename match against `CLASSIFYOS_MLFLOW_EXPERIMENT`, default `classifyos` →
+resolves the Job's `/Shared/classifyos`), and `list_runs` narrows `search_experiments()` to it in the databricks
+backend before `search_runs` (only that experiment can hold a matching run; always ≤ a handful, so the cap is moot).
+LOCAL backend still searches every experiment (byte-identical). +3 tests in test_api_runs.py (scope-to-classifyos on
+databricks with 150 unrelated + 1 classifyos experiment; search-all locally; the basename matcher incl. env override).
+`backend/.env.example` note corrected (the FastAPI no longer needs `MLFLOW_TRACKING_URI=databricks`; added the optional
+`CLASSIFYOS_MLFLOW_EXPERIMENT`); docs updated (api_contract `/runs`, databricks_how_it_works §13, databricks_wisdom §6.1
++ playbook row, api_short_desc). Still API-only, no engine/notebook/wheel change.
+Hallucination-checked against **mlflow 3.14.0** (`MlflowClient(tracking_uri=…)` + `download_artifacts(run_id=…,
+artifact_path=…, tracking_uri=…)` signatures verified). Builds on the 2026-07-23 per-user Runs work
+(commit a2b672f). Docs updated: `docs/api_contract.md` (endpoint table + a run-scoped `/outputs` section),
+`docs/databricks_how_it_works.md` (§13 store-routing note + new §14 run-scoped artifacts),
+`docs/databricks_wisdom.md` (§6.1/§6.2 marked RESOLVED; TL;DR/§1.4/§5 playbook/§6.3 backlog updated),
+`docs/reference/api_short_desc.md` + `docs/reference/frontend_short_desc.md`. Followed the fix direction
+the wisdom doc already recorded, so **no plan_tweak entry** (no deviation). Engine + notebook + wheel
+UNTOUCHED.)
+**Prior update (2026-07-21 — Databricks stateless job state):** Claude Code (**NEW — Databricks job state made STATELESS: removed the Postgres job store.**
 For deployment we want zero managed databases — Databricks is the only external dependency. **(1)** The
 Databricks `run_id` returned by `jobs/runs/submit` **IS** the `job_id`: `routes/run.py` drops the
 `jobs_store.create_job()` call and returns `RunSubmission(job_id=run_id, run_id=run_id, status="PENDING")`.

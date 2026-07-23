@@ -112,18 +112,21 @@ class _FakeRun:
 
 
 class _FakeReadClient:
-    """Stand-in for ``MlflowClient`` in the read-path unit tests: records the search filter and
-    serves a single tagged run for the ownership check."""
+    """Stand-in for ``MlflowClient`` in the read-path unit tests: records the search filter + the
+    experiment ids searched, and serves a single tagged run for the ownership check."""
 
-    def __init__(self, run_tags: dict | None = None) -> None:
+    def __init__(self, run_tags: dict | None = None, experiments: list | None = None) -> None:
         self.filter_string: str | None = None
+        self.searched_experiment_ids: list | None = None
         self._run_tags = run_tags or {}
+        self._experiments = experiments if experiments is not None else [_FakeExp()]
 
     def search_experiments(self):
-        return [_FakeExp()]
+        return self._experiments
 
     def search_runs(self, experiment_ids, filter_string="", **kw):
         self.filter_string = filter_string
+        self.searched_experiment_ids = list(experiment_ids)
         return []
 
     def get_run(self, run_id):
@@ -131,6 +134,111 @@ class _FakeReadClient:
 
     def list_artifacts(self, run_id, path):
         return []
+
+
+def test_tracking_uri_routes_by_backend(monkeypatch) -> None:
+    """``_tracking_uri`` targets Databricks-managed MLflow in the databricks backend, ``None`` locally.
+
+    This is the §6.1 fix: the Runs read-path must hit the workspace's managed MLflow (where the Job
+    logs), NOT the FastAPI process's own ``MLFLOW_TRACKING_URI`` (often a leftover local Postgres).
+    """
+    from api import mlflow_read
+
+    monkeypatch.setenv("CLASSIFYOS_EXECUTION_BACKEND", "databricks")
+    assert mlflow_read._tracking_uri() == "databricks"
+    monkeypatch.setenv("CLASSIFYOS_EXECUTION_BACKEND", "local")
+    assert mlflow_read._tracking_uri() is None
+
+
+def test_client_binds_tracking_uri_per_call(monkeypatch) -> None:
+    """``_client`` builds ``MlflowClient(tracking_uri="databricks")`` PER CALL in the databricks
+    backend (no process-global ``set_tracking_uri`` → thread-safe under the shared server); the local
+    backend passes no override (env default), so local reads are byte-identical."""
+    import mlflow.tracking
+
+    from api import mlflow_read
+
+    seen: list = []
+
+    class _CapClient:
+        def __init__(self, tracking_uri=None, **kw):
+            seen.append(tracking_uri)
+
+    monkeypatch.setattr(mlflow.tracking, "MlflowClient", _CapClient)
+
+    monkeypatch.setenv("CLASSIFYOS_EXECUTION_BACKEND", "databricks")
+    mlflow_read._client()
+    monkeypatch.setenv("CLASSIFYOS_EXECUTION_BACKEND", "local")
+    mlflow_read._client()
+    assert seen == ["databricks", None]
+
+
+def test_list_runs_reports_databricks_store(monkeypatch) -> None:
+    """Databricks backend: the Runs list REPORTS the managed store ("databricks"), not the FastAPI
+    process's local ``MLFLOW_TRACKING_URI`` (§6.1) — so the Runs tab stops showing the wrong store."""
+    from api import mlflow_read
+
+    monkeypatch.setenv("CLASSIFYOS_EXECUTION_BACKEND", "databricks")
+    # A leftover local Postgres URI on the FastAPI process must NOT leak into the reported store.
+    monkeypatch.setenv("MLFLOW_TRACKING_URI", "postgresql://classifyos@localhost:5432/mlflow")
+    monkeypatch.setattr(mlflow_read, "_client", lambda: _FakeReadClient())
+    out = mlflow_read.list_runs(user_email="me_sapiens.com")
+    assert out["tracking_uri"] == "databricks"
+
+
+class _Exp:
+    """A minimal MLflow ``Experiment`` stand-in (only the two fields ``list_runs`` reads)."""
+
+    def __init__(self, eid: str, name: str) -> None:
+        self.experiment_id = eid
+        self.name = name
+
+
+def test_is_classifyos_experiment_matches_by_basename(monkeypatch) -> None:
+    """The ClassifyOS-experiment matcher accepts ``/Shared/classifyos`` + a bare name; rejects others;
+    honours the ``CLASSIFYOS_MLFLOW_EXPERIMENT`` override."""
+    from api import mlflow_read
+
+    assert mlflow_read._is_classifyos_experiment("/Shared/classifyos")
+    assert mlflow_read._is_classifyos_experiment("classifyos")
+    assert not mlflow_read._is_classifyos_experiment("/Shared/some_other_project")
+    assert not mlflow_read._is_classifyos_experiment(None)
+    monkeypatch.setenv("CLASSIFYOS_MLFLOW_EXPERIMENT", "/Shared/my_exp")
+    assert mlflow_read._is_classifyos_experiment("/Shared/my_exp")
+    assert not mlflow_read._is_classifyos_experiment("/Shared/classifyos")
+
+
+def test_list_runs_scopes_to_classifyos_experiment_on_databricks(monkeypatch) -> None:
+    """Databricks: ``search_runs`` is scoped to the ClassifyOS experiment ONLY — not the 100s of
+    unrelated workspace experiments (which would exceed Databricks' 100-``experiment_ids`` cap →
+    "Too many experiment_ids … Maximum 100"). §6.1 follow-up."""
+    from api import mlflow_read
+
+    # 150 unrelated experiments + the one ClassifyOS experiment (unscoped → 151 ids → over the cap).
+    experiments = [_Exp(str(i), f"/Users/someone/proj_{i}") for i in range(150)]
+    experiments.append(_Exp("cls", "/Shared/classifyos"))
+
+    monkeypatch.setenv("CLASSIFYOS_EXECUTION_BACKEND", "databricks")
+    fake = _FakeReadClient(experiments=experiments)
+    monkeypatch.setattr(mlflow_read, "_client", lambda: fake)
+
+    out = mlflow_read.list_runs(user_email="me_sapiens.com")
+    assert fake.searched_experiment_ids == ["cls"]  # ONLY the ClassifyOS experiment
+    assert out["tracking_uri"] == "databricks"
+
+
+def test_list_runs_searches_all_experiments_locally(monkeypatch) -> None:
+    """Local backend: every experiment is searched (unchanged) — the Databricks-only ClassifyOS
+    scoping does NOT apply, so the local Runs view stays byte-identical."""
+    from api import mlflow_read
+
+    experiments = [_Exp("1", "other_project"), _Exp("2", "/Shared/classifyos")]
+    monkeypatch.setenv("CLASSIFYOS_EXECUTION_BACKEND", "local")
+    fake = _FakeReadClient(experiments=experiments)
+    monkeypatch.setattr(mlflow_read, "_client", lambda: fake)
+
+    mlflow_read.list_runs()
+    assert set(fake.searched_experiment_ids) == {"1", "2"}  # all experiments, not just ClassifyOS
 
 
 def test_list_runs_builds_owner_filter(monkeypatch) -> None:

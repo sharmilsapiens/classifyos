@@ -9,6 +9,7 @@
    clear empty state rather than an empty list. */
 
 import type { RunResult } from "@/api/types"
+import { runScopedArtifactId } from "@/api/client"
 import { describeInteraction, interactionOps } from "@/lib/results"
 import { ResultGate } from "@/components/results/ResultGate"
 import { PngArtifact } from "@/components/results/PngArtifact"
@@ -91,6 +92,7 @@ function InteractionsBody({ run }: { run: RunResult }) {
               alt="Interaction features summary: correlation with the target"
               artifacts={run.artifacts}
               caption="|correlation| of each interaction column with the target"
+              runId={runScopedArtifactId(run.mlflow)}
             />
           </CardContent>
         </Card>

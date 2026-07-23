@@ -286,7 +286,64 @@ the PAT is used only to resolve identity per request. There is NO per-request cr
 (which would be a multi-user race). Scoping is by the STABLE email tag, so PAT rotation never loses a
 user's history. Isolation is app-enforced (a filter) — sufficient for display, not a Databricks ACL.
 
-**Env (FastAPI process) for the Databricks Runs read:** `MLFLOW_TRACKING_URI=databricks` +
-`DATABRICKS_HOST` + `DATABRICKS_TOKEN` (service); the service identity needs READ on the
-`/Shared/classifyos` experiment. In the **local** backend none of this applies — `/runs` lists every
-run from the local store, exactly as before (no PAT).
+**Store routing (auto, since 2026-07-23).** The read-path no longer depends on the FastAPI process's
+own `MLFLOW_TRACKING_URI`. When `execution_backend()=="databricks"`, `api/mlflow_read.py` targets the
+workspace's managed MLflow by passing `tracking_uri="databricks"` **per call** to `MlflowClient(...)`
+and `download_artifacts(...)` (mlflow 3.14 accepts both — no process-global `set_tracking_uri`, so it
+stays thread-safe), and reports the store as `"databricks"`. This fixed the earlier symptom where the
+Runs tab read a leftover local Postgres and showed "Tracking store: postgresql://…localhost" / no runs
+(was §6.1). So the **only** FastAPI env needed for the Databricks Runs read is `DATABRICKS_HOST` +
+`DATABRICKS_TOKEN` (service) with READ on `/Shared/classifyos`; a stale `MLFLOW_TRACKING_URI` no longer
+matters. The Databricks search is **scoped to the ClassifyOS experiment** (`/Shared/classifyos`; override
+`CLASSIFYOS_MLFLOW_EXPERIMENT`, matched by basename): a workspace can hold hundreds of unrelated
+experiments and Databricks caps `search_runs` at 100 `experiment_ids` (passing all of them fails with
+`Too many experiment_ids ...`), and only the ClassifyOS experiment can hold a matching run anyway.
+In the **local** backend none of this applies — `/runs` lists every run from the process's
+env-configured store, exactly as before (no PAT).
+
+---
+
+## 14. Serving a Databricks run's artifact files (run-scoped `/outputs`)
+
+The interactive charts (ROC/PR, confusion heatmap, …) are driven by JSON **inside** the `/run`
+envelope, so they render for a Databricks run with no extra fetch. The artifact **files** — the
+matplotlib plot PNGs and the downloadable CSVs — are different: they are written on the cluster and
+land in two places (see the wisdom doc §1.5), **neither** of which is the FastAPI's local `OUTPUT_DIR`:
+
+- the **UC output volume** (`{DBRICKS_OUTPUT_VOLUME}/{user_email}/{task_run_id}/…`), and
+- the run's **MLflow** run, under the `classifyos/` artifact subdir (logged by `log_run` when
+  `mlflow.enabled`).
+
+The flat `GET /outputs/{name}` only serves the local `OUTPUT_DIR`, so a Databricks run's images 404'd
+and its CSV links failed (was §6.2). The fix is a **run-scoped** endpoint:
+
+`GET /api/v1/outputs/{run_id}/{name}` — in the databricks backend, `routes/outputs.py` calls
+`mlflow_read.load_artifact(run_id, name)`, which downloads `classifyos/{name}` from the MLflow run via
+`mlflow.artifacts.download_artifacts(run_id, artifact_path="classifyos/{name}", tracking_uri="databricks")`
+(service token, per-call) and streams the bytes. In the **local** backend the same route serves `name`
+from `OUTPUT_DIR` exactly like `/outputs/{name}` (`run_id` ignored), so local is byte-identical.
+
+**Frontend wiring.** `outputUrl(name, runId?)` builds `/outputs/{runId}/{name}` when a run id is given.
+`runScopedArtifactId(mlflow)` returns `mlflow.run_id` **only when** `mlflow.tracking_uri` starts with
+`"databricks"` (i.e. a Databricks-backed run) — else `undefined`, so a local run keeps the flat URL.
+The run id comes from `result.mlflow.run_id`, which is present on **both** a fresh run and one reloaded
+from the Runs tab (the snapshot carries the same `mlflow` block), so artifacts display in both cases.
+
+**[RISK] isolation.** An `<img>`/`<a>` request can't carry the user PAT, so the run-scoped fetch is
+guarded by the **unguessable 32-hex MLflow run id + the service token** (app-level), not a per-user ACL
+— display-tier access, consistent with the PAT-scoped Runs *list*. See wisdom §6.2.
+
+**Caching + prefetch (demo smoothness).** Each `<img>` fetches on demand, so the first visit to a tab
+would otherwise wait on a fresh MLflow download (visible lag/flicker). Two additive optimisations: (1)
+the databricks run-scoped response is `Cache-Control: private, max-age=31536000, immutable` — a run's
+artifacts are write-once per `run_id`+`name`, so the browser caches them and re-navigation is instant
+(the flat local `/outputs/{name}` stays **uncached** — its fixed filenames are overwritten each run);
+(2) on run load — a fresh Databricks completion (`pollOnce` COMPLETED) or a reload from the Runs tab
+(`applyReloadedRun`) — the store fire-and-forget prefetches every plot PNG (`new Image().src =
+outputUrl(name, run_id)`), warming that same immutable cache before the user opens a tab. `new Image()`
+shares the `<img>` tags' exact (no-cors image) cache entry, reliable same- or cross-origin. So the
+"store the images somewhere on the frontend" is just the browser's own cache — no bespoke store.
+
+**Deploy footprint.** API + frontend only — no engine/notebook/wheel change, so no cluster restart:
+a FastAPI `git pull` + `uvicorn` restart and a frontend rebuild. (`load_artifact` reads the subdir the
+already-deployed `log_run` writes; nothing on the cluster changes.)

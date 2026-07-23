@@ -23,6 +23,7 @@ export function PngArtifact({
   alt,
   artifacts,
   caption,
+  runId,
 }: {
   /** Artifact filename, e.g. "plot4_feature_impact.png". */
   name: string
@@ -31,6 +32,13 @@ export function PngArtifact({
   /** The run's artifact list — used to know whether the file exists at all. */
   artifacts: ArtifactEntry[]
   caption?: string
+  /**
+   * When set (a Databricks-backed run — see runScopedArtifactId), fetch this artifact run-scoped
+   * from that run's store via /outputs/{runId}/{name}; otherwise the flat /outputs/{name} from the
+   * local OUTPUT_DIR. A Databricks run's PNGs live in MLflow, not OUTPUT_DIR, so the run-scoped URL
+   * is what makes them display.
+   */
+  runId?: string | null
 }) {
   const [failed, setFailed] = useState(false)
   const present = artifacts.some((a) => a.name === name)
@@ -49,11 +57,12 @@ export function PngArtifact({
     )
   }
 
+  const href = outputUrl(name, runId)
   return (
     <figure className="space-y-2">
-      <a href={outputUrl(name)} target="_blank" rel="noreferrer" className="block">
+      <a href={href} target="_blank" rel="noreferrer" className="block">
         <img
-          src={outputUrl(name)}
+          src={href}
           alt={alt}
           onError={() => setFailed(true)}
           className="w-full rounded-md border bg-card"
@@ -64,7 +73,7 @@ export function PngArtifact({
         <figcaption className="text-xs text-muted-foreground">
           {caption} ·{" "}
           <a
-            href={outputUrl(name)}
+            href={href}
             target="_blank"
             rel="noreferrer"
             className="text-primary underline-offset-2 hover:underline"

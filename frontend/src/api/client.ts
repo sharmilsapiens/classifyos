@@ -21,6 +21,7 @@ import type {
   InputTablesResponse,
   InspectProfile,
   JobStatusResponse,
+  MlflowInfo,
   RunConfig,
   RunResponse,
   RunsListResponse,
@@ -320,9 +321,34 @@ export async function listOutputs() {
 }
 
 /**
- * Build the URL for one output artifact (a PNG or CSV) — used as an <img src>
- * or a download link. PNGs are fetched on demand here, never inlined into /run.
+ * Build the URL for one output artifact (a PNG or CSV) — used as an <img src> or a download link.
+ * PNGs are fetched on demand here, never inlined into /run.
+ *
+ * When `runId` is given the URL is RUN-SCOPED (`/outputs/{runId}/{name}`): the server serves it from
+ * that run's store (MLflow, in the Databricks backend), which is where a Databricks run's artifacts
+ * actually live. Without `runId` it's the flat `/outputs/{name}` served from the FastAPI's local
+ * OUTPUT_DIR — the path a LOCAL run uses, unchanged. Callers pick via {@link runScopedArtifactId}.
  */
-export function outputUrl(name: string): string {
-  return `${API_BASE}/outputs/${encodeURIComponent(name)}`
+export function outputUrl(name: string, runId?: string | null): string {
+  const base = `${API_BASE}/outputs`
+  return runId
+    ? `${base}/${encodeURIComponent(runId)}/${encodeURIComponent(name)}`
+    : `${base}/${encodeURIComponent(name)}`
+}
+
+/**
+ * The run id to scope artifact URLs to, or `undefined` for the flat `/outputs/{name}`.
+ *
+ * A DATABRICKS-backed run logs its artifact files to the workspace's managed MLflow (its
+ * `mlflow.tracking_uri` is `"databricks…"`), NOT the FastAPI's local OUTPUT_DIR — so its PNGs/CSVs
+ * must be fetched run-scoped via `/outputs/{run_id}/{name}` (the server streams them from MLflow).
+ * A LOCAL run (or any run with no MLflow pointer) keeps the flat `/outputs/{name}`, so local
+ * behaviour is byte-identical. This works for both a fresh run and one reloaded from the Runs tab,
+ * since both carry the same `result.mlflow` block. Consumed by: the result pages that render
+ * PngArtifact / artifact links (Overview, Curves, Feature Impact, Interactions, Predictions).
+ */
+export function runScopedArtifactId(mlflow?: MlflowInfo | null): string | undefined {
+  return mlflow?.run_id && mlflow.tracking_uri?.startsWith("databricks")
+    ? mlflow.run_id
+    : undefined
 }

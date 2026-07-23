@@ -29,8 +29,10 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import tempfile
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 # Snapshot artifact path/tag + the per-user owner tag live in the engine (single source) so the
@@ -43,11 +45,33 @@ from classifyos.mlflow_logging import (
     USER_EMAIL_TAG,
 )
 
+# The execution backend gate (read per-call) decides WHICH MLflow store the read-path targets — see
+# :func:`_tracking_uri`. Sibling ``api`` module; no import cycle (``api.databricks`` imports neither
+# this module nor ``mlflow``), so this stays a cheap top-level import.
+from .databricks import execution_backend
+
 logger = logging.getLogger(__name__)
 
 #: Cap on how many past runs :func:`list_runs` returns (most-recent first) — a safety bound so a
 #: very large store can never return an unbounded list to the dashboard.
 DEFAULT_MAX_RUNS = 200
+
+#: MLflow artifact subdir the engine groups a run's artifact FILES (plots, CSVs, ``run_profile.json``)
+#: under — see :func:`classifyos.mlflow_logging.log_run` (``artifact_path="classifyos"``). The
+#: run-scoped ``/outputs/{run_id}/{name}`` endpoint reads them from here. Mirrors the engine's WRITE
+#: side by convention (the engine write path is unchanged — this is an API-side reader constant); if
+#: the engine ever renames that subdir, update both. The ``/run`` envelope snapshot is separate
+#: (``SNAPSHOT_DIR``/``SNAPSHOT_PATH``, imported above).
+ARTIFACT_SUBDIR = "classifyos"
+
+#: The ClassifyOS MLflow experiment name. The engine default (``api`` ``MlflowConfig.experiment``) is
+#: ``"classifyos"``; on Databricks the Job notebook nests it under ``/Shared/`` (managed MLflow rejects
+#: a bare name when the cluster runs as a service principal — see the notebook Cell 3), so on the
+#: workspace it is ``/Shared/classifyos``. Overridable via ``CLASSIFYOS_MLFLOW_EXPERIMENT`` for a custom
+#: experiment. Used ONLY to SCOPE the Databricks Runs read to the ClassifyOS experiment: a workspace can
+#: hold hundreds of unrelated experiments, and Databricks caps ``search_runs`` at 100 ``experiment_ids``
+#: — and only the ClassifyOS experiment can hold a matching run anyway.
+DEFAULT_MLFLOW_EXPERIMENT = "classifyos"
 
 
 class MlflowUnavailable(RuntimeError):
@@ -58,18 +82,67 @@ class RunNotFound(LookupError):
     """No run with the given id exists in the tracking store (→ HTTP 404)."""
 
 
-def _client() -> Any:
-    """Return an ``MlflowClient`` bound to the env-configured tracking store (lazy import).
+def _tracking_uri() -> str | None:
+    """The MLflow tracking store the READ-path should target, decided PER CALL (thread-safe).
 
-    Reuses the engine's :func:`classifyos.mlflow_logging._maybe_allow_file_store` (the single
-    source of truth for the MLflow 3.x file-store "maintenance mode" opt-out) so the READ path
-    can read the very same stores the engine WRITES — a bare ``file:`` store or the local default
-    — not only the DB / managed stores. It only sets an env var for a file-store URI and never
-    touches a ``postgresql`` / ``sqlite`` / ``http`` / ``databricks`` URI.
+    * **Databricks backend** → ``"databricks"``: the Runs read-path must hit the workspace's
+      *managed* MLflow — where the cluster Job logs runs — regardless of the FastAPI process's own
+      ``MLFLOW_TRACKING_URI`` (in a Databricks deployment that env var is often still the local dev
+      Postgres, which is why the Runs tab used to show the wrong store / no runs — §6.1). Returned
+      per-call and passed to ``MlflowClient(tracking_uri=…)`` / ``download_artifacts(tracking_uri=…)``
+      (mlflow 3.14 accepts both), so there is NO process-global ``mlflow.set_tracking_uri`` mutation
+      under the shared server — thread-safe. The **service token** (``DATABRICKS_TOKEN`` +
+      ``DATABRICKS_HOST`` in the FastAPI env) authenticates that read.
+    * **Local backend** → ``None``: use the process's env-configured store exactly as before (the
+      caller then falls back to :func:`classifyos.mlflow_logging._maybe_allow_file_store` +
+      ``mlflow.get_tracking_uri()``), so local dev / CI are byte-identical.
+
+    Read per-call via :func:`api.databricks.execution_backend` (not cached) so a test can flip the
+    backend with ``monkeypatch.setenv`` and reuse the shared app.
+    """
+    return "databricks" if execution_backend() == "databricks" else None
+
+
+def _classifyos_experiment_basename() -> str:
+    """The basename of the ClassifyOS MLflow experiment to scope the Databricks Runs search by.
+
+    Reads ``CLASSIFYOS_MLFLOW_EXPERIMENT`` (default :data:`DEFAULT_MLFLOW_EXPERIMENT`), returning just
+    its final path segment, lowercased — so ``/Shared/classifyos`` and a bare ``classifyos`` both
+    resolve to ``classifyos``. Read per-call (not cached) for test-friendliness.
+    """
+    name = (os.environ.get("CLASSIFYOS_MLFLOW_EXPERIMENT") or DEFAULT_MLFLOW_EXPERIMENT).strip()
+    return name.rstrip("/").rsplit("/", 1)[-1].lower() or DEFAULT_MLFLOW_EXPERIMENT
+
+
+def _is_classifyos_experiment(name: str | None) -> bool:
+    """True if an MLflow experiment NAME is the ClassifyOS one (matches with or without a path prefix).
+
+    Matched by basename, so the absolute ``/Shared/classifyos`` the Databricks Job logs under and a
+    bare ``classifyos`` both count. Used to scope the Databricks Runs search to the ClassifyOS
+    experiment (§6.1 follow-up: the workspace holds 100s of experiments; ``search_runs`` caps
+    ``experiment_ids`` at 100, and only this experiment can hold a matching run).
+    """
+    base = (name or "").rstrip("/").rsplit("/", 1)[-1].lower()
+    return base == _classifyos_experiment_basename()
+
+
+def _client() -> Any:
+    """Return an ``MlflowClient`` bound to the store the READ-path should target (lazy import).
+
+    Databricks backend → an explicit ``MlflowClient(tracking_uri="databricks")`` (per-call, no
+    process-global mutation — see :func:`_tracking_uri`). Local backend → reuses the engine's
+    :func:`classifyos.mlflow_logging._maybe_allow_file_store` (the single source of truth for the
+    MLflow 3.x file-store "maintenance mode" opt-out) and binds to the env-configured store, so the
+    READ path can read the very same stores the engine WRITES — a bare ``file:`` store or the local
+    default — not only the DB / managed stores. The opt-out only sets an env var for a file-store URI
+    and never touches a ``postgresql`` / ``sqlite`` / ``http`` / ``databricks`` URI.
     """
     from classifyos.mlflow_logging import _maybe_allow_file_store  # noqa: PLC0415 — lazy
     from mlflow.tracking import MlflowClient  # noqa: PLC0415 — lazy by design
 
+    uri = _tracking_uri()
+    if uri:
+        return MlflowClient(tracking_uri=uri)
     _maybe_allow_file_store()
     return MlflowClient()
 
@@ -132,9 +205,18 @@ def list_runs(max_results: int = DEFAULT_MAX_RUNS, user_email: str | None = None
         from mlflow.entities import ViewType  # noqa: PLC0415
 
         client = _client()
-        tracking_uri = mlflow.get_tracking_uri()
+        # Report the store we ACTUALLY read from: "databricks" in the databricks backend (§6.1), else
+        # the process's env-configured store. This is what the Runs tab shows as "Tracking store" —
+        # so it no longer misreports the local dev Postgres when reading Databricks-managed MLflow.
+        tracking_uri = _tracking_uri() or mlflow.get_tracking_uri()
         experiments = client.search_experiments()  # active experiments
         exp_names = {e.experiment_id: e.name for e in experiments}
+        # Databricks: scope to the ClassifyOS experiment only. A workspace can hold hundreds of
+        # unrelated experiments AND Databricks caps `search_runs` at 100 `experiment_ids` (passing
+        # all of them → "Too many experiment_ids … Maximum 100"); only the ClassifyOS experiment can
+        # hold a matching run anyway. Local: search every experiment (few, no cap) — unchanged.
+        if _tracking_uri():
+            exp_names = {eid: n for eid, n in exp_names.items() if _is_classifyos_experiment(n)}
         if not exp_names:
             return {"tracking_uri": tracking_uri, "runs": []}
         # Per-user filter (Databricks): backtick-quote the dotted tag key (verified against the
@@ -198,13 +280,60 @@ def load_run(run_id: str, user_email: str | None = None) -> dict[str, Any] | Non
         if not present:
             return None
         with tempfile.TemporaryDirectory() as tmp:
+            # tracking_uri is passed per-call so a Databricks-backend reload pulls the snapshot from
+            # the managed MLflow (§6.1); None in the local backend = the env default (unchanged).
             local = mlflow.artifacts.download_artifacts(
-                run_id=run_id, artifact_path=SNAPSHOT_PATH, dst_path=tmp
+                run_id=run_id, artifact_path=SNAPSHOT_PATH, dst_path=tmp, tracking_uri=_tracking_uri()
             )
             with open(local, encoding="utf-8") as fh:
                 return json.load(fh)
     except Exception as exc:  # noqa: BLE001 — download/parse failure surfaces as 503
         logger.warning("MLflow: load_run(%s) failed to read snapshot: %s", run_id, exc)
+        raise MlflowUnavailable(str(exc)) from exc
+
+
+def load_artifact(run_id: str, name: str) -> tuple[bytes, str]:
+    """Download ONE artifact FILE (a plot PNG or a CSV) from an MLflow run; return ``(data, filename)``.
+
+    The engine logs a run's artifact files under the :data:`ARTIFACT_SUBDIR` (``classifyos/``) subdir
+    (see :func:`classifyos.mlflow_logging.log_run`), so this reads ``{ARTIFACT_SUBDIR}/{name}`` from
+    the run. In the Databricks backend the download targets the workspace's managed MLflow
+    (``tracking_uri="databricks"``, passed PER CALL — thread-safe, no process-global mutation); in
+    the local backend it reads the process's env-configured store, exactly like :func:`load_run`.
+
+    This backs ``GET /api/v1/outputs/{run_id}/{name}`` so a Databricks run's PNGs/CSVs display in the
+    dashboard: those files live in MLflow (+ the UC output volume), NOT the FastAPI's local
+    ``OUTPUT_DIR``, which is why the flat ``/outputs/{name}`` 404s them (§6.2). [RISK] the
+    ``<img>``/``<a>`` request cannot carry the user PAT, so isolation here is the unguessable 32-hex
+    MLflow run id + the service token (app-level), not a per-user ACL — see
+    ``docs/databricks_wisdom.md`` §6.2.
+
+    Raises :class:`RunNotFound` (unknown run or the artifact file is absent → HTTP 404) or
+    :class:`MlflowUnavailable` (store unreachable / any other download failure → HTTP 503) — never an
+    opaque 500. [RISK] leakage — pure read plumbing; downloads an already-logged file, fits nothing.
+    """
+    from mlflow.exceptions import MlflowException  # noqa: PLC0415
+
+    import mlflow  # noqa: PLC0415 — lazy by design
+
+    artifact_path = f"{ARTIFACT_SUBDIR}/{name}"
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            local = mlflow.artifacts.download_artifacts(
+                run_id=run_id, artifact_path=artifact_path, dst_path=tmp, tracking_uri=_tracking_uri()
+            )
+            with open(local, "rb") as fh:
+                return fh.read(), Path(local).name
+    except MlflowException as exc:
+        # A genuinely absent run/artifact is a 404; anything else (store down, auth) stays a 503.
+        if getattr(exc, "error_code", "") == "RESOURCE_DOES_NOT_EXIST":
+            raise RunNotFound(f"{run_id}/{name}") from exc
+        raise MlflowUnavailable(str(exc)) from exc
+    except (FileNotFoundError, IsADirectoryError) as exc:
+        # download_artifacts surfaces a missing artifact path as an OSError-family error on some stores.
+        raise RunNotFound(f"{run_id}/{name}") from exc
+    except Exception as exc:  # noqa: BLE001 — any other failure is a clean 503, never a 500
+        logger.warning("MLflow: load_artifact(%s, %s) failed: %s", run_id, name, exc)
         raise MlflowUnavailable(str(exc)) from exc
 
 

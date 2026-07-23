@@ -13,7 +13,7 @@ import { useMemo, useState } from "react"
 import { Download } from "lucide-react"
 
 import type { PredictionsBlock } from "@/api/types"
-import { outputUrl } from "@/api/client"
+import { outputUrl, runScopedArtifactId } from "@/api/client"
 import { fmtInt, fmtMetric } from "@/lib/format"
 import { ResultGate } from "@/components/results/ResultGate"
 import { Card, CardContent } from "@/components/ui/card"
@@ -28,12 +28,20 @@ type Correctness = "all" | "correct" | "incorrect"
 export default function Predictions() {
   return (
     <ResultGate title="Predictions Table" subtitle="A sample of per-row predictions.">
-      {(run) => <PredictionsBody predictions={run.predictions} />}
+      {(run) => (
+        <PredictionsBody predictions={run.predictions} runId={runScopedArtifactId(run.mlflow)} />
+      )}
     </ResultGate>
   )
 }
 
-function PredictionsBody({ predictions }: { predictions: PredictionsBlock }) {
+function PredictionsBody({
+  predictions,
+  runId,
+}: {
+  predictions: PredictionsBlock
+  runId?: string
+}) {
   const rows = predictions.sample_rows
   const models = useMemo(() => Array.from(new Set(rows.map((r) => r.model))), [rows])
   // The class columns = the union of probability keys (stable order from the first row).
@@ -66,7 +74,7 @@ function PredictionsBody({ predictions }: { predictions: PredictionsBlock }) {
         subtitle={`${visible.length} rows shown`}
         actions={
           <a
-            href={outputUrl(predictions.full_csv)}
+            href={outputUrl(predictions.full_csv, runId)}
             target="_blank"
             rel="noreferrer"
             className={buttonVariants({ variant: "outline", size: "sm" })}
@@ -89,7 +97,7 @@ function PredictionsBody({ predictions }: { predictions: PredictionsBlock }) {
           </span>{" "}
           total predictions (≤100 per model). The full table is{" "}
           <a
-            href={outputUrl(predictions.full_csv)}
+            href={outputUrl(predictions.full_csv, runId)}
             target="_blank"
             rel="noreferrer"
             className="font-mono text-primary underline-offset-2 hover:underline"

@@ -8,7 +8,8 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest"
 
-import { ApiError, explain, health, run } from "./client"
+import { ApiError, explain, health, outputUrl, run, runScopedArtifactId } from "./client"
+import type { MlflowInfo } from "./types"
 
 /** Build a minimal fetch Response stand-in (only the fields the client reads). */
 function jsonResponse(body: unknown, init: { ok: boolean; status: number }): Response {
@@ -103,5 +104,66 @@ describe("ApiError mapping", () => {
     const res = await explain({ input_file: "x.csv", target: "t", feature_cols: ["a"] })
     expect(res.status).toBe("unavailable")
     expect(res.reason).toBe("no_persisted_model")
+  })
+})
+
+/* ── Artifact URLs — run-scoped fetch for Databricks runs (§6.2) ──────────────
+   API_BASE resolves to "/api/v1" in tests (no VITE_API_BASE_URL — see vite.config.ts). */
+
+describe("outputUrl", () => {
+  it("builds a flat /outputs/{name} URL with no runId (a LOCAL run — unchanged)", () => {
+    expect(outputUrl("plot2_roc_pr_curves.png")).toBe("/api/v1/outputs/plot2_roc_pr_curves.png")
+  })
+
+  it("builds a run-scoped /outputs/{runId}/{name} URL with a runId (a Databricks run)", () => {
+    expect(outputUrl("plot2_roc_pr_curves.png", "abc123def456")).toBe(
+      "/api/v1/outputs/abc123def456/plot2_roc_pr_curves.png",
+    )
+  })
+
+  it("treats a null/empty runId as flat (a run with no MLflow pointer is unchanged)", () => {
+    expect(outputUrl("m.csv", null)).toBe("/api/v1/outputs/m.csv")
+    expect(outputUrl("m.csv", "")).toBe("/api/v1/outputs/m.csv")
+  })
+
+  it("URL-encodes both segments", () => {
+    expect(outputUrl("a b.csv", "r/1")).toBe("/api/v1/outputs/r%2F1/a%20b.csv")
+  })
+})
+
+const DBX_MLFLOW: MlflowInfo = {
+  run_id: "abc123def456",
+  experiment_id: "42",
+  tracking_uri: "databricks",
+  models: {},
+}
+
+describe("runScopedArtifactId", () => {
+  it("returns the run id for a Databricks-backed run (tracking_uri 'databricks')", () => {
+    expect(runScopedArtifactId(DBX_MLFLOW)).toBe("abc123def456")
+    // A profile-qualified databricks URI (e.g. "databricks://prod") still counts.
+    expect(runScopedArtifactId({ ...DBX_MLFLOW, tracking_uri: "databricks://prod" })).toBe(
+      "abc123def456",
+    )
+  })
+
+  it("returns undefined for a LOCAL run, so it keeps the flat /outputs/{name} (byte-identical)", () => {
+    expect(
+      runScopedArtifactId({
+        ...DBX_MLFLOW,
+        tracking_uri: "postgresql://classifyos@localhost:5432/mlflow",
+      }),
+    ).toBeUndefined()
+    expect(
+      runScopedArtifactId({
+        ...DBX_MLFLOW,
+        tracking_uri: "file:///C:/Projects/classifyos/backend/mlruns",
+      }),
+    ).toBeUndefined()
+  })
+
+  it("returns undefined when there is no MLflow pointer (a non-MLflow run)", () => {
+    expect(runScopedArtifactId(null)).toBeUndefined()
+    expect(runScopedArtifactId(undefined)).toBeUndefined()
   })
 })

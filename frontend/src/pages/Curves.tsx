@@ -37,6 +37,7 @@ import { fmtMetric } from "@/lib/format"
 import { seriesColor } from "@/lib/results"
 import { ResultGate } from "@/components/results/ResultGate"
 import { ModelSelector } from "@/components/results/ModelSelector"
+import { runScopedArtifactId } from "@/api/client"
 import { PngArtifact } from "@/components/results/PngArtifact"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { EmptyState, PageHeader } from "@/components/common/States"
@@ -49,6 +50,7 @@ export default function Curves() {
           curves={run.curves}
           artifacts={run.artifacts}
           problemType={run.run.problem_type}
+          runId={runScopedArtifactId(run.mlflow)}
         />
       )}
     </ResultGate>
@@ -89,10 +91,12 @@ function CurvesBody({
   curves,
   artifacts,
   problemType,
+  runId,
 }: {
   curves: Record<string, ModelCurves>
   artifacts: import("@/api/types").ArtifactEntry[]
   problemType: string
+  runId?: string
 }) {
   const modelNames = Object.keys(curves)
   const [model, setModel] = useState(modelNames[0] ?? "")
@@ -278,6 +282,7 @@ function CurvesBody({
               alt="ROC and PR curves across models"
               artifacts={artifacts}
               caption="All models, from the same curve points"
+              runId={runId}
             />
           </CardContent>
         </Card>
@@ -291,6 +296,7 @@ function CurvesBody({
               alt="Calibration curve (binary only)"
               artifacts={artifacts}
               caption="Binary only — a placeholder is shown for multiclass runs"
+              runId={runId}
             />
           </CardContent>
         </Card>
