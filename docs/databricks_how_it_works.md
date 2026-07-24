@@ -229,6 +229,7 @@ No cluster restart needed — wheel installs fresh per job.
 | `'input_source.type' must be one of ['file', 'postgres']` | Old wheel without delta support | Rebuild wheel and re-upload |
 | `results envelope is not available yet` | Notebook wrote under a different `{user_email}/{job_id}` prefix than `/results` fetched | Ensure the deployed notebook is current (reads `job_id` from its run context + the `user_email` base_parameter — §6), the caller sends `X-Databricks-Token`, and both resolve the SAME SCIM identity (see §7) |
 | `Databricks unreachable` | `DATABRICKS_HOST` missing `https://` or empty | Fix URL format in `.env` |
+| `LLM narratives requested but these env vars are unset: … shipping SHAP only` (Explainability shows no narrative on Databricks) | The `AZURE_OPEN_AI_*` creds are only in the FastAPI `backend/.env`; the narrator runs in the **engine on the cluster**, which doesn't have them | Set the five `AZURE_OPEN_AI_*` vars on the **cluster** (Compute → Edit → Advanced options → Spark → Environment variables; ideally the key as a `{{secrets/<scope>/<key>}}` reference), restart it, then run once. Narratives are baked into a run's snapshot **at run time**, so only runs executed *after* the creds are set (with the LLM-narrative toggle on) have them — reloading an older run does **not** backfill (`narrative:null` stays) |
 | `Permission denied` on volume | Cluster lacks READ on that volume | Grant `READ VOLUME` in Unity Catalog permissions |
 
 ---
