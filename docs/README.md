@@ -3,10 +3,16 @@
 GenAI-developed ML classification framework for the insurance domain (Sapiens · AI/ML Data):
 React frontend → FastAPI backend → pure-Python ML engine.
 
-This folder is the map for the whole project. Start with **Getting started**, then jump to what
-you need. Live project status lives at the repo root: [`PROJECT_STATE.md`](../PROJECT_STATE.md).
+This folder is the map for the whole project. New here? Start with the **Project overview**
+below for the big picture, then jump to what you need. Live project status lives at the repo
+root: [`PROJECT_STATE.md`](../PROJECT_STATE.md).
 
 ---
+
+## 📄 Project overview (start here)
+- [documentation/business_overview.md](documentation/business_overview.md) — what ClassifyOS is and why it matters, in plain language (for stakeholders / non-technical readers).
+- [documentation/why_classifyos.md](documentation/why_classifyos.md) — why it's specialized for insurance and how it differs from general AutoML (Databricks AutoML / DataRobot), what it adds, and its impact.
+- [documentation/technical_overview.md](documentation/technical_overview.md) — high-level engineering orientation: architecture, what's built, how to run it, and how to take it forward (points into the docs below).
 
 ## 🚀 Getting started
 - [getting-started/FIRST_RUN.md](getting-started/FIRST_RUN.md) — set the app up from scratch on a new machine.
