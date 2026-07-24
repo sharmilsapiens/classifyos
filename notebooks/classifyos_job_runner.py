@@ -67,6 +67,7 @@ dbutils.widgets.text("run_config", "", "RunConfig JSON")
 dbutils.widgets.text("user_token", "", "User Databricks PAT")
 dbutils.widgets.text("job_id", "", "Databricks run id (fallback; namespaces output)")
 dbutils.widgets.text("user_email", "", "User email (namespaces output)")
+dbutils.widgets.text("azure_secret_scope", "", "Azure OpenAI secret scope (LLM narratives; empty = off)")
 
 run_config = json.loads(dbutils.widgets.get("run_config"))
 user_token = dbutils.widgets.get("user_token")
@@ -91,6 +92,10 @@ job_id = _ctx_run_id or dbutils.widgets.get("job_id").strip() or "local"
 # FastAPI resolves the user's email (SCIM, using their PAT) and forwards it here so each user's runs
 # live under their own folder; "unknown_user" is the fallback for standalone runs.
 user_email = dbutils.widgets.get("user_email").strip() or "unknown_user"
+# Secret scope holding the Azure OpenAI creds for LLM reason-code narratives (empty = narratives off).
+# FastAPI syncs the creds into this scope and passes only its NAME here — the key never rides in the
+# Job's run parameters. Read the creds from it into the env in Cell 3.
+azure_secret_scope = dbutils.widgets.get("azure_secret_scope").strip()
 
 # COMMAND ----------
 
@@ -117,6 +122,24 @@ os.environ["MLFLOW_REGISTRY_URI"] = "databricks-uc"
 # Unity Catalog reads run AS THE USER (their PAT), never the service token.
 if user_token:
     os.environ["DATABRICKS_TOKEN"] = user_token
+
+# LLM reason-code narratives (Azure OpenAI): FastAPI synced the creds into a Databricks secret scope
+# and passed only its NAME (the key never rides in the Job's run parameters). Pull them into the env
+# so the engine's classifyos.analysis.llm_explain.narrator_from_env() finds them. Report-only: a
+# missing scope/key (e.g. the optional MODEL, or narratives not requested) just leaves narratives off
+# and SHAP still ships. dbutils.secrets.get redacts the values in any notebook output.
+if azure_secret_scope:
+    for _secret_key in (
+        "AZURE_OPEN_AI_ENDPOINT",
+        "AZURE_OPEN_AI_API_KEY",
+        "AZURE_OPEN_AI_API_VERSION",
+        "AZURE_OPEN_AI_DEPLOYMENT_NAME",
+        "AZURE_OPEN_AI_MODEL",
+    ):
+        try:
+            os.environ[_secret_key] = dbutils.secrets.get(scope=azure_secret_scope, key=_secret_key)
+        except Exception:  # noqa: BLE001 — missing key/scope → skip; narratives just stay off
+            pass
 
 # Databricks managed MLflow requires the experiment to be an ABSOLUTE workspace path; a bare name
 # like "classifyos" fails set_experiment() with INVALID_PARAMETER_VALUE. If logging is enabled and

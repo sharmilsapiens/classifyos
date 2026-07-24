@@ -47,6 +47,7 @@ from ..databricks import (
     execution_backend,
     get_user_email,
     submit_run,
+    sync_llm_secrets,
 )
 from ..deps import get_storage, get_user_pat
 from ..models import RunConfig, RunResponse, RunSubmission
@@ -115,9 +116,18 @@ async def _submit_to_databricks(cfg: RunConfig, user_pat: str | None) -> Any:
     # output under {output_volume}/{user_email}/{job_id}/. Never blocks a run: get_user_email
     # returns "unknown_user" on any failure. Threadpooled — it is a blocking REST call.
     user_email = await run_in_threadpool(get_user_email, user_pat.strip())
+    # LLM reason-code narratives (Azure OpenAI) are generated on the CLUSTER, which has none of the
+    # AZURE_OPEN_AI_* creds. If this run requested narratives AND this host has the creds, push them
+    # into a Databricks secret scope (service token) and forward ONLY the scope name — the key never
+    # rides in the Job's run parameters. Report-only: sync_llm_secrets returns None on absent creds /
+    # any failure → no scope forwarded → the run simply ships SHAP only (never blocks the submit).
+    # Threadpooled (blocking REST). The local backend never reaches here.
+    azure_secret_scope = ""
+    if cfg.explainability.llm_narratives:
+        azure_secret_scope = (await run_in_threadpool(sync_llm_secrets)) or ""
     try:
         submitted = await run_in_threadpool(
-            submit_run, run_config, user_pat.strip(), cfg.cluster_id, user_email
+            submit_run, run_config, user_pat.strip(), cfg.cluster_id, user_email, azure_secret_scope
         )
     except DatabricksAuthError as exc:
         return JSONResponse(status_code=401, content={"detail": str(exc)})
