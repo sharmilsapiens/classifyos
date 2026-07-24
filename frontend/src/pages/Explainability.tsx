@@ -20,17 +20,19 @@
    LogisticRegression / SVM / NaiveBayes). Binary explains the positive class;
    multiclass explains the predicted class. Multilabel produces nothing (omitted). */
 
-import { useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import { Link } from "react-router-dom"
 
-import type { ExplanationRow, ModelExplanation } from "@/api/types"
+import * as api from "@/api/client"
+import type { ExplanationRow, RunResult } from "@/api/types"
+import { useApp } from "@/store/AppStore"
 import { ResultGate } from "@/components/results/ResultGate"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { buttonVariants } from "@/components/ui/button"
 import { Label } from "@/components/ui/label"
 import { Select } from "@/components/ui/select"
-import { EmptyState, PageHeader } from "@/components/common/States"
+import { EmptyState, PageHeader, Spinner } from "@/components/common/States"
 
 /** Most feature bars to draw before the remainder is folded into one "Other" step. */
 const MAX_BARS = 12
@@ -41,16 +43,62 @@ export default function Explainability() {
       title="Explainability"
       subtitle="Why did the model predict this for one row? (per-row SHAP)"
     >
-      {(run) => <ExplainabilityBody explanations={run.explanations ?? null} />}
+      {(run) => <ExplainabilityBody run={run} />}
     </ResultGate>
   )
 }
 
-function ExplainabilityBody({
-  explanations,
-}: {
-  explanations: Record<string, ModelExplanation> | null
-}) {
+/**
+ * On a DATABRICKS-backed run whose SHAP rows have NO narratives yet, generate them off-cluster.
+ *
+ * On Databricks the run executes on a cluster that cannot reach the Azure OpenAI endpoint (private
+ * endpoint → 403), so the engine ships SHAP only. FastAPI CAN reach it, so we call
+ * POST /runs/{id}/narrate; if it returns narratives we swap the narrated envelope into the store
+ * (so this page — and every result page — shows them), and the server persists it so a later reload
+ * from the Runs tab is instant. Attempts once per run id; report-only — a no-narrative result or an
+ * error (e.g. no PAT → 401, no creds → unchanged) just leaves SHAP showing. Local runs are skipped
+ * (they already narrated in-process). Returns whether a narrate call is currently in flight.
+ */
+function useAutoNarrate(run: RunResult): boolean {
+  const { databricksPat, applyReloadedRun } = useApp()
+  const attempted = useRef<Set<string>>(new Set())
+  const [narrating, setNarrating] = useState(false)
+
+  useEffect(() => {
+    const mlflow = run.mlflow
+    const runId = mlflow?.run_id
+    // Only databricks-backed runs need off-cluster narration. runScopedArtifactId returns the run id
+    // ONLY when tracking_uri starts with "databricks" — so this skips local runs (undefined !== id).
+    if (!runId || api.runScopedArtifactId(mlflow) !== runId) return
+    const explanations = run.explanations
+    if (!explanations) return
+    const hasNarrative = Object.values(explanations).some((m) =>
+      (m.rows ?? []).some((r) => r.narrative),
+    )
+    if (hasNarrative || attempted.current.has(runId)) return
+
+    attempted.current.add(runId) // once per run id — never loops on a no-narrative result
+    setNarrating(true)
+    void api
+      .narrateRun(runId, databricksPat.trim() || undefined)
+      .then((env) => {
+        const expl = env.result?.explanations
+        const got =
+          !!expl && Object.values(expl).some((m) => (m.rows ?? []).some((r) => r.narrative))
+        if (got) applyReloadedRun(env) // swap in the narrated envelope (also persisted server-side)
+      })
+      .catch(() => {
+        /* report-only: leave SHAP showing */
+      })
+      .finally(() => setNarrating(false))
+  }, [run, databricksPat, applyReloadedRun])
+
+  return narrating
+}
+
+function ExplainabilityBody({ run }: { run: RunResult }) {
+  const explanations = run.explanations ?? null
+  const narrating = useAutoNarrate(run)
   const models = explanations ? Object.keys(explanations) : []
   const [model, setModel] = useState(models[0] ?? "")
   const [rowIdx, setRowIdx] = useState(0)
@@ -87,6 +135,13 @@ function ExplainabilityBody({
         subtitle="Why did the model predict this for one row? (per-row SHAP)"
         actions={selected ? <Badge variant="secondary">{selected.method}</Badge> : undefined}
       />
+
+      {narrating ? (
+        <div className="mb-4 flex items-center gap-2 rounded-md border border-indigo-200 bg-indigo-50/60 px-3 py-2 text-sm text-indigo-900 dark:border-indigo-900 dark:bg-indigo-950/40 dark:text-indigo-100">
+          <Spinner className="text-indigo-500" />
+          Generating LLM reason-code narratives…
+        </div>
+      ) : null}
 
       <div className="mb-5 grid grid-cols-1 gap-4 sm:grid-cols-[1fr_1fr]">
         <div className="space-y-1.5">

@@ -4,8 +4,44 @@
 > A copy is uploaded to the ClassifyOS Claude Project knowledge after each update so the
 > planning/overseer chat stays in sync with the local repo.
 
-**Last updated:** 2026-07-23
-**Updated by:** Claude Code (**NEW — LLM reason-code narratives (Azure OpenAI) now work on the DATABRICKS backend — robust: creds ride a SECRET SCOPE, never the Job params. API + notebook only; no engine/wheel change.**
+**Last updated:** 2026-07-24
+**Updated by:** Claude Code (**NEW — LLM reason-code narratives MOVED OFF the Databricks cluster and ONTO a FastAPI step, with full context parity.**
+Root cause the secret-scope fix (prior update) couldn't solve: a live job log shows the cluster fails every Azure OpenAI
+call with `openai.PermissionDeniedError: 403 — Public access is disabled. Please configure private endpoint.` — the workspace
+is locked to a PRIVATE ENDPOINT, so the cluster simply cannot REACH Azure (the creds were delivered fine; reachability was the
+wall). FastAPI CAN reach it (that is why local works). **Design (agreed):** narrate off-cluster in the API.
+**ENGINE (wheel change; additive + flag-gated):** the run still computes SHAP; new flag `CLASSIFYOS_NARRATE_IN_ENGINE`
+(default TRUE → LOCAL byte-identical, engine narrates in-process as today) gates the in-process narrate call, and when
+narratives are requested the runner serializes a SIDE artifact `api/narration_context.json`
+(`ModelRunner._build_narration_context` → logged by `mlflow_logging.log_run` under `api/`) carrying the fields the API can't
+rebuild from the result: analyst `dataset_context`/`column_context` + `context_mode`, and the data-derived per-column schema +
+sample rows (+ feature-col list). It is a SIDE artifact, not the locked `/run` envelope → NO `schema_version` bump (`narrative`
+exists since 1.7). **NOTEBOOK (Cell 3):** sets `CLASSIFYOS_NARRATE_IN_ENGINE=false` (cluster skips the unreachable call, writes
+SHAP + the artifact) and disables MLflow OpenAI autolog (`mlflow.openai.autolog(disable=True)` — killed the noisy
+"experiment_id is missing" warnings + latency); the moot secret-scope forwarding was removed. **FASTAPI:** new
+`POST /api/v1/runs/{run_id}/narrate` (`api/narrate.py`) — loads the run's envelope (`load_run`) + `narration_context.json`
+(new `load_narration_context`), rebuilds the FULL `RunContext` (artifact + `class_distribution`→base rates,
+`result.models`→per-model metrics, `result.permutation_importance`/`feature_impact`→global features, `result.explanations`→SHAP
+rows), narrates every row via the ENGINE narrator (`classifyos.analysis.llm_explain` — NO new ML), attaches `narrative`, and
+RE-persists the narrated envelope as the run's snapshot routed to Databricks MLflow (`tracking_uri="databricks"` via a new
+optional `snapshot_envelope(tracking_uri=…)` + `snapshot_result` routing, mirroring the §6.1 read fix) so a reload is instant.
+Report-only: absent creds / absent context / any failure → envelope unchanged, never 500; 404 unknown/no-snapshot, 503 store
+down, 401 missing PAT (databricks). **FRONTEND:** Explainability auto-calls `/narrate` for a databricks-backed run
+(`result.mlflow.tracking_uri` startswith "databricks") whose rows lack a `narrative`, then swaps in the narrated envelope
+(`applyReloadedRun`); a pre-narrated persisted run reloads instantly. **REMOVED the now-moot secret-scope path:**
+`sync_llm_secrets` + its Secrets REST helpers, the `azure_secret_scope` Job param, the notebook widget/loop. **Tests (all
+Azure/MLflow/Databricks mocked — CI touches no live service): `test_api_narrate.py` (+14: narrate_envelope parity/report-only,
+route 200/404/503/401 + persist, `_reconstruct_original_row`, snapshot tracking_uri routing), `test_narration_offload.py`
+(+8: the flag, `_build_narration_context` fields/modes/multilabel, `log_run` narration artifact), `test_api_jobs.py`
+(secret-scope tests replaced by "submit forwards no Azure material"), frontend `explainability.test.tsx` (+3: auto-narrate on
+databricks / skip local / skip when already narrated).** Backend full suite green; frontend 180 green. Hallucination-checked
+(`MlflowClient(tracking_uri=…)`, `mlflow.artifacts.download_artifacts`, `mlflow.openai.autolog(disable=True)`) vs installed
+mlflow 3.14. **Deploy = B-full: wheel rebuild + cluster restart + notebook re-import** (the flag + artifact ship in the wheel).
+[RISK] the service token re-persists a snapshot on a run created by the cluster identity → needs EDIT on the experiment; if it
+can't write, narration still returns live (report-only) but the instant-reload persistence is skipped. Docs updated
+(api_contract new endpoint + footer, api_short_desc, backend_short_desc, databricks_how_it_works §15 rewritten, .env.example,
+plan_tweak #52); prompt archived under `prompts/api_phases/`.)
+**Prior update (2026-07-23 — LLM narratives on Databricks via a secret scope; SUPERSEDED by the off-cluster move above):** Claude Code (**NEW — LLM reason-code narratives (Azure OpenAI) now work on the DATABRICKS backend — robust: creds ride a SECRET SCOPE, never the Job params. API + notebook only; no engine/wheel change.**
 Symptom: narratives worked locally but were always null on Databricks. Root cause: they're generated by the engine
 DURING the run (classifyos.analysis.llm_explain.narrator_from_env reads the AZURE_OPEN_AI_* creds from os.environ), which
 on Databricks runs on the CLUSTER — whose env had none of them (notebook Cell 3 set storage/MLflow/token but not these), so

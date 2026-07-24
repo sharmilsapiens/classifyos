@@ -389,6 +389,37 @@ tests (`test_api_jobs.py` +6). Narratives are baked into a run at run time, so r
 see them on a reloaded past run. No `/run` contract change (narrative exists since 1.7). Docs:
 `docs/databricks_how_it_works.md` §15, `docs/databricks_wisdom.md`, `backend/.env.example`.
 
+## LLM narratives moved OFF the cluster to a FastAPI step (2026-07-24, additive; no version bump)
+- **The gap it closes.** The secret-scope fix above correctly delivered the Azure creds to the cluster,
+  but the cluster **still can't reach Azure OpenAI** — it is locked to a private endpoint, so every
+  narrate call failed with `403 Public access is disabled` (confirmed in a live job log) and narratives
+  were always `null` on the databricks backend. FastAPI *can* reach the endpoint (that is why local
+  works), so narration was moved off the cluster to the API.
+- **New endpoint `POST /api/v1/runs/{run_id}/narrate`.** It loads the run's persisted `/run` envelope +
+  a new `api/narration_context.json` side artifact, rebuilds the **full** narrator context (the analyst
+  dataset/column context + context_mode + data-derived schema/sample rows from the artifact;
+  class base rates from `result.run.class_distribution`; per-model metrics from `result.models`; global
+  features from `result.permutation_importance`/`feature_impact`; the SHAP rows from
+  `result.explanations`), narrates every row via the **engine narrator** (`classifyos.analysis.llm_explain`
+  — no new ML), attaches `narrative`, and **re-persists** the narrated envelope as the run's snapshot
+  (routed to Databricks MLflow with `tracking_uri="databricks"`, mirroring the §6.1 read fix) so a
+  reload shows narratives instantly. **Report-only**: absent creds / absent context / any failure returns
+  the envelope unchanged — never a 500. `404` unknown run/no snapshot, `503` store unreachable, `401`
+  missing PAT (databricks).
+- **Engine side (wheel change; additive + flag-gated).** The run still computes SHAP; when narratives are
+  requested it serializes the `narration_context.json` side artifact (via `mlflow_logging.log_run`,
+  grouped with the envelope snapshot under `api/`). A new engine flag `CLASSIFYOS_NARRATE_IN_ENGINE`
+  (default **true** → local byte-identical, engine narrates in-process as today) gates the in-engine call;
+  the Databricks Job notebook sets it **false** so the cluster skips the unreachable Azure call. It is a
+  SIDE artifact, not part of the locked `/run` envelope → **no `schema_version` bump** (`narrative` has
+  existed since 1.7). This needs a **wheel rebuild + cluster restart + notebook re-import** (B-full).
+- **Frontend.** The Explainability page auto-calls `/narrate` for a databricks-backed run whose SHAP rows
+  lack a `narrative`, then swaps in the narrated envelope; a pre-narrated (persisted) past run reloads
+  instantly. **The moot secret-scope handoff was removed** (notebook widget/loop, `sync_llm_secrets` +
+  its helpers, the `azure_secret_scope` submit param). All Azure/MLflow/Databricks are mocked in tests
+  (`test_api_narrate.py`, `test_narration_offload.py`); `test_api_jobs.py` now asserts the submit forwards
+  no Azure material. Docs: `docs/databricks_how_it_works.md` §15, plan_tweak #52.
+
 ---
 
 ## How to read this project

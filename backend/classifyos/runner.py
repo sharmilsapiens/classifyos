@@ -186,6 +186,14 @@ class ModelRunner:
         #: API surfaces it as the additive ``result.mlflow`` block (schema 1.9). Populated by
         #: :meth:`_log_to_mlflow` after all artifacts are written. See classifyos.mlflow_logging.
         self.mlflow_run_: dict[str, Any] | None = None
+        #: The whole-run LLM narration context serialized as a JSON-safe dict when the run requested
+        #: LLM narratives (``explainability.llm_narratives``), else ``None``. Carries the fields the
+        #: API cannot otherwise rebuild from the ``/run`` envelope (the config dataset/column context
+        #: + context_mode, and the data-derived schema + sample rows). :meth:`_log_to_mlflow` attaches
+        #: it as the ``api/narration_context.json`` side artifact so the off-cluster FastAPI narrate
+        #: step (Databricks: the cluster can't reach Azure OpenAI) can reconstruct the RunContext.
+        #: Purely presentational — no ML, no leakage surface. See :meth:`_build_narration_context`.
+        self.narration_context_: dict[str, Any] | None = None
 
     # --------------------------------------------------------------------- run --
 
@@ -308,10 +316,21 @@ class ModelRunner:
             # — the reason-code convention. Runs whenever SHAP is on (NOT gated on the LLM flag);
             # report-only, no external calls, no refit.
             self._add_feature_values(cfg, problem_type)
-            # Optional LLM reason-code narratives on top of the SHAP numbers (opt-in; Azure
-            # OpenAI). Report-only: absent credentials / a failed call leave SHAP untouched.
+            # Optional LLM reason-code narratives on top of the SHAP numbers (opt-in; Azure OpenAI).
             if expl_cfg.get("llm_narratives", False):
-                self._add_llm_narratives(cfg, problem_type, sample_rows=sample_rows)
+                # Serialize the whole-run narration context (the fields the API can't otherwise
+                # reconstruct from the /run envelope: the config dataset/column/context_mode + the
+                # data-derived schema + sample rows) as a SIDE artifact. _log_to_mlflow attaches it
+                # as ``api/narration_context.json`` so the off-cluster FastAPI narrate step can
+                # rebuild the RunContext. Built whenever narratives are requested (harmless locally).
+                self.narration_context_ = self._build_narration_context(cfg, problem_type)
+                # In-engine narration is flag-gated. Default ON → local is byte-identical (the
+                # engine narrates in-process as before). The Databricks Job sets
+                # CLASSIFYOS_NARRATE_IN_ENGINE=false because the cluster CANNOT reach the Azure
+                # OpenAI private endpoint (403); narration then happens in FastAPI from the side
+                # artifact above. Report-only: absent credentials / a failed call leave SHAP untouched.
+                if _narrate_in_engine():
+                    self._add_llm_narratives(cfg, problem_type, sample_rows=sample_rows)
 
         n_ok = len(self.models_)
         logger.info(
@@ -724,6 +743,11 @@ class ModelRunner:
             metrics_records=metrics_records,
             models=self.models_,
             artifact_paths=artifact_paths,
+            # Attach the whole-run narration context (built when the run requested LLM narratives)
+            # as the ``api/narration_context.json`` side artifact so the off-cluster FastAPI narrate
+            # step can rebuild the RunContext. ``None`` (the default) when narratives were not
+            # requested → nothing extra is logged, so a non-narrative run is byte-identical.
+            narration_context=self.narration_context_,
             experiment=mlflow_cfg.get("experiment", "classifyos") or "classifyos",
             # A meaningful default when the config supplied no run_name (an explicit one still
             # wins) — otherwise MLflow auto-generates a whimsical name ("capable-fox-123") that
@@ -1028,6 +1052,60 @@ class ModelRunner:
                     n_narrated += 1
         logger.info("ModelRunner: attached %d LLM narrative(s) to explanations", n_narrated)
 
+    def _build_narration_context(
+        self, cfg: dict[str, Any], problem_type: str
+    ) -> dict[str, Any] | None:
+        """Serialize the whole-run narration context as a JSON-safe dict for the API narrate step.
+
+        Carries ONLY the fields the off-cluster FastAPI narrate step cannot reconstruct from the
+        ``/run`` envelope itself:
+
+        * ``context_mode`` / ``dataset_context`` / ``column_context`` — from the run config
+          (the analyst-supplied prompt context), and
+        * ``derived_schema`` / ``sample_rows`` — the DATA-derived facts (built here from the raw
+          frame, mode-gated exactly as :meth:`_add_llm_narratives` builds them), plus
+        * ``feature_cols`` — so the API can map an engineered SHAP feature back to its raw source
+          column when resolving the original value for the prompt.
+
+        Everything else the RunContext needs (class base rates, per-model metrics, the global feature
+        ranking, the SHAP rows) is already in the envelope, so it is deliberately NOT duplicated here.
+        Returns ``None`` for multilabel (never narrated). Built independently of
+        :meth:`_add_llm_narratives` so the in-engine (local) narration path is byte-identical.
+        Presentational only — no ML, no leakage surface. [RISK] privacy — ``derived``/``both`` mode
+        serializes sample data values into this artifact (the same opt-in exposure the in-engine
+        narrator already sends to Azure OpenAI).
+        """
+        if problem_type == "multilabel":
+            return None
+
+        # Lazy import: avoids a runner→envelope import cycle at module load (envelope imports the
+        # runner). At call time everything is imported, so this is a cached no-op.
+        from .envelope.serialize import safe_jsonify
+
+        expl = cfg.get("explainability", {}) or {}
+        context_mode = expl.get("context_mode", "both")
+        feature_cols = [
+            c
+            for c in (cfg.get("feature_cols") or [])
+            if self.test_df_ is not None and c in self.test_df_.columns
+        ]
+        derived_schema: list[str] = []
+        sample_ctx_rows: list[dict[str, Any]] = []
+        if context_mode in ("derived", "both"):
+            derived_schema = self._derived_schema(feature_cols)
+            sample_ctx_rows = self._sample_context_rows(feature_cols)
+
+        return safe_jsonify(
+            {
+                "context_mode": context_mode,
+                "dataset_context": expl.get("dataset_context", "") or "",
+                "column_context": expl.get("column_context", {}) or {},
+                "derived_schema": derived_schema,
+                "sample_rows": sample_ctx_rows,
+                "feature_cols": feature_cols,
+            }
+        )
+
     def _class_base_rates(self, target: str) -> dict[str, float]:
         """Population base rate per class from the raw frame (``{label: proportion}``).
 
@@ -1322,6 +1400,22 @@ def _train_row(train_metrics: dict[str, Any] | None) -> dict[str, Any]:
 def _fmt(value: Any) -> str:
     """Format a possibly-``None`` metric for a log line."""
     return f"{value:.4f}" if isinstance(value, (int, float)) else "n/a"
+
+
+def _narrate_in_engine() -> bool:
+    """Whether the engine narrates LLM reason codes IN-PROCESS during the run (default ``True``).
+
+    Read from ``CLASSIFYOS_NARRATE_IN_ENGINE`` on every call (not cached), the same env-gating
+    discipline as :func:`classifyos.io.storage` / the execution backend. Default ``True`` keeps the
+    LOCAL backend byte-identical — the engine narrates during the run exactly as before. The
+    Databricks Job sets it ``false`` because the cluster CANNOT reach the Azure OpenAI private
+    endpoint (a 403 "Public access is disabled"); the run then just writes SHAP + the
+    ``narration_context.json`` side artifact, and FastAPI (which CAN reach the endpoint) narrates
+    from it via ``POST /api/v1/runs/{run_id}/narrate``. Only ``false``/``0``/``no`` disable it.
+    """
+    return (
+        os.environ.get("CLASSIFYOS_NARRATE_IN_ENGINE") or ""
+    ).strip().lower() not in ("false", "0", "no")
 
 
 def run_from_args(

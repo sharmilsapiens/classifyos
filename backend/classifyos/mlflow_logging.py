@@ -67,6 +67,17 @@ SNAPSHOT_PATH = f"{SNAPSHOT_DIR}/{SNAPSHOT_NAME}"
 SNAPSHOT_TAG = "classifyos.result_artifact"
 USER_EMAIL_TAG = "classifyos.user_email"
 
+#: Where the engine logs the whole-run LLM narration context (built by
+#: :meth:`ModelRunner._build_narration_context` when a run requests LLM narratives) inside a run's
+#: artifacts. Grouped under the same ``api/`` subdir as the ``/run`` envelope snapshot because it is
+#: an API-consumed side artifact, NOT a pipeline output. The off-cluster FastAPI narrate step
+#: (``api.mlflow_read.load_narration_context`` → ``api.narrate``) reads it to rebuild the RunContext
+#: on the Databricks backend, where the cluster cannot reach Azure OpenAI. Single source: the read
+#: side imports these, so the write path and the read path can never drift.
+NARRATION_CONTEXT_DIR = "api"
+NARRATION_CONTEXT_NAME = "narration_context.json"
+NARRATION_CONTEXT_PATH = f"{NARRATION_CONTEXT_DIR}/{NARRATION_CONTEXT_NAME}"
+
 #: Headline HELD-OUT TEST metrics logged per successful model (a subset of the metrics row the
 #: runner computes — the same scalars the API scoreboard shows).
 _HEADLINE_METRIC_KEYS = (
@@ -239,6 +250,7 @@ def log_run(
     artifact_paths: list[str],
     experiment: str,
     run_name: str | None,
+    narration_context: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     """Log one completed ClassifyOS run to MLflow. Report-only — never raises.
 
@@ -251,6 +263,11 @@ def log_run(
             :meth:`StorageAdapter.path_for`) to attach as run artifacts.
         experiment: MLflow experiment name to log under.
         run_name: Optional MLflow run name (``None`` → MLflow auto-generates one).
+        narration_context: Optional JSON-safe whole-run LLM narration context (built by
+            :meth:`ModelRunner._build_narration_context` when the run requested LLM narratives).
+            When given, it is logged as the ``api/narration_context.json`` side artifact so the
+            off-cluster FastAPI narrate step can rebuild the RunContext. ``None`` → nothing extra is
+            logged, so a non-narrative run is byte-identical.
 
     Returns:
         ``{"run_id", "experiment_id", "tracking_uri", "models": {name: model_uri}}`` on success
@@ -302,6 +319,23 @@ def log_run(
                 except Exception:  # noqa: BLE001 — report-only
                     logger.exception("MLflow: failed to log artifact %s; continuing", path)
 
+            # narration context (API-consumed side artifact) — grouped under the "api" subdir with
+            # the /run envelope snapshot. Written from a temp file (like snapshot_envelope) so nothing
+            # extra lands in OUTPUT_DIR (local OUTPUT_DIR stays byte-identical). ``default=str`` is a
+            # belt-and-braces guard for any residual non-JSON value (e.g. a datetime sample cell).
+            if narration_context is not None:
+                try:
+                    import json  # noqa: PLC0415 — lazy, only when a narration context is logged
+                    import tempfile  # noqa: PLC0415
+
+                    with tempfile.TemporaryDirectory() as tmp:
+                        ncp = os.path.join(tmp, NARRATION_CONTEXT_NAME)
+                        with open(ncp, "w", encoding="utf-8") as fh:
+                            json.dump(narration_context, fh, default=str)
+                        mlflow.log_artifact(ncp, artifact_path=NARRATION_CONTEXT_DIR)
+                except Exception:  # noqa: BLE001 — report-only
+                    logger.exception("MLflow: failed to log narration context; continuing")
+
             # one saved model per fitted algorithm (flavor-native)
             for name, wrapper in models.items():
                 uri = _log_one_model(mlflow, name, wrapper)
@@ -327,7 +361,11 @@ def log_run(
 
 
 def snapshot_envelope(
-    run_id: str, envelope: dict[str, Any], user_email: str | None = None
+    run_id: str,
+    envelope: dict[str, Any],
+    user_email: str | None = None,
+    *,
+    tracking_uri: str | None = None,
 ) -> bool:
     """Persist a rendered ``/run`` envelope as a run artifact + marker tags. Report-only.
 
@@ -336,6 +374,15 @@ def snapshot_envelope(
     ``user_email`` is given — sets :data:`USER_EMAIL_TAG` so the per-user Runs view can filter by
     owner. Returns ``True`` on success. NEVER raises: a failure only means the run cannot be
     reloaded / attributed; it never affects a training run or the ``/run`` response.
+
+    ``tracking_uri`` (keyword-only) selects the MLflow store the write targets, PER CALL — passed to
+    ``MlflowClient(tracking_uri=…)`` with NO process-global ``set_tracking_uri`` (thread-safe under
+    the shared FastAPI server). ``None`` (the default) uses the env-configured store, exactly as
+    before: the Databricks Job notebook writes on the cluster where the env already resolves to
+    managed MLflow, and the local ``/run`` route writes to its env store. The off-cluster FastAPI
+    narrate step (``api.mlflow_read.snapshot_result``) passes ``"databricks"`` so its RE-persist of
+    the narrated envelope lands in the workspace's managed MLflow (mirrors the §6.1 read fix), where
+    the run — and the ``api/run_response.json`` ``load_run`` reloads — actually live.
 
     This is the SINGLE source for both callers: the synchronous ``/run`` route (local backend, via
     ``api.mlflow_read.snapshot_result``) and the Databricks Job notebook, which has only the engine
@@ -350,8 +397,11 @@ def snapshot_envelope(
 
         from mlflow.tracking import MlflowClient  # noqa: PLC0415 — lazy by design
 
-        _maybe_allow_file_store()
-        client = MlflowClient()
+        # Only opt into the file-store "maintenance mode" when we're NOT routing to an explicit
+        # store (e.g. "databricks"); the opt-out only ever matters for a local file: URI anyway.
+        if not tracking_uri:
+            _maybe_allow_file_store()
+        client = MlflowClient(tracking_uri=tracking_uri) if tracking_uri else MlflowClient()
         with tempfile.TemporaryDirectory() as tmp:
             path = os.path.join(tmp, SNAPSHOT_NAME)
             with open(path, "w", encoding="utf-8") as fh:

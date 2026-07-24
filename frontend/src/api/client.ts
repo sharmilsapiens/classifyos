@@ -304,6 +304,27 @@ export async function loadRun(runId: string, pat?: string): Promise<RunResponse>
   return parseRunResponse(body)
 }
 
+/**
+ * POST /runs/{run_id}/narrate — generate the LLM reason-code narratives for a stored run
+ * OFF-CLUSTER and return the narrated /run envelope (validated through the same parser as a
+ * reload). Used on the Explainability page for a DATABRICKS-backed run whose SHAP rows lack
+ * narratives: on Databricks the run executes on a cluster that cannot reach Azure OpenAI, so the
+ * engine ships SHAP only and FastAPI (which can reach it) narrates from the run's stored context.
+ *
+ * Report-only server-side: absent creds / context / any failure returns the envelope UNCHANGED
+ * (HTTP 200), so this never throws for a "could not narrate" case — the caller simply keeps
+ * showing SHAP. Pass the PAT (X-Databricks-Token) so the databricks backend authorizes the run to
+ * its owner (same scoping as loadRun); a missing/expired PAT is a 401 (surfaced as an ApiError).
+ */
+export async function narrateRun(runId: string, pat?: string): Promise<RunResponse> {
+  const res = await request(`${API_BASE}/runs/${encodeURIComponent(runId)}/narrate`, {
+    method: "POST",
+    ...(pat ? { headers: { "X-Databricks-Token": pat } } : {}),
+  })
+  const body = await handleJson<unknown>(res)
+  return parseRunResponse(body)
+}
+
 /** POST /explain — v1.0 structured stub (no model persistence yet). */
 export async function explain(req: ExplainRequest): Promise<ExplainResponse> {
   const res = await request(`${API_BASE}/explain`, {

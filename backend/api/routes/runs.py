@@ -4,6 +4,10 @@
   summary rows the dashboard's "Runs" view renders.
 * ``GET /api/v1/runs/{run_id}`` — reload ONE past run: returns the exact ``/run`` envelope the
   API persisted for it, so the dashboard drops it straight into the existing result pages.
+* ``POST /api/v1/runs/{run_id}/narrate`` — generate the LLM reason-code narratives for a stored
+  run OFF-CLUSTER (FastAPI can reach Azure OpenAI; the Databricks cluster cannot), attach them to
+  the run's SHAP rows, RE-persist the narrated envelope, and return it. Report-only — absent creds
+  / context / any failure returns the envelope unchanged (never a 500). See :mod:`api.narrate`.
 
 **Per-user scope (Databricks backend).** In the ``databricks`` execution backend these are scoped to
 the CALLER: the list is filtered — and a reload is authorized — by the ``classifyos.user_email`` tag
@@ -27,8 +31,16 @@ from fastapi.responses import JSONResponse
 
 from ..databricks import execution_backend, get_user_email
 from ..deps import get_user_pat
-from ..mlflow_read import MlflowUnavailable, RunNotFound, list_runs, load_run
+from ..mlflow_read import (
+    MlflowUnavailable,
+    RunNotFound,
+    list_runs,
+    load_narration_context,
+    load_run,
+    snapshot_result,
+)
 from ..models import RunsListResponse
+from ..narrate import narrate_envelope
 
 router = APIRouter(tags=["runs"])
 
@@ -112,3 +124,52 @@ def get_run_endpoint(run_id: str, user_pat: str | None = Depends(get_user_pat)) 
         )
     # Return the persisted envelope verbatim so a reload matches the original run exactly.
     return JSONResponse(content=envelope)
+
+
+@router.post("/runs/{run_id}/narrate", response_model=None)
+def narrate_run_endpoint(run_id: str, user_pat: str | None = Depends(get_user_pat)) -> Any:
+    """Generate the LLM reason-code narratives for a stored run OFF-CLUSTER, and return the envelope.
+
+    Why this endpoint exists: on the databricks backend the run executes on the CLUSTER, which cannot
+    reach the Azure OpenAI private endpoint (403), so the engine ships SHAP + a ``narration_context``
+    side artifact and skips the call. FastAPI CAN reach the endpoint, so this step narrates from the
+    run's persisted ``/run`` envelope + that artifact, attaches the narratives, RE-persists the
+    narrated envelope as the run's snapshot (so a reload shows them instantly), and returns it.
+
+    The run is loaded + authorized exactly like ``GET /runs/{run_id}`` (a missing/expired PAT on the
+    databricks backend → 401; an unknown run or another user's run → 404; an unreachable store → 503;
+    a run with no persisted snapshot → 404). From there narration is **report-only**: absent creds,
+    an absent context artifact, or ANY failure returns the (unchanged) envelope with HTTP 200 — never
+    a 500. Idempotent: an already-narrated run is simply re-narrated and re-persisted. No new ML — it
+    reuses the engine narrator (:mod:`api.narrate` → ``classifyos.analysis.llm_explain``).
+    """
+    try:
+        user_email = _resolve_user_email(user_pat)
+        envelope = load_run(run_id, user_email=user_email)
+    except RunNotFound:
+        raise HTTPException(status_code=404, detail=f"run not found: {run_id!r}") from None
+    except MlflowUnavailable as exc:
+        return JSONResponse(
+            status_code=503,
+            content={"detail": f"MLflow tracking store unavailable: {exc}"},
+        )
+    if envelope is None:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                f"run {run_id!r} has no reloadable snapshot "
+                "(it was not produced via POST /api/v1/run)"
+            ),
+        )
+
+    # Report-only from here: load_narration_context / narrate_envelope / snapshot_result all swallow
+    # their own failures, so a narration problem can never turn this into a 500 — it just returns the
+    # envelope unchanged. FastAPI runs this sync route in a worker thread; narrate_rows fans the
+    # (I/O-bound) Azure calls out over its own bounded pool.
+    narration_context = load_narration_context(run_id)
+    narrated, n_attached = narrate_envelope(envelope, narration_context)
+    if n_attached:
+        # Overwrite the run's api/run_response.json snapshot (routed to the same store load_run reads)
+        # so reloading this run from the Runs tab shows the narratives instantly — no re-narration.
+        snapshot_result(run_id, narrated)
+    return JSONResponse(content=narrated)

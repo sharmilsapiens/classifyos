@@ -5,17 +5,33 @@
    no run, explainability-off (block absent), and a rendered waterfall. */
 
 import { beforeEach, describe, expect, it, vi } from "vitest"
-import { render, screen, fireEvent } from "@testing-library/react"
+import { render, screen, fireEvent, waitFor } from "@testing-library/react"
 import { MemoryRouter } from "react-router-dom"
 
 import type { RunResponse } from "@/api/types"
 
-// Mock the store; each test sets the slice the page (via ResultGate) reads.
-let mockApp: { result: RunResponse | null; serverPath: string | null } = {
+// Mock the store; each test sets the slice the page (via ResultGate + useAutoNarrate) reads.
+let mockApp: {
+  result: RunResponse | null
+  serverPath: string | null
+  databricksPat: string
+  applyReloadedRun: ReturnType<typeof vi.fn>
+} = {
   result: null,
   serverPath: "policy_lapse.csv",
+  databricksPat: "",
+  applyReloadedRun: vi.fn(),
 }
 vi.mock("@/store/AppStore", () => ({ useApp: () => mockApp }))
+
+// Mock the API client: capture narrateRun calls, keep a real-ish runScopedArtifactId (returns the
+// run id ONLY for a databricks-backed run, exactly like the real one) so the auto-narrate gate works.
+const narrateRunMock = vi.fn()
+vi.mock("@/api/client", () => ({
+  narrateRun: (...args: unknown[]) => narrateRunMock(...args),
+  runScopedArtifactId: (m: { run_id?: string; tracking_uri?: string } | null | undefined) =>
+    m?.run_id && m.tracking_uri?.startsWith("databricks") ? m.run_id : undefined,
+}))
 
 import Explainability from "./Explainability"
 
@@ -69,8 +85,30 @@ function renderPage() {
 }
 
 beforeEach(() => {
-  mockApp = { result: null, serverPath: "policy_lapse.csv" }
+  mockApp = {
+    result: null,
+    serverPath: "policy_lapse.csv",
+    databricksPat: "",
+    applyReloadedRun: vi.fn(),
+  }
+  narrateRunMock.mockReset()
 })
+
+/** A databricks-backed envelope (mlflow.tracking_uri="databricks…") with explanations. */
+function databricksEnvelope(withNarrative: boolean): RunResponse {
+  const env = envelopeWithExplanations()
+  env.result!.mlflow = {
+    run_id: "abc123def456",
+    experiment_id: "e1",
+    tracking_uri: "databricks",
+    models: {},
+  }
+  if (!withNarrative) {
+    // strip the seeded narrative so the page must fetch it
+    env.result!.explanations!.RandomForest.rows[0].narrative = undefined
+  }
+  return env
+}
 
 describe("Explainability (per-row SHAP)", () => {
   it("invites a run when there is no result yet", () => {
@@ -113,11 +151,43 @@ describe("Explainability (per-row SHAP)", () => {
   })
 
   it("switches models via the picker (kernel explainer path)", () => {
-    mockApp = { result: envelopeWithExplanations(), serverPath: "policy_lapse.csv" }
+    mockApp = { ...mockApp, result: envelopeWithExplanations() }
     renderPage()
 
     fireEvent.change(screen.getByLabelText("Model"), { target: { value: "LogisticRegression" } })
     expect(screen.getByText("shap.KernelExplainer")).toBeInTheDocument()
     expect(screen.getByText("annual_premium")).toBeInTheDocument()
+  })
+
+  it("auto-narrates a databricks-backed run that has no narratives, then swaps in the result", async () => {
+    const applyReloadedRun = vi.fn()
+    const narrated = databricksEnvelope(true) // the narrated envelope the server returns
+    narrateRunMock.mockResolvedValue(narrated)
+    mockApp = {
+      ...mockApp,
+      result: databricksEnvelope(false), // explanations present, narratives absent
+      databricksPat: "dapi-xyz",
+      applyReloadedRun,
+    }
+    renderPage()
+
+    // The page calls POST /runs/{id}/narrate with the run id + the caller's PAT...
+    await waitFor(() => expect(narrateRunMock).toHaveBeenCalledWith("abc123def456", "dapi-xyz"))
+    // ...and swaps the narrated envelope into the store so every result page shows it.
+    await waitFor(() => expect(applyReloadedRun).toHaveBeenCalledWith(narrated))
+  })
+
+  it("does NOT auto-narrate a local run (already narrated in-process)", async () => {
+    mockApp = { ...mockApp, result: envelopeWithExplanations() } // no mlflow block → local
+    renderPage()
+    await new Promise((r) => setTimeout(r, 0))
+    expect(narrateRunMock).not.toHaveBeenCalled()
+  })
+
+  it("does NOT auto-narrate when narratives are already present (databricks reload)", async () => {
+    mockApp = { ...mockApp, result: databricksEnvelope(true), databricksPat: "dapi" }
+    renderPage()
+    await new Promise((r) => setTimeout(r, 0))
+    expect(narrateRunMock).not.toHaveBeenCalled()
   })
 })

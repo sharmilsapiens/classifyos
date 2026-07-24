@@ -39,6 +39,7 @@ from typing import Any
 # Databricks Job notebook can WRITE them from the wheel while this READ side filters/reloads by the
 # SAME values — they can never drift. Cheap module import; mlflow itself stays lazily imported.
 from classifyos.mlflow_logging import (
+    NARRATION_CONTEXT_PATH,
     SNAPSHOT_DIR,
     SNAPSHOT_PATH,
     SNAPSHOT_TAG,
@@ -292,6 +293,43 @@ def load_run(run_id: str, user_email: str | None = None) -> dict[str, Any] | Non
         raise MlflowUnavailable(str(exc)) from exc
 
 
+def load_narration_context(run_id: str) -> dict[str, Any] | None:
+    """Return the ``api/narration_context.json`` side artifact for ``run_id``, or ``None`` if absent.
+
+    The engine logs this whole-run LLM narration context (config dataset/column context + the
+    data-derived schema + sample rows) alongside the ``/run`` envelope snapshot when a run requests
+    LLM narratives (see :func:`classifyos.mlflow_logging.log_run`). The off-cluster FastAPI narrate
+    step reads it to rebuild the RunContext — the fields it cannot get from the ``/run`` envelope.
+
+    Report-only: returns ``None`` on an absent artifact OR any read failure, so a run without the
+    context (or an older run predating it) simply degrades to "not narratable" rather than erroring
+    — the narrate route then returns the envelope unchanged. Targets the same store as
+    :func:`load_run` (``tracking_uri="databricks"`` in the databricks backend, per call). Never raises.
+    """
+    try:
+        import mlflow  # noqa: PLC0415 — lazy by design
+
+        client = _client()
+        present = any(
+            a.path == NARRATION_CONTEXT_PATH
+            for a in client.list_artifacts(run_id, SNAPSHOT_DIR)
+        )
+        if not present:
+            return None
+        with tempfile.TemporaryDirectory() as tmp:
+            local = mlflow.artifacts.download_artifacts(
+                run_id=run_id,
+                artifact_path=NARRATION_CONTEXT_PATH,
+                dst_path=tmp,
+                tracking_uri=_tracking_uri(),
+            )
+            with open(local, encoding="utf-8") as fh:
+                return json.load(fh)
+    except Exception as exc:  # noqa: BLE001 — report-only; absent context / any failure → None
+        logger.warning("MLflow: load_narration_context(%s) failed: %s", run_id, exc)
+        return None
+
+
 def load_artifact(run_id: str, name: str) -> tuple[bytes, str]:
     """Download ONE artifact FILE (a plot PNG or a CSV) from an MLflow run; return ``(data, filename)``.
 
@@ -344,7 +382,13 @@ def snapshot_result(run_id: str, envelope: dict[str, Any]) -> bool:
     source, also used by the Databricks Job notebook so it can write from the wheel). The local
     ``/run`` route logs no owner tag — per-user Runs is a Databricks-backend concern — so
     ``user_email`` is omitted here. NEVER raises; the ``/run`` response is unaffected.
+
+    Routes the write to the SAME store the read-path reads (``_tracking_uri()`` — ``"databricks"`` in
+    the databricks backend, per call, thread-safe; ``None`` locally = the env store). This matters for
+    the narrate step's RE-persist of the narrated envelope: it must overwrite the ``api/run_response.json``
+    that ``load_run`` reloads in the workspace's managed MLflow (§6.1), not the FastAPI process's own
+    (possibly stale local) store. The local ``/run`` route is unchanged (``_tracking_uri()`` is ``None``).
     """
     from classifyos.mlflow_logging import snapshot_envelope  # noqa: PLC0415 — lazy
 
-    return snapshot_envelope(run_id, envelope)
+    return snapshot_envelope(run_id, envelope, tracking_uri=_tracking_uri())

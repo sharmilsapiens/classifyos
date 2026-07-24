@@ -750,6 +750,27 @@ Databricks runs: every logged run is stamped with who ran it, plus a reloadable 
 - Report-only and additive: if MLflow logging is off/fails nothing happens, and a local run is
   unchanged. No new dependency, no schema change.
 
+## LLM narration can be handed to the API — engine flag + a side artifact (✅ Done, 2026-07-24)
+**In one line:** So narratives can be generated OFF the cluster (on Databricks the cluster can't reach
+Azure OpenAI — a 403), the engine can now skip its in-process narrate call and instead leave behind the
+context the API needs to narrate later.
+- **New flag `CLASSIFYOS_NARRATE_IN_ENGINE` (default `true`).** Unset/true → the engine narrates
+  in-process exactly as before, so the **local** backend is byte-identical. The Databricks Job notebook
+  sets it `false`: the run still computes SHAP but skips the (unreachable) Azure call.
+- **New side artifact `api/narration_context.json`.** Whenever a run requests LLM narratives, the engine
+  serializes the whole-run narration context it can't otherwise be reconstructed from the result — the
+  analyst dataset/column context + `context_mode`, plus the data-derived per-column schema + a couple of
+  sample rows (and the feature-column list for value resolution). It is JSON-sanitized and logged to
+  MLflow under `api/` (next to the result snapshot) by `mlflow_logging.log_run`. Everything else the
+  narrator needs (class base rates, per-model metrics, global importances, the SHAP rows) is already in
+  the result envelope, so it is deliberately not duplicated.
+- **`snapshot_envelope` gained an optional `tracking_uri`** so the API's off-cluster re-persist of the
+  narrated result can target Databricks-managed MLflow per call (thread-safe; local unchanged).
+- Additive + report-only: it is a SIDE artifact (not the locked `/run` envelope), so **no schema change**;
+  the in-engine narrator, its prompt, and a non-narrative run are all unchanged. The FastAPI narrate step
+  that consumes this lives in `api_short_desc.md`. Needs a wheel rebuild + cluster restart + notebook
+  re-import to take effect on Databricks.
+
 ---
 
 ## How to read this project

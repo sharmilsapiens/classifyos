@@ -334,101 +334,33 @@ def test_results_unknown_job_polls_databricks(api_client, dbx_env, monkeypatch) 
 
 
 # --------------------------------------------------------------------------- #
-# LLM narratives on Databricks — sync the Azure creds to a secret scope and     #
-# forward ONLY the scope name (the key never rides in Job params). All mocked.  #
+# LLM narratives on Databricks are generated OFF THE CLUSTER (the cluster can't  #
+# reach the Azure private endpoint). The submit therefore forwards NO Azure      #
+# creds / secret scope; narration happens via POST /runs/{run_id}/narrate. The   #
+# submit tests above already assert base_parameters carry no Azure material, and #
+# the narrate flow is covered by test_api_narrate.py.                            #
 # --------------------------------------------------------------------------- #
 
-_AZURE_ENV = {
-    "AZURE_OPEN_AI_ENDPOINT": "https://x.openai.azure.com/",
-    "AZURE_OPEN_AI_API_KEY": "secret-key-123",
-    "AZURE_OPEN_AI_API_VERSION": "2024-08-01-preview",
-    "AZURE_OPEN_AI_DEPLOYMENT_NAME": "gpt-5-mini",
-    "AZURE_OPEN_AI_MODEL": "gpt-5-mini",
-}
 
-
-def _set_azure_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    for key, value in _AZURE_ENV.items():
+def test_submit_forwards_no_azure_material_even_with_narratives_on(
+    api_client, dbx_env, monkeypatch
+) -> None:
+    """Narratives ON must NOT push Azure creds/scope to the workspace: the Secrets API is never hit,
+    and no azure_secret_scope / key rides in the Job's base_parameters (narration is off-cluster)."""
+    for key, value in {
+        "AZURE_OPEN_AI_ENDPOINT": "https://x.openai.azure.com/",
+        "AZURE_OPEN_AI_API_KEY": "secret-key-123",
+        "AZURE_OPEN_AI_API_VERSION": "2024-08-01-preview",
+        "AZURE_OPEN_AI_DEPLOYMENT_NAME": "gpt-5-mini",
+    }.items():
         monkeypatch.setenv(key, value)
-
-
-def _clear_azure_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    for key in _AZURE_ENV:
-        monkeypatch.delenv(key, raising=False)
-
-
-def test_sync_llm_secrets_pushes_creds_and_grants_read(dbx_env, monkeypatch) -> None:
-    """sync_llm_secrets creates the scope (users-manage), puts each cred (key == env-var name), and
-    grants the cluster principal READ — returning the scope name. The values go to the Secrets API."""
-    _set_azure_env(monkeypatch)
-    calls: dict = {"create": [], "put": [], "acl": []}
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        body = json.loads(request.content) if request.content else {}
-        if request.url.path == "/api/2.0/secrets/scopes/create":
-            calls["create"].append(body)
-        elif request.url.path == "/api/2.0/secrets/put":
-            calls["put"].append(body)
-        elif request.url.path == "/api/2.0/secrets/acls/put":
-            calls["acl"].append(body)
-        else:  # pragma: no cover
-            return httpx.Response(404)
-        return httpx.Response(200, json={})
-
-    _install_mock(monkeypatch, handler)
-    scope = dbx.sync_llm_secrets()
-
-    assert scope == "classifyos-llm"
-    assert calls["create"][0] == {"scope": "classifyos-llm", "initial_manage_principal": "users"}
-    put = {c["key"]: c["string_value"] for c in calls["put"]}
-    assert put["AZURE_OPEN_AI_API_KEY"] == "secret-key-123"
-    assert put["AZURE_OPEN_AI_ENDPOINT"] == "https://x.openai.azure.com/"
-    assert set(put) == set(_AZURE_ENV)  # all 5 (4 required + optional MODEL)
-    assert calls["acl"][0] == {
-        "scope": "classifyos-llm",
-        "principal": "AIML_RD",
-        "permission": "READ",
-    }
-
-
-def test_sync_llm_secrets_absent_creds_returns_none(dbx_env, monkeypatch) -> None:
-    """No AZURE_OPEN_AI_* on this host → sync is a no-op returning None (zero REST calls)."""
-    _clear_azure_env(monkeypatch)
-    called = {"n": 0}
-
-    def handler(request: httpx.Request) -> httpx.Response:  # pragma: no cover — must not be hit
-        called["n"] += 1
-        return httpx.Response(200, json={})
-
-    _install_mock(monkeypatch, handler)
-    assert dbx.sync_llm_secrets() is None
-    assert called["n"] == 0
-
-
-def test_sync_llm_secrets_tolerates_existing_scope(dbx_env, monkeypatch) -> None:
-    """A scope that already exists (create → 400 RESOURCE_ALREADY_EXISTS) is treated as success."""
-    _set_azure_env(monkeypatch)
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        if request.url.path == "/api/2.0/secrets/scopes/create":
-            return httpx.Response(400, json={"error_code": "RESOURCE_ALREADY_EXISTS", "message": "x"})
-        return httpx.Response(200, json={})
-
-    _install_mock(monkeypatch, handler)
-    assert dbx.sync_llm_secrets() == "classifyos-llm"
-
-
-def test_submit_forwards_secret_scope_when_narratives_on(api_client, dbx_env, monkeypatch) -> None:
-    """With narratives requested + creds present, the creds are synced and only the scope NAME rides
-    in base_parameters — the Azure key never appears in the Job parameters."""
-    _set_azure_env(monkeypatch)
     seen: dict = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/api/2.0/preview/scim/v2/Me":
             return httpx.Response(200, json={"userName": "user@example.com"})
-        if request.url.path.startswith("/api/2.0/secrets/"):
-            return httpx.Response(200, json={})
+        if request.url.path.startswith("/api/2.0/secrets/"):  # pragma: no cover — must NOT be hit
+            raise AssertionError("the Secrets API must not be called: narration is off-cluster")
         if request.url.path == "/api/2.1/jobs/runs/submit":
             seen["params"] = json.loads(request.content)["tasks"][0]["notebook_task"]["base_parameters"]
             return httpx.Response(200, json={"run_id": 900})
@@ -441,49 +373,5 @@ def test_submit_forwards_secret_scope_when_narratives_on(api_client, dbx_env, mo
     )
     resp = api_client.post("/api/v1/run", json=payload, headers={"X-Databricks-Token": "user-pat"})
     assert resp.status_code == 200, resp.text
-    assert seen["params"]["azure_secret_scope"] == "classifyos-llm"
-    assert "secret-key-123" not in json.dumps(seen["params"])  # the key is NOT in Job params
-
-
-def test_submit_no_secret_scope_when_narratives_off(api_client, dbx_env, monkeypatch) -> None:
-    """Narratives OFF → the scope param is empty and the Secrets API is never touched."""
-    _set_azure_env(monkeypatch)
-    seen: dict = {}
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        if request.url.path == "/api/2.0/preview/scim/v2/Me":
-            return httpx.Response(200, json={"userName": "user@example.com"})
-        if request.url.path == "/api/2.1/jobs/runs/submit":
-            seen["params"] = json.loads(request.content)["tasks"][0]["notebook_task"]["base_parameters"]
-            return httpx.Response(200, json={"run_id": 901})
-        return httpx.Response(404)  # secrets endpoints must NOT be hit  # pragma: no cover
-
-    _install_mock(monkeypatch, handler)
-    resp = api_client.post(
-        "/api/v1/run", json=_payload(), headers={"X-Databricks-Token": "user-pat"}
-    )
-    assert resp.status_code == 200, resp.text
-    assert seen["params"]["azure_secret_scope"] == ""
-
-
-def test_submit_no_secret_scope_when_creds_absent(api_client, dbx_env, monkeypatch) -> None:
-    """Narratives ON but this host has no Azure creds → sync returns None → empty scope (SHAP only)."""
-    _clear_azure_env(monkeypatch)
-    seen: dict = {}
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        if request.url.path == "/api/2.0/preview/scim/v2/Me":
-            return httpx.Response(200, json={"userName": "user@example.com"})
-        if request.url.path == "/api/2.1/jobs/runs/submit":
-            seen["params"] = json.loads(request.content)["tasks"][0]["notebook_task"]["base_parameters"]
-            return httpx.Response(200, json={"run_id": 902})
-        return httpx.Response(404)  # secrets endpoints must NOT be hit (no creds → no sync)  # pragma: no cover
-
-    _install_mock(monkeypatch, handler)
-    payload = _run_payload(
-        "policy_lapse.csv", "will_lapse", LAPSE_FEATURES, algorithms=["LogisticRegression"],
-        explainability={"enabled": True, "llm_narratives": True, "sample_rows": 2, "background_size": 20},
-    )
-    resp = api_client.post("/api/v1/run", json=payload, headers={"X-Databricks-Token": "user-pat"})
-    assert resp.status_code == 200, resp.text
-    assert seen["params"]["azure_secret_scope"] == ""
+    assert "azure_secret_scope" not in seen["params"]  # no scope param at all anymore
+    assert "secret-key-123" not in json.dumps(seen["params"])  # the key never rides in Job params
