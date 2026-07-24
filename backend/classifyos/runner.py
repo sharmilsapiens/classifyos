@@ -738,11 +738,23 @@ class ModelRunner:
             if os.path.exists(path):
                 artifact_paths.append(path)
 
+        # A few rows of the engineered feature matrix, passed to each saved model's log_model so
+        # MLflow auto-infers its SIGNATURE (input/output schema). Without it MLflow logs the model
+        # signature-less and warns "Model logged without a signature and input example". ``None`` when
+        # there is no test matrix (models then log unsigned, as before). Leakage-safe — it is a
+        # read-only sample of the already-built test features, used only to describe the model.
+        input_example = (
+            self.X_test_.head(5)
+            if self.X_test_ is not None and not self.X_test_.empty
+            else None
+        )
+
         return log_run(
             config=cfg,
             metrics_records=metrics_records,
             models=self.models_,
             artifact_paths=artifact_paths,
+            input_example=input_example,
             # Attach the whole-run narration context (built when the run requested LLM narratives)
             # as the ``api/narration_context.json`` side artifact so the off-cluster FastAPI narrate
             # step can rebuild the RunContext. ``None`` (the default) when narratives were not

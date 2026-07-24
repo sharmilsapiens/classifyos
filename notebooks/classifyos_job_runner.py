@@ -142,6 +142,17 @@ try:
 except Exception:  # noqa: BLE001 — the openai flavor may be absent; nothing to disable then
     pass
 
+# Quiet MLflow's benign model-logging advisories so the Job cell output stays clean. The engine now
+# passes an input_example when saving models, so each gets an inferred SIGNATURE (the "Model logged
+# without a signature and input example" warning is gone). The remaining "Inferred schema contains
+# integer column(s)" hint — emitted for tree models whose class-label OUTPUT is integer-encoded — is
+# harmless (it only matters if inputs carry NaN at serve time). Neither affects the logged model.
+import logging as _logging  # noqa: E402
+import warnings as _warnings  # noqa: E402
+
+_logging.getLogger("mlflow.models.model").setLevel(_logging.ERROR)
+_warnings.filterwarnings("ignore", message="Hint: Inferred schema contains integer column")
+
 # Databricks managed MLflow requires the experiment to be an ABSOLUTE workspace path; a bare name
 # like "classifyos" fails set_experiment() with INVALID_PARAMETER_VALUE. If logging is enabled and
 # the configured experiment isn't already absolute, nest it under /Shared — which always exists and

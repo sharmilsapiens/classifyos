@@ -15,7 +15,9 @@ from __future__ import annotations
 
 import math
 import re
+from types import SimpleNamespace
 
+import pandas as pd
 import pytest
 
 from classifyos import mlflow_logging
@@ -287,3 +289,44 @@ def test_run_mlflow_off_logs_nothing(storage, monkeypatch: pytest.MonkeyPatch) -
     )
     runner = ModelRunner(cfg, storage).run()
     assert runner.mlflow_run_ is None
+
+
+# --------------------------------------------------------------------------- #
+# model signature — passing an input_example makes MLflow INFER a signature,   #
+# removing the "Model logged without a signature and input example" warning    #
+# --------------------------------------------------------------------------- #
+
+
+def _tiny_fitted_lr() -> tuple[object, pd.DataFrame]:
+    """A tiny fitted LogisticRegression + its (engineered-style) feature frame."""
+    from sklearn.linear_model import LogisticRegression
+
+    X = pd.DataFrame({"a": [0.1, 0.2, 0.3, 0.4, 0.5], "b": [1.0, 0.0, 1.0, 0.0, 1.0]})
+    return LogisticRegression(max_iter=200).fit(X, [0, 1, 0, 1, 0]), X
+
+
+def _log_one(mlflow, experiment: str, **kw) -> str:
+    lr, _ = _tiny_fitted_lr()
+    mlflow_logging._maybe_allow_file_store()
+    mlflow.set_experiment(experiment)
+    with mlflow.start_run():
+        return mlflow_logging._log_one_model(mlflow, "model", SimpleNamespace(model=lr), **kw)
+
+
+def test_log_one_model_input_example_infers_signature(mlflow_tracking_dir: str) -> None:
+    """With an input_example the logged model carries an inferred signature (warning gone)."""
+    import mlflow
+
+    _, X = _tiny_fitted_lr()
+    uri = _log_one(mlflow, "sig_on", input_example=X.head(3))
+    assert uri
+    assert mlflow.models.get_model_info(uri).signature is not None
+
+
+def test_log_one_model_without_input_example_has_no_signature(mlflow_tracking_dir: str) -> None:
+    """Without an input_example the model logs signature-less (the prior behaviour is preserved)."""
+    import mlflow
+
+    uri = _log_one(mlflow, "sig_off")
+    assert uri
+    assert mlflow.models.get_model_info(uri).signature is None

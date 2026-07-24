@@ -200,7 +200,9 @@ def _headline_metrics(metrics_records: list[dict[str, Any]]) -> dict[str, float]
     return out
 
 
-def _log_one_model(mlflow: Any, name: str, wrapper: Any) -> str | None:
+def _log_one_model(
+    mlflow: Any, name: str, wrapper: Any, input_example: Any = None
+) -> str | None:
     """Log ONE fitted model with the flavor-native serializer; return its model URI or ``None``.
 
     The wrapper's fitted estimator is unwrapped to its base estimator (peeling the
@@ -211,6 +213,13 @@ def _log_one_model(mlflow: Any, name: str, wrapper: Any) -> str | None:
     with cloudpickle serialization (robust across the calibrated / OvR estimators the engine
     produces). Report-only: any failure is logged and yields ``None`` so one bad model never
     aborts the run or the rest of the logging.
+
+    ``input_example`` (a few rows of the engineered feature matrix) is passed to ``log_model`` when
+    given so MLflow auto-INFERS the model SIGNATURE (input/output schema) — otherwise MLflow logs a
+    signature-less model and warns ``"Model logged without a signature and input example"``. The
+    signature makes the saved model self-describing for downstream serving/validation. Inference
+    runs one ``predict`` on the example; if it fails MLflow logs without a signature (same as the
+    no-example path) and this stays report-only.
     """
     from .models.decision import unwrap_base_estimator
 
@@ -220,21 +229,23 @@ def _log_one_model(mlflow: Any, name: str, wrapper: Any) -> str | None:
             return None
         base = unwrap_base_estimator(fitted)
         cls = type(base).__name__
+        # Only attach input_example when we actually have one (keeps the no-example path identical).
+        example_kw = {"input_example": input_example} if input_example is not None else {}
         if cls == "XGBClassifier":
             import mlflow.xgboost  # noqa: PLC0415 — lazy flavor import
 
-            info = mlflow.xgboost.log_model(base, name=name)
+            info = mlflow.xgboost.log_model(base, name=name, **example_kw)
         elif cls == "LGBMClassifier":
             import mlflow.lightgbm  # noqa: PLC0415
 
-            info = mlflow.lightgbm.log_model(base, name=name)
+            info = mlflow.lightgbm.log_model(base, name=name, **example_kw)
         else:
             import mlflow.sklearn  # noqa: PLC0415
 
             # cloudpickle (not the new skops default) so calibrated / OvR / booster-backed
             # sklearn estimators all round-trip without skops "untrusted type" load failures.
             info = mlflow.sklearn.log_model(
-                base, name=name, serialization_format="cloudpickle"
+                base, name=name, serialization_format="cloudpickle", **example_kw
             )
         return info.model_uri
     except Exception:  # noqa: BLE001 — report-only; a single model must not break the run
@@ -251,6 +262,7 @@ def log_run(
     experiment: str,
     run_name: str | None,
     narration_context: dict[str, Any] | None = None,
+    input_example: Any = None,
 ) -> dict[str, Any] | None:
     """Log one completed ClassifyOS run to MLflow. Report-only — never raises.
 
@@ -268,6 +280,10 @@ def log_run(
             When given, it is logged as the ``api/narration_context.json`` side artifact so the
             off-cluster FastAPI narrate step can rebuild the RunContext. ``None`` → nothing extra is
             logged, so a non-narrative run is byte-identical.
+        input_example: Optional few-row sample of the engineered feature matrix. When given it is
+            passed to each ``log_model`` call so MLflow auto-infers the model SIGNATURE (removing
+            the ``"Model logged without a signature"`` warning and making the saved model
+            self-describing). ``None`` → models are logged without a signature (unchanged).
 
     Returns:
         ``{"run_id", "experiment_id", "tracking_uri", "models": {name: model_uri}}`` on success
@@ -336,9 +352,10 @@ def log_run(
                 except Exception:  # noqa: BLE001 — report-only
                     logger.exception("MLflow: failed to log narration context; continuing")
 
-            # one saved model per fitted algorithm (flavor-native)
+            # one saved model per fitted algorithm (flavor-native), with a signature when an
+            # input_example was supplied (else logged signature-less, as before).
             for name, wrapper in models.items():
-                uri = _log_one_model(mlflow, name, wrapper)
+                uri = _log_one_model(mlflow, name, wrapper, input_example=input_example)
                 if uri:
                     model_uris[name] = uri
 
